@@ -1,0 +1,2777 @@
+"""
+MTG card frame renderer — authentic M15/SLD-style frames.
+Generates transparent PNG overlays with proper frame geometry, pinlines,
+inner shadows, and color theming based on the FeSens/mtg-card SVG design system.
+
+Uses locally-built mana pip images (from mana-master SVGs) for authentic symbol rendering.
+Output: 750×1050 PNG at 300 DPI (standard proxy print size).
+"""
+
+import copy
+import io
+import json
+import re
+import textwrap
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+
+try:
+    import cairosvg
+    from PIL import Image
+    import xml.etree.ElementTree as ET
+except ImportError as e:
+    raise ImportError(f"Required package missing: {e}. Install with: pip install cairosvg pillow")
+
+# ---------------------------------------------------------------------------
+# Load pre-rendered pip images (base64-encoded PNGs)
+# If pips_b64.json is missing, builds it locally from mana-master SVGs.
+# ---------------------------------------------------------------------------
+PIPS_DIR = Path(__file__).parent / "shared" / "pips"
+PIPS_B64_PATH = PIPS_DIR / "pips_b64.json"
+_PIPS_B64 = {}
+
+# ---------------------------------------------------------------------------
+# Loyalty SVG path data — extracted from mana-master for crisp vector rendering.
+# These are the actual SVG <path d="..."> strings at 32×32 viewBox scale,
+# embedded directly in the card SVG so they scale perfectly at any size.
+# ---------------------------------------------------------------------------
+MANA_SVG_DIR = Path(__file__).parent / "mana-master" / "svg"
+_LOYALTY_SVG_PATHS: Dict[str, str] = {}  # key -> SVG path 'd' attribute
+
+
+def _extract_svg_path_d(svg_path: Path) -> Optional[str]:
+    """Extract the 'd' attribute from the first <path> in an SVG file."""
+    try:
+        tree = ET.parse(svg_path)
+        root = tree.getroot()
+        ns = {'svg': 'http://www.w3.org/2000/svg'}
+        # Try with namespace
+        path_el = root.find('.//svg:path', ns)
+        if path_el is None:
+            # Try without namespace
+            path_el = root.find('.//{http://www.w3.org/2000/svg}path')
+        if path_el is None:
+            path_el = root.find('.//path')
+        if path_el is not None:
+            return path_el.get('d')
+    except Exception as e:
+        print(f"[loyalty] Could not extract path from {svg_path}: {e}")
+    return None
+
+
+def _load_loyalty_svg_paths() -> Dict[str, str]:
+    """Load loyalty shape SVG path data from mana-master SVGs."""
+    shapes = {}
+    loyalty_files = {
+        'loyalty_up': 'loyalty-up.svg',
+        'loyalty_down': 'loyalty-down.svg',
+        'loyalty_zero': 'loyalty-zero.svg',
+        'loyalty_start': 'loyalty-start.svg',
+    }
+    for key, filename in loyalty_files.items():
+        svg_file = MANA_SVG_DIR / filename
+        if svg_file.exists():
+            d = _extract_svg_path_d(svg_file)
+            if d:
+                shapes[key] = d
+                print(f"[loyalty] Loaded SVG path: {key}")
+    return shapes
+
+
+try:
+    _LOYALTY_SVG_PATHS = _load_loyalty_svg_paths()
+    if _LOYALTY_SVG_PATHS:
+        print(f"[loyalty] {len(_LOYALTY_SVG_PATHS)} vector loyalty shapes ready")
+except Exception as _e:
+    print(f"[loyalty] Could not load SVG paths: {_e}")
+
+# ---------------------------------------------------------------------------
+# Embedded font loading — fonts are base64-encoded into SVG @font-face rules
+# so they render correctly regardless of OS font installation.
+# ---------------------------------------------------------------------------
+FONTS_DIR = Path(__file__).parent / "fonts"
+_FONT_FACE_CSS = ""   # populated on load
+
+
+def _build_font_face_css() -> str:
+    """Build @font-face CSS rules from TTF files in the fonts/ directory."""
+    import base64
+    rules = []
+    font_map = {
+        "Beleren2016-Bold.ttf": ("Beleren2016", "bold", "normal"),
+        "Beleren-Bold.ttf":     ("Beleren Bold", "bold", "normal"),
+        "MPlantin.ttf":         ("MPlantin", "normal", "normal"),
+        "MPlantin-Italic.ttf":  ("MPlantin", "normal", "italic"),
+    }
+    for filename, (family, weight, style) in font_map.items():
+        ttf_path = FONTS_DIR / filename
+        if ttf_path.exists():
+            b64 = base64.b64encode(ttf_path.read_bytes()).decode()
+            rules.append(
+                f'@font-face {{\n'
+                f'  font-family: "{family}";\n'
+                f'  font-weight: {weight};\n'
+                f'  font-style: {style};\n'
+                f'  src: url("data:font/ttf;base64,{b64}") format("truetype");\n'
+                f'}}'
+            )
+    return "\n".join(rules)
+
+
+try:
+    _FONT_FACE_CSS = _build_font_face_css()
+    if _FONT_FACE_CSS:
+        _n = _FONT_FACE_CSS.count('@font-face')
+        print(f"[fonts] Embedded {_n} MTG font(s) for SVG rendering")
+    else:
+        print("[fonts] No MTG fonts found in fonts/ — using system fallbacks")
+except Exception as _e:
+    print(f"[fonts] Could not load fonts: {_e}")
+
+
+def _load_or_download_pips() -> dict:
+    """Load pip images, building from mana-master SVGs if needed."""
+    global _PIPS_B64
+
+    if PIPS_B64_PATH.exists():
+        with open(PIPS_B64_PATH) as f:
+            _PIPS_B64 = json.load(f)
+            print(f"[pips] Loaded {len(_PIPS_B64)} symbols from cache")
+            return _PIPS_B64
+
+    # No cached pips — build from local mana-master SVGs
+    try:
+        from build_pips_from_mana import build_pips
+        print("[pips] Building mana symbols from local mana-master SVGs...")
+        _PIPS_B64 = build_pips()
+        print(f"[pips] Built {len(_PIPS_B64)} symbols")
+        return _PIPS_B64
+    except Exception as e:
+        print(f"[pips] Could not build pips from mana-master: {e}")
+
+    return _PIPS_B64
+
+
+def _load_loyalty_map() -> dict:
+    """Load the loyalty symbol mapping from build_pips_from_mana output.
+    Returns dict like: {"+1": "Lplus1", "-2": "Lminus2", "0": "L0", ...}
+    Maps cost strings to their safe b64 key names.
+    """
+    loyalty_map_path = PIPS_DIR / "loyalty_map.json"
+    if loyalty_map_path.exists():
+        with open(loyalty_map_path) as f:
+            m = json.load(f)
+            print(f"[pips] Loaded loyalty map with {len(m)} entries: {list(m.keys())}")
+            return m
+    return {}
+
+
+_PIPS_B64 = _load_or_download_pips() if True else {}
+_LOYALTY_MAP = _load_loyalty_map()
+
+
+def _pip_image_tag(symbol: str, x: float, y: float, size: float) -> str:
+    """Return an SVG <image> tag embedding the pre-rendered pip PNG.
+    Handles both raw keys ('W', '3') and sanitized keys ('U_R' for 'U/R').
+    """
+    b64 = _PIPS_B64.get(symbol)
+    if not b64:
+        # Try sanitized key (/ -> _, + -> plus, - -> minus)
+        safe = symbol.replace('/', '_').replace('+', 'plus').replace('-', 'minus')
+        b64 = _PIPS_B64.get(safe)
+    if not b64:
+        # Fallback: gray circle with text
+        return (
+            f'<circle cx="{x + size/2}" cy="{y + size/2}" r="{size/2}" '
+            f'fill="#888" stroke="#222" stroke-width="2"/>'
+            f'<text x="{x + size/2}" y="{y + size/2 + size*0.15}" text-anchor="middle" '
+            f'font-family="serif" font-size="{size*0.55}" '
+            f'font-weight="bold" fill="#000">{symbol}</text>'
+        )
+    return (
+        f'<image x="{x}" y="{y}" width="{size}" height="{size}" '
+        f'href="data:image/png;base64,{b64}" />'
+    )
+
+
+# ===========================================================================
+# Card dimensions — design in 672×936 viewBox, output at 750×1050
+# ===========================================================================
+CARD_WIDTH = 750
+CARD_HEIGHT = 1050
+VB_W = 672    # viewBox width (matches mtg-card proportions)
+VB_H = 936    # viewBox height
+DPI = 300
+
+# ===========================================================================
+# Authentic MTG color themes (from FeSens/mtg-card)
+# Each entry: (frame_bg, field_fill, textbox_fill, border_color)
+# field_fill / textbox_fill include alpha as last 2 hex digits
+# ===========================================================================
+COLOR_THEMES = {
+    'W': {'bg': '#DBCFAC', 'field': '#F2F1EF', 'textbox': '#F2F2F1', 'border': '#F6FCFC', 'text': '#000'},
+    'U': {'bg': '#3B90B9', 'field': '#A9CCE5', 'textbox': '#D2E4F4', 'border': '#1971CE', 'text': '#000'},
+    'B': {'bg': '#323232', 'field': '#BAB4B5', 'textbox': '#DFDEDE', 'border': '#403232', 'text': '#000'},
+    'R': {'bg': '#BB5540', 'field': '#FFE0D3', 'textbox': '#FFEAE2', 'border': '#C5432B', 'text': '#000'},
+    'G': {'bg': '#718971', 'field': '#CFDDCD', 'textbox': '#E2E5E0', 'border': '#324F33', 'text': '#000'},
+    'gold': {'bg': '#CBA74C', 'field': '#DCBB78', 'textbox': '#FCF4DF', 'border': '#D9CC71', 'text': '#000'},
+    'artifact': {'bg': '#969EA3', 'field': '#D5DAE1', 'textbox': '#DFE3E4', 'border': '#F0F3F2', 'text': '#000'},
+    'colorless': {'bg': '#969EA3', 'field': '#DFDEDE', 'textbox': '#DFDEDE', 'border': '#E7E8E2', 'text': '#000'},
+    'land': {'bg': '#AA8E6F', 'field': '#D5CCC0', 'textbox': '#E4DDD4', 'border': '#7A6B55', 'text': '#000'},
+}
+
+# Dual-color textbox overrides
+DUAL_TEXTBOX = {
+    'WU': '#E8EDF5', 'WB': '#E8E4E2', 'WR': '#FFFFFF', 'WG': '#EDF0E8',
+    'UB': '#D8DDE8', 'UR': '#E8DDED', 'UG': '#D8E8E4',
+    'BR': '#E8D8D8', 'BG': '#DDE4D8',
+    'RG': '#F0E8D8',
+}
+
+# ===========================================================================
+# Frame layers — each visual component is an independently controllable layer.
+# Render order (bottom to top) defined by FRAME_LAYER_ORDER.
+# ===========================================================================
+FRAME_LAYERS = {
+    'border':    {'label': 'Border',    'description': 'Outer card edge'},
+    'frame':     {'label': 'Frame',     'description': 'Colored background with art window cutout'},
+    'title_bar': {'label': 'Title Bar', 'description': 'Name field background'},
+    'pinlines':  {'label': 'Pinlines',  'description': 'Colored lines between sections'},
+    'type_bar':  {'label': 'Type Bar',  'description': 'Type line background'},
+    'text_box':  {'label': 'Text Box',  'description': 'Rules text background'},
+    'pt_box':    {'label': 'P/T Box',   'description': 'Power/toughness box'},
+    'info_bar':  {'label': 'Info Bar',  'description': 'Bottom collector info bar'},
+}
+
+FRAME_LAYER_ORDER = [
+    'border', 'frame', 'title_bar', 'pinlines',
+    'type_bar', 'text_box', 'pt_box', 'info_bar',
+]
+
+# ===========================================================================
+# Default render params — visual parameters that differentiate frame eras.
+# Each style can override any of these to change the actual look, not just opacity.
+# ===========================================================================
+DEFAULT_RENDER_PARAMS = {
+    'border_width': 17,         # outer border width (authentic M15 ~2.5% of 672)
+    'border_radius': 30,        # outer border corner radius (matches real MTG cards)
+    'border_color': None,       # None = use '#17140f' authentic dark brown-black
+    'field_radius': 16,         # end-cap size for pill-shaped fields
+    'art_margin': 28,           # inset from card edge to art window
+    'inner_border': False,      # draw inner colored border around art window
+    'inner_border_width': 3,    # width of inner border if enabled
+    'pinline_width': 2,         # width of pinline strokes
+    'pt_shape': 'pentagon',     # 'pentagon' (M15 lens) or 'pointed' (retro)
+    'frame_pattern': 'solid',   # 'solid', 'nyx' (starfield), 'none'
+    'bevel': False,             # add bevel highlight/shadow to fields
+    'textbox_style': 'rounded', # 'rounded' (M15) or 'squared' (retro)
+    'field_shape': 'pill',      # 'pill' (M15 lozenge) or 'simple' (rounded rect)
+    'double_border': False,     # draw a second inner border stroke
+    'frame_tint': None,         # optional color tint applied to frame (nyx uses this)
+}
+
+# ===========================================================================
+# Frame styles — each configures ALL layers for a distinct visual look.
+# The 'render' dict controls *how* visible layers look (shape, size, texture).
+# The 'layers' dict controls *which* layers are visible and their opacity.
+# ===========================================================================
+FRAME_STYLES = {
+    'm15': {
+        'label': 'M15',
+        'description': 'Authentic M15 card frame from CardConjurer assets',
+        'mode': 'image',
+        'frame_set': 'm15',
+    },
+    'classic': {
+        'label': 'Classic',
+        'description': 'Frosted glass overlays — the original Deck Art Studio look',
+        'mode': 'svg',
+        'render': {
+            'border_width': 0,
+            'field_radius': 8,
+            'art_margin': 20,
+            'pinline_width': 0,
+            'frame_pattern': 'none',
+            'bevel': False,
+            'textbox_style': 'rounded',
+            'field_shape': 'simple',
+            'field_stroke': False,
+        },
+        'layers': {
+            'border':    {'visible': False, 'opacity': 0},
+            'frame':     {'visible': False, 'opacity': 0},
+            'title_bar': {'visible': True,  'opacity': 0.65},
+            'pinlines':  {'visible': False, 'opacity': 0},
+            'type_bar':  {'visible': True,  'opacity': 0.65},
+            'text_box':  {'visible': True,  'opacity': 0.62},
+            'pt_box':    {'visible': True,  'opacity': 0.82},
+            'info_bar':  {'visible': False, 'opacity': 0},
+        },
+    },
+    'full-art': {
+        'label': 'Full Art',
+        'description': 'Art dominates, type at bottom, no text box',
+        'mode': 'svg',
+        'render': {
+            'border_width': 0,
+            'field_radius': 6,
+            'art_margin': 16,
+            'pinline_width': 0,
+            'pt_shape': 'pentagon',
+            'frame_pattern': 'none',
+            'textbox_style': 'rounded',
+            'field_shape': 'simple',
+            'field_stroke': False,
+        },
+        'layers': {
+            'border':    {'visible': False, 'opacity': 0},
+            'frame':     {'visible': False, 'opacity': 0},
+            'title_bar': {'visible': True,  'opacity': 0.40},
+            'pinlines':  {'visible': False, 'opacity': 0},
+            'type_bar':  {'visible': True,  'opacity': 0.40},
+            'text_box':  {'visible': False, 'opacity': 0},
+            'pt_box':    {'visible': True,  'opacity': 0.70},
+            'info_bar':  {'visible': False, 'opacity': 0},
+        },
+        'type_y': 860, 'show_oracle': False, 'show_flavor': False,
+    },
+    'clean': {
+        'label': 'Clean',
+        'description': 'Raw art, no frame at all',
+        'mode': 'svg',
+        'no_frame': True,
+        'render': {},
+        'layers': {k: {'visible': False, 'opacity': 0} for k in [
+            'border', 'frame', 'title_bar', 'pinlines',
+            'type_bar', 'text_box', 'pt_box', 'info_bar',
+        ]},
+    },
+}
+
+# Legacy alias for backwards compatibility during migration
+FRAME_PRESETS = FRAME_STYLES
+
+
+def _layer_visible(layers: dict, key: str) -> bool:
+    """Check if a layer is visible in the resolved settings."""
+    layer = layers.get(key, {})
+    return layer.get('visible', False)
+
+
+def _layer_opacity(layers: dict, key: str) -> float:
+    """Get a layer's opacity from resolved settings."""
+    layer = layers.get(key, {})
+    if not layer.get('visible', False):
+        return 0.0
+    return layer.get('opacity', 1.0)
+
+
+def _migrate_v1_to_v2(settings: dict) -> dict:
+    """Convert v1 frame_settings (preset + alpha_overrides) to v2 (style + layers)."""
+    # Map v1 preset names to v2 style names
+    preset_map = {
+        'classic': 'classic', 'modern': 'modern',
+        'borderless': 'classic',
+        'minimal': 'classic', 'full-art': 'full-art',
+        'vintage': 'modern', 'retro': 'modern',
+        'frameless': 'clean',
+    }
+    v1_preset = settings.get('preset', 'classic')
+    style_key = preset_map.get(v1_preset, 'classic')
+
+    # Start from the mapped style's layer defaults
+    style = FRAME_STYLES.get(style_key, FRAME_STYLES['classic'])
+    layers = copy.deepcopy(style['layers'])
+
+    # Apply v1 alpha_overrides to corresponding v2 layers
+    alphas = settings.get('alpha_overrides', {})
+    if 'field_alpha' in alphas:
+        fa = alphas['field_alpha']
+        layers['title_bar']['opacity'] = fa
+        layers['title_bar']['visible'] = fa > 0
+        layers['type_bar']['opacity'] = fa
+        layers['type_bar']['visible'] = fa > 0
+    if 'textbox_alpha' in alphas:
+        ta = alphas['textbox_alpha']
+        layers['text_box']['opacity'] = ta
+        layers['text_box']['visible'] = ta > 0
+    if 'pt_alpha' in alphas:
+        pa = alphas['pt_alpha']
+        layers['pt_box']['opacity'] = pa
+        layers['pt_box']['visible'] = pa > 0
+
+    return {
+        'style': style_key,
+        'layers': layers,
+        'use_card_colors': settings.get('use_card_colors', True),
+        'color_overrides': settings.get('color_overrides', {}),
+    }
+
+
+def _is_v2_format(settings: dict) -> bool:
+    """Detect whether frame_settings are v2 format (has 'layers' or 'style' key)."""
+    return 'layers' in settings or 'style' in settings
+
+
+def resolve_frame_settings(card_dict: dict, deck_settings: dict = None) -> dict:
+    """Merge style → deck layers → card overrides into final frame settings.
+
+    Handles both v1 (preset + alpha_overrides) and v2 (style + layers) formats.
+    Returns a dict with: style, layers, use_card_colors, color_overrides,
+    text_overrides, plus style-level flags (no_frame, type_y, show_oracle, etc.)
+    """
+    deck_settings = deck_settings or {}
+    card_overrides = card_dict.get('frame_overrides', {})
+
+    # ── Migrate v1 deck settings if needed ──
+    if deck_settings and not _is_v2_format(deck_settings):
+        deck_settings = _migrate_v1_to_v2(deck_settings)
+
+    # ── Determine style: card override > deck > classic ──
+    # Map removed styles to closest remaining style
+    _style_remap = {'modern': 'm15', 'retro': 'm15', 'nyx': 'm15', 'vintage': 'm15'}
+    style_key = card_overrides.get('style',
+                deck_settings.get('style', 'classic'))
+    style_key = _style_remap.get(style_key, style_key)
+    style = FRAME_STYLES.get(style_key, FRAME_STYLES['classic'])
+
+    # ── Build layers: start from style defaults (image-based styles have no layers) ──
+    layers = copy.deepcopy(style.get('layers', {}))
+
+    # Apply deck-level layer overrides
+    deck_layers = deck_settings.get('layers', {})
+    for key in FRAME_LAYER_ORDER:
+        if key in deck_layers:
+            layers[key].update(deck_layers[key])
+
+    # Apply card-level layer overrides
+    card_layers = card_overrides.get('layers', {})
+    for key in FRAME_LAYER_ORDER:
+        if key in card_layers:
+            layers[key].update(card_layers[key])
+
+    # ── Build render params: start from defaults, apply style overrides ──
+    render = dict(DEFAULT_RENDER_PARAMS)
+    render.update(style.get('render', {}))
+
+    # ── Build result ──
+    result = {
+        'style': style_key,
+        'mode': style.get('mode', 'svg'),
+        'frame_set': style.get('frame_set'),
+        'layout': style.get('layout'),
+        'layers': layers,
+        'render': render,
+        'use_card_colors': deck_settings.get('use_card_colors', True),
+        'color_overrides': {},
+        'text_overrides': card_overrides.get('text_overrides', {}),
+        'no_frame': style.get('no_frame', False),
+        'show_oracle': style.get('show_oracle', True),
+        'show_flavor': style.get('show_flavor', True),
+        'type_y': style.get('type_y', 545),
+    }
+
+    # Color overrides: deck, then card on top
+    if deck_settings.get('color_overrides'):
+        result['color_overrides'].update(deck_settings['color_overrides'])
+    if card_overrides.get('color_overrides'):
+        result['color_overrides'].update(card_overrides['color_overrides'])
+
+    # Art position: per-card only
+    if card_overrides.get('art_offset'):
+        result['art_offset'] = card_overrides['art_offset']
+    if card_overrides.get('art_zoom') is not None:
+        result['art_zoom'] = card_overrides['art_zoom']
+
+    # Flat alpha accessors for backwards compat during transition
+    result['field_alpha'] = _layer_opacity(layers, 'title_bar')
+    result['textbox_alpha'] = _layer_opacity(layers, 'text_box')
+    result['pt_alpha'] = _layer_opacity(layers, 'pt_box')
+
+    return result
+
+
+# ===========================================================================
+# Layout constants — based on 672×936 viewBox
+# Standard MTG card proportions: name bar at top, fixed art window,
+# type line at ~58% down, standard-size textbox below it.
+# ===========================================================================
+MARGIN = 28          # inner margin from card edge
+CORNER_R = 22        # rounded corners on card
+FIELD_R = 16         # rounded corners on fields
+PINLINE_W = 2        # pinline stroke width
+
+# Translucency for frosted glass effect (art shows through)
+FIELD_ALPHA = 0.65   # name & type fields
+TEXTBOX_ALPHA = 0.62 # rules textbox — more translucent so art shows through
+PT_ALPHA = 0.82      # P/T box
+
+# ── Name field (top of card) ──
+NAME_Y = 32
+NAME_H = 56          # fixed name bar height
+NAME_PADDING_V = 10
+NAME_TEXT_X = MARGIN + 16
+
+# ── Art window (between name bar and type line) ──
+ART_Y = NAME_Y + NAME_H + PINLINE_W
+# (Art bottom = TYPE_Y - PINLINE_W, calculated from type line position)
+
+# ── Type line (FIXED position — standard MTG location ~58% down) ──
+TYPE_Y = 545
+TYPE_H = 42
+TYPE_PADDING_V = 8
+
+# ── Rules textbox (FIXED standard size below type line) ──
+RULES_Y = TYPE_Y + TYPE_H + PINLINE_W
+RULES_BOTTOM = 882   # bottom of textbox
+RULES_H = RULES_BOTTOM - RULES_Y  # ~293px — standard textbox
+RULES_PADDING = 16
+RULES_BOTTOM_PAD = 8
+
+# ── Bottom metadata ──
+META_Y = VB_H - 16
+
+# P/T box (overlaps bottom-right of rules box)
+PT_W = 110
+PT_H = 52
+
+# Mana pips in name bar
+MANA_PIP_SIZE = 36
+MANA_PIP_GAP = 4
+MANA_PIPS_RIGHT = VB_W - MARGIN - 12
+
+# Inline pips in rules text
+RULES_PIP_SIZE = 24
+RULES_PIP_RADIUS = RULES_PIP_SIZE / 2
+
+# Font sizes — LARGE for print readability at 750×1050
+NAME_FONT = 35
+TYPE_FONT = 29
+RULES_FONT = 29           # standard MTG ~8.5pt scaled to 672×936 viewBox
+RULES_LINE_H = 37
+FLAVOR_FONT = 21          # italic flavor text — noticeably smaller than rules
+FLAVOR_LINE_H = 27
+PT_FONT = 33
+META_FONT = 10
+COMMANDER_FONT = 14
+
+# ── MTG-authentic fonts ──
+# Beleren Bold  — card names (official MTG font)
+# Beleren       — type lines
+# MPlantin      — rules text (Plantin variant used on real cards)
+# MPlantin Italic — flavor text
+# Fallbacks: P052 (Palatino) for names, Lora for body text
+NAME_FONT_FAMILY = "Beleren2016, Beleren Bold, Beleren, P052, serif"
+TYPE_FONT_FAMILY = "Beleren2016, Beleren Bold, Beleren, P052, serif"
+RULES_FONT_FAMILY = "MPlantin, Lora, P052, serif"
+FLAVOR_FONT_FAMILY = "MPlantin, Lora, P052, serif"
+PT_FONT_FAMILY = "Beleren2016, Beleren Bold, Beleren, P052, serif"
+META_FONT_FAMILY = "MPlantin, Lora, serif"
+
+
+# ===========================================================================
+# Font measurement (actual TTF metrics via Pillow)
+# ===========================================================================
+_pil_font_cache: Dict[int, Any] = {}
+
+def _get_pil_font(size: int):
+    """Load MPlantin at the given size for measuring text widths."""
+    if size not in _pil_font_cache:
+        from PIL import ImageFont
+        for path in [
+            Path('fonts/MPlantin.ttf'),
+            Path.home() / 'Library' / 'Fonts' / 'MPlantin.ttf',
+            Path.home() / '.local' / 'share' / 'fonts' / 'MPlantin.ttf',
+        ]:
+            if path.exists():
+                _pil_font_cache[size] = ImageFont.truetype(str(path), size)
+                break
+        else:
+            _pil_font_cache[size] = None  # font not found, fall back to estimate
+    return _pil_font_cache[size]
+
+def _measure_text(text: str, font_size: int) -> float:
+    """Measure actual rendered width of text using TTF font metrics."""
+    pil_font = _get_pil_font(font_size)
+    if pil_font:
+        return pil_font.getlength(text)
+    # Fallback: rough estimate if font not available
+    return len(text) * font_size * 0.48
+
+
+# ===========================================================================
+# Data structures
+# ===========================================================================
+@dataclass
+class CardData:
+    name: str
+    mana_cost: str
+    type_line: str
+    oracle_text: str
+    power: Optional[str] = None
+    toughness: Optional[str] = None
+    loyalty: Optional[str] = None
+    colors: List[str] = None
+    color_identity: List[str] = None
+    flavor_text: Optional[str] = None
+    is_commander: bool = False
+    card_type: str = "creature"
+
+    def __post_init__(self):
+        if self.colors is None:
+            self.colors = []
+        if self.color_identity is None:
+            self.color_identity = []
+
+
+# ===========================================================================
+# Helpers
+# ===========================================================================
+def parse_mana_cost(mana_cost: str) -> List[str]:
+    if not mana_cost:
+        return []
+    return re.findall(r'\{([^}]+)\}', mana_cost)
+
+
+def get_color_theme(card: CardData) -> dict:
+    """Return the color theme dict for a card."""
+    if card.card_type == 'land':
+        colors = card.color_identity or card.colors
+        if colors and len(colors) == 1:
+            return COLOR_THEMES[colors[0]]
+        return COLOR_THEMES['land']
+    if card.card_type == 'artifact' and not card.colors:
+        return COLOR_THEMES['artifact']
+
+    colors = card.colors or card.color_identity
+    if not colors:
+        return COLOR_THEMES['colorless']
+    if len(colors) == 1:
+        return COLOR_THEMES[colors[0]]
+    # Multicolor — use gold frame
+    theme = dict(COLOR_THEMES['gold'])
+    # Try dual textbox override
+    if len(colors) == 2:
+        key = ''.join(sorted(colors, key=lambda c: 'WUBRG'.index(c)))
+        if key in DUAL_TEXTBOX:
+            theme['textbox'] = DUAL_TEXTBOX[key]
+    return theme
+
+
+def hex_with_alpha(hex_color: str, alpha: float) -> str:
+    """Convert #RRGGBB + alpha float to rgba() string."""
+    r = int(hex_color[1:3], 16)
+    g = int(hex_color[3:5], 16)
+    b = int(hex_color[5:7], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def tokenize_oracle_text(text: str) -> List[dict]:
+    if not text:
+        return []
+    tokens = []
+    parts = re.split(r'(\{[^}]+\})', text)
+    for part in parts:
+        if not part:
+            continue
+        m = re.match(r'^\{([^}]+)\}$', part)
+        if m:
+            tokens.append({'type': 'symbol', 'value': m.group(1)})
+        else:
+            tokens.append({'type': 'text', 'value': part})
+    return tokens
+
+
+# ===========================================================================
+# SVG building blocks
+# ===========================================================================
+def _svg_filters(theme: dict) -> str:
+    """SVG <defs> with authentic MTG-style filters (matches FeSens inner shadow system).
+
+    FeSens uses 4-layer inner shadow filters on fields:
+      1. Top shadow (dark, dy=-6, stdDeviation=1)
+      2. Right shadow (dark, dx=6, stdDeviation=1)
+      3. Corner shadow (dark, dx=6 dy=-6, stdDeviation=1)
+      4. Bottom highlight (white, dx=-2 dy=6, lighten blend)
+    """
+    border = theme['border']
+    return f'''<defs>
+  <!-- Drop shadow for text -->
+  <filter id="textShadow" x="-5%" y="-5%" width="115%" height="115%">
+    <feDropShadow dx="0.5" dy="1" stdDeviation="0.8" flood-color="rgba(0,0,0,0.7)"/>
+  </filter>
+  <!-- 4-layer inner shadow for fields (authentic MTG depth from FeSens) -->
+  <filter id="fieldShadow" x="-2%" y="-4%" width="104%" height="112%"
+          color-interpolation-filters="sRGB">
+    <!-- Layer 1: Top inner shadow -->
+    <feFlood flood-color="black" flood-opacity="0.50" result="c1"/>
+    <feComposite in="c1" in2="SourceAlpha" operator="in" result="s1"/>
+    <feGaussianBlur in="s1" stdDeviation="1" result="b1"/>
+    <feOffset in="b1" dy="-4" result="o1"/>
+    <feComposite in="o1" in2="SourceAlpha" operator="in" result="i1"/>
+    <!-- Layer 2: Right inner shadow -->
+    <feFlood flood-color="black" flood-opacity="0.30" result="c2"/>
+    <feComposite in="c2" in2="SourceAlpha" operator="in" result="s2"/>
+    <feGaussianBlur in="s2" stdDeviation="1" result="b2"/>
+    <feOffset in="b2" dx="4" result="o2"/>
+    <feComposite in="o2" in2="SourceAlpha" operator="in" result="i2"/>
+    <!-- Layer 3: Top-right corner shadow -->
+    <feFlood flood-color="black" flood-opacity="0.20" result="c3"/>
+    <feComposite in="c3" in2="SourceAlpha" operator="in" result="s3"/>
+    <feGaussianBlur in="s3" stdDeviation="1" result="b3"/>
+    <feOffset in="b3" dx="4" dy="-4" result="o3"/>
+    <feComposite in="o3" in2="SourceAlpha" operator="in" result="i3"/>
+    <!-- Layer 4: Bottom-left highlight (lighten blend) -->
+    <feFlood flood-color="white" flood-opacity="0.30" result="c4"/>
+    <feComposite in="c4" in2="SourceAlpha" operator="in" result="s4"/>
+    <feGaussianBlur in="s4" stdDeviation="0.8" result="b4"/>
+    <feOffset in="b4" dx="-1.5" dy="4" result="o4"/>
+    <feComposite in="o4" in2="SourceAlpha" operator="in" result="i4"/>
+    <!-- Merge all layers -->
+    <feMerge>
+      <feMergeNode in="SourceGraphic"/>
+      <feMergeNode in="i1"/>
+      <feMergeNode in="i2"/>
+      <feMergeNode in="i3"/>
+    </feMerge>
+    <!-- Apply highlight on top with lighten blend -->
+    <feBlend in2="i4" mode="lighten"/>
+  </filter>
+  <!-- P/T box inner shadow (dual: dark top + white bottom highlight) -->
+  <filter id="ptShadow" x="-5%" y="-10%" width="110%" height="130%"
+          color-interpolation-filters="sRGB">
+    <feFlood flood-color="black" flood-opacity="0.50" result="pc1"/>
+    <feComposite in="pc1" in2="SourceAlpha" operator="in" result="ps1"/>
+    <feGaussianBlur in="ps1" stdDeviation="1.2" result="pb1"/>
+    <feOffset in="pb1" dy="-3" result="po1"/>
+    <feComposite in="po1" in2="SourceAlpha" operator="in" result="pi1"/>
+    <feFlood flood-color="white" flood-opacity="0.30" result="pc2"/>
+    <feComposite in="pc2" in2="SourceAlpha" operator="in" result="ps2"/>
+    <feGaussianBlur in="ps2" stdDeviation="0.8" result="pb2"/>
+    <feOffset in="pb2" dy="3" result="po2"/>
+    <feComposite in="po2" in2="SourceAlpha" operator="in" result="pi2"/>
+    <feMerge>
+      <feMergeNode in="SourceGraphic"/>
+      <feMergeNode in="pi1"/>
+    </feMerge>
+    <feBlend in2="pi2" mode="lighten"/>
+  </filter>
+  <!-- Drop shadow for border structure -->
+  <filter id="borderShadow" x="-2%" y="-2%" width="104%" height="104%">
+    <feOffset dx="2.5" dy="-2" result="off"/>
+    <feGaussianBlur in="off" stdDeviation="0.5" result="blur"/>
+    <feColorMatrix in="blur" values="1 1 1 0 0  1 1 1 0 0  1 1 1 0 0  0 0 0 0.15 0" result="white"/>
+    <feBlend in="SourceGraphic" in2="white" mode="normal"/>
+  </filter>
+  <!-- Subtle depth gradient for textbox -->
+  <linearGradient id="boxGrad" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="white" stop-opacity="0.10"/>
+    <stop offset="100%" stop-color="black" stop-opacity="0.06"/>
+  </linearGradient>
+  <!-- Frosted glass blur backdrop -->
+  <filter id="frost" x="-2%" y="-2%" width="104%" height="104%">
+    <feGaussianBlur in="SourceGraphic" stdDeviation="0.6"/>
+  </filter>
+</defs>'''
+
+
+def _card_shape_path() -> str:
+    """The card outline path with rounded corners, matching MTG card proportions."""
+    r = CORNER_R
+    w = VB_W
+    h = VB_H
+    return (
+        f"M{r} 0 H{w-r} Q{w} 0 {w} {r} "
+        f"V{h-r} Q{w} {h} {w-r} {h} "
+        f"H{r} Q0 {h} 0 {h-r} "
+        f"V{r} Q0 0 {r} 0 Z"
+    )
+
+
+def _simple_field_path(x: float, y: float, w: float, h: float, r: float = FIELD_R,
+                       r_top: float = None, r_bottom: float = None) -> str:
+    """Simple rounded rectangle field path — the original Deck Art Studio look.
+
+    Uses quadratic Bezier curves (Q) for subtle corner rounding that looks
+    clean on translucent frosted-glass overlays.
+    r_top/r_bottom override the radius for top/bottom corners independently.
+    """
+    r = min(r, h / 2, w / 2)
+    rt = min(r_top if r_top is not None else r, h / 2, w / 2)
+    rb = min(r_bottom if r_bottom is not None else r, h / 2, w / 2)
+    return (
+        f"M{x+rt} {y} H{x+w-rt} Q{x+w} {y} {x+w} {y+rt} "
+        f"V{y+h-rb} Q{x+w} {y+h} {x+w-rb} {y+h} "
+        f"H{x+rb} Q{x} {y+h} {x} {y+h-rb} "
+        f"V{y+rt} Q{x} {y} {x+rt} {y} Z"
+    )
+
+
+def _field_path(x: float, y: float, w: float, h: float, r: float = FIELD_R,
+                r_top: float = None, r_bottom: float = None) -> str:
+    """Authentic MTG pill-shaped field path (matches FeSens name-field.svg).
+
+    Creates a lozenge/pill shape where the ends curve outward at the vertical
+    midpoint using cubic bezier curves, rather than simple rounded corners.
+    This is the distinctive shape used on real M15+ MTG card name/type bars.
+
+    The end-cap proportions are derived from the FeSens reference:
+      viewBox 597×56, path M12 2 H585 C585,2 595,11 595,28 C595,45 585,54 ...
+    Ratios relative to field height: inset=h*0.214, edge=h*0.036, mid=h*0.5
+    """
+    # Proportions scaled from FeSens name-field.svg (597×56 viewBox)
+    yi = h * 0.036   # top/bottom inset (2/56)
+    xi = h * 0.214   # where straight edge starts from each end (12/56)
+    xe = h * 0.036   # how close curve reaches to field edge (2/56)
+    mid = h * 0.5    # vertical midpoint
+    cy1 = h * 0.196  # control point y for top curve (11/56)
+    cy2 = h * 0.804  # control point y for bottom curve (45/56)
+
+    # Right end curves
+    rx1 = x + w - xi  # where straight top edge ends
+    rx2 = x + w - xe  # rightmost point of curve
+    # Left end curves
+    lx1 = x + xi      # where straight top edge starts
+    lx2 = x + xe      # leftmost point of curve
+
+    return (
+        f"M{lx1} {y+yi} "                                    # start at top-left
+        f"H{rx1} "                                            # straight across top
+        f"C{rx1} {y+yi} {rx2} {y+cy1} {rx2} {y+mid} "       # right end top curve
+        f"C{rx2} {y+cy2} {rx1} {y+h-yi} {rx1} {y+h-yi} "   # right end bottom curve
+        f"H{lx1} "                                            # straight across bottom
+        f"C{lx1} {y+h-yi} {lx2} {y+cy2} {lx2} {y+mid} "    # left end bottom curve
+        f"C{lx2} {y+cy1} {lx1} {y+yi} {lx1} {y+yi} Z"      # left end top curve
+    )
+
+
+def _pt_box_path(x: float, y: float, w: float, h: float) -> str:
+    """Authentic MTG lens/eye-shaped P/T box (matches FeSens pt-outer.svg).
+
+    Creates a convex lens shape where the sides bow outward, wider at the
+    vertical midpoint. This is the distinctive shape used on real M15+ cards.
+
+    Derived from FeSens pt-outer.svg (viewBox 119×61):
+      Path with sides curving from straight top/bottom to a wider midpoint.
+      The shape is 111px wide effective (8→119) in a 119px viewBox,
+      with height 53px in a 61px viewBox.
+    """
+    # Proportions from FeSens pt-outer.svg
+    mid = h * 0.5       # vertical midpoint
+    # How far the sides bow outward beyond the top/bottom straight edges
+    bow = w * 0.065      # ~8/119 of total width
+    # Corner radius at top/bottom
+    cr = h * 0.12        # small curve at corners
+    # Inset of straight edges from full width (where corners start)
+    ci = w * 0.08        # ~9/119
+
+    return (
+        f"M{x+ci} {y} "                                          # top-left corner start
+        f"H{x+w-ci} "                                            # straight top edge
+        f"C{x+w-ci+cr} {y} {x+w+bow} {y+mid*0.48} {x+w+bow} {y+mid} "  # right side bows out
+        f"C{x+w+bow} {y+mid+mid*0.52} {x+w-ci+cr} {y+h} {x+w-ci} {y+h} "  # right side back in
+        f"H{x+ci} "                                              # straight bottom edge
+        f"C{x+ci-cr} {y+h} {x-bow} {y+mid+mid*0.52} {x-bow} {y+mid} "  # left side bows out
+        f"C{x-bow} {y+mid*0.48} {x+ci-cr} {y} {x+ci} {y} Z"   # left side back in
+    )
+
+
+# ===========================================================================
+# New frame layer SVG renderers (v2)
+# ===========================================================================
+
+def _render_border_layer(opacity: float, render: dict = None) -> str:
+    """Authentic MTG outer border with proper structure.
+
+    The border is a filled shape (not just a stroke) that forms the card edge,
+    with cutouts for the card interior. This matches how real MTG borders work —
+    a solid dark frame with the colored card interior visible through the cutout.
+    """
+    render = render or {}
+    bw = render.get('border_width', 8)
+    br = render.get('border_radius', 22)
+    bc = render.get('border_color') or '#17140f'  # authentic dark brown-black
+    w, h = VB_W, VB_H
+
+    parts = [f'<g opacity="{opacity}">']
+
+    # Outer card shape (rounded rect)
+    outer = (
+        f"M{br} 0 H{w-br} Q{w} 0 {w} {br} "
+        f"V{h-br} Q{w} {h} {w-br} {h} "
+        f"H{br} Q0 {h} 0 {h-br} "
+        f"V{br} Q0 0 {br} 0 Z"
+    )
+    # Inner cutout (slightly smaller, inset by border width)
+    ibr = max(br - bw * 0.6, 4)  # inner border radius
+    ix, iy = bw, bw
+    iw, ih = w - 2 * bw, h - 2 * bw
+    inner = (
+        f"M{ix+ibr} {iy} H{ix+iw-ibr} Q{ix+iw} {iy} {ix+iw} {iy+ibr} "
+        f"V{iy+ih-ibr} Q{ix+iw} {iy+ih} {ix+iw-ibr} {iy+ih} "
+        f"H{ix+ibr} Q{ix} {iy+ih} {ix} {iy+ih-ibr} "
+        f"V{iy+ibr} Q{ix} {iy} {ix+ibr} {iy} Z"
+    )
+
+    # Filled border using evenodd
+    parts.append(
+        f'<path d="{outer} {inner}" fill="{bc}" fill-rule="evenodd"/>'
+    )
+
+    # Subtle highlight on top-left edge for depth
+    parts.append(
+        f'<rect x="0" y="0" width="{w}" height="{h}" rx="{br}" '
+        f'fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1.5"/>'
+    )
+
+    # Double border: second inner stroke for retro style
+    if render.get('double_border'):
+        inner_gap = bw + 4
+        ibr2 = max(ibr - 3, 3)
+        inner_inner = (
+            f"M{inner_gap+ibr2} {inner_gap} H{w-inner_gap-ibr2} "
+            f"Q{w-inner_gap} {inner_gap} {w-inner_gap} {inner_gap+ibr2} "
+            f"V{h-inner_gap-ibr2} Q{w-inner_gap} {h-inner_gap} "
+            f"{w-inner_gap-ibr2} {h-inner_gap} "
+            f"H{inner_gap+ibr2} Q{inner_gap} {h-inner_gap} "
+            f"{inner_gap} {h-inner_gap-ibr2} "
+            f"V{inner_gap+ibr2} Q{inner_gap} {inner_gap} "
+            f"{inner_gap+ibr2} {inner_gap} Z"
+        )
+        parts.append(
+            f'<path d="{inner_inner}" fill="none" stroke="{bc}" '
+            f'stroke-width="1.5" opacity="0.6"/>'
+        )
+
+    parts.append('</g>')
+    return ''.join(parts)
+
+
+def _render_frame_bg_layer(theme: dict, opacity: float,
+                           type_y: int = TYPE_Y, render: dict = None) -> str:
+    """Authentic MTG colored frame background with art window cutout.
+
+    The frame background is the colored portion of the card (green for green cards,
+    blue for blue, gold for multicolor, etc.). It fills the entire card interior
+    with a cutout for the art window. On real cards, this is where the card's
+    color identity is most visible.
+
+    Matches FeSens colored-bg.svg structure: solid color fill with evenodd cutout.
+    """
+    render = render or {}
+    bw = render.get('border_width', 8)
+    r = max(CORNER_R - bw * 0.5, 6)  # inner radius matching border
+    w, h = VB_W, VB_H
+    m = render.get('art_margin', MARGIN)
+    pw = render.get('pinline_width', PINLINE_W)
+    art_top = NAME_Y + NAME_H + pw
+    art_bottom = type_y - pw
+    ar = max(render.get('field_radius', FIELD_R) - 2, 4)
+
+    # Frame outline (inset from border, clockwise)
+    inset = max(bw, 1)
+    ix, iy = inset, inset
+    iw, ih = w - 2 * inset, h - 2 * inset
+    ir = max(r - 2, 4)
+    outer = (
+        f"M{ix+ir} {iy} H{ix+iw-ir} Q{ix+iw} {iy} {ix+iw} {iy+ir} "
+        f"V{iy+ih-ir} Q{ix+iw} {iy+ih} {ix+iw-ir} {iy+ih} "
+        f"H{ix+ir} Q{ix} {iy+ih} {ix} {iy+ih-ir} "
+        f"V{iy+ir} Q{ix} {iy} {ix+ir} {iy} Z"
+    )
+    # Art window cutout (counter-clockwise, rounded corners)
+    ax, ay = m, art_top
+    aw = w - 2 * m
+    ah = art_bottom - art_top
+    inner = (
+        f"M{ax+ar} {ay} "
+        f"Q{ax} {ay} {ax} {ay+ar} "
+        f"V{ay+ah-ar} Q{ax} {ay+ah} {ax+ar} {ay+ah} "
+        f"H{ax+aw-ar} Q{ax+aw} {ay+ah} {ax+aw} {ay+ah-ar} "
+        f"V{ay+ar} Q{ax+aw} {ay} {ax+aw-ar} {ay} Z"
+    )
+
+    bg_color = theme.get('bg', '#2E2E2E')
+    # Apply frame tint if specified (nyx style mixes tint with card color)
+    tint = render.get('frame_tint')
+    if tint:
+        bg_color = _blend_hex(bg_color, tint, 0.4)
+
+    parts = [f'<g opacity="{opacity}">']
+    parts.append(f'<path d="{outer} {inner}" fill="{bg_color}" fill-rule="evenodd"/>')
+
+    # Subtle highlight on frame edges for depth (like real cards catching light)
+    parts.append(
+        f'<path d="{outer}" fill="none" stroke="rgba(255,255,255,0.06)" '
+        f'stroke-width="1"/>'
+    )
+
+    # Nyx starfield pattern overlay
+    if render.get('frame_pattern') == 'nyx':
+        parts.append(
+            f'<path d="{outer} {inner}" fill="url(#nyxStars)" fill-rule="evenodd" '
+            f'opacity="0.7"/>'
+        )
+
+    parts.append('</g>')
+    return ''.join(parts)
+
+
+def _render_inner_border_layer(theme: dict, opacity: float,
+                               type_y: int = TYPE_Y, render: dict = None) -> str:
+    """Inner colored border around the art window (retro/old-border style)."""
+    render = render or {}
+    m = render.get('art_margin', MARGIN)
+    pw = render.get('pinline_width', PINLINE_W)
+    ibw = render.get('inner_border_width', 3)
+    fr = render.get('field_radius', FIELD_R)
+
+    art_top = NAME_Y + NAME_H + pw
+    art_bottom = type_y - pw
+    border_color = theme.get('border', '#8B7D6B')
+
+    # Rect around art window with inner border
+    ax = m - ibw
+    ay = art_top - ibw
+    aw = VB_W - 2 * m + 2 * ibw
+    ah = art_bottom - art_top + 2 * ibw
+    return (
+        f'<g opacity="{opacity}">'
+        f'<rect x="{ax}" y="{ay}" width="{aw}" height="{ah}" '
+        f'rx="{fr + 2}" fill="none" stroke="{border_color}" '
+        f'stroke-width="{ibw}"/>'
+        f'</g>'
+    )
+
+
+def _render_pinlines_layer(theme: dict, opacity: float,
+                           type_y: int = TYPE_Y, type_h: int = TYPE_H,
+                           render: dict = None) -> str:
+    """Authentic MTG pinlines — thin colored lines between frame sections.
+
+    On real M15 cards, pinlines are the thin colored lines that separate
+    the name bar from the art, the art from the type bar, etc. They run
+    the full width of the card interior and are a key visual element
+    that defines the card's color identity (they're often gradient-colored
+    on multicolor cards).
+    """
+    render = render or {}
+    pw = render.get('pinline_width', PINLINE_W)
+    if pw <= 0:
+        return ''
+    bw = render.get('border_width', 8)
+    m = max(bw + 1, render.get('art_margin', MARGIN) - 8)  # extend close to border
+    border_color = theme.get('border', '#8B7D6B')
+    name_bottom = NAME_Y + NAME_H
+    type_bottom = type_y + type_h
+    rules_bottom = RULES_BOTTOM
+    x1 = m
+    x2 = VB_W - m
+
+    lines = []
+    # Below name bar
+    lines.append(
+        f'<line x1="{x1}" y1="{name_bottom}" x2="{x2}" y2="{name_bottom}" '
+        f'stroke="{border_color}" stroke-width="{pw}"/>'
+    )
+    # Above type bar
+    lines.append(
+        f'<line x1="{x1}" y1="{type_y}" x2="{x2}" y2="{type_y}" '
+        f'stroke="{border_color}" stroke-width="{pw}"/>'
+    )
+    # Below type bar
+    lines.append(
+        f'<line x1="{x1}" y1="{type_bottom}" x2="{x2}" y2="{type_bottom}" '
+        f'stroke="{border_color}" stroke-width="{pw}"/>'
+    )
+    # Below text box (above info/bottom area)
+    lines.append(
+        f'<line x1="{x1}" y1="{rules_bottom}" x2="{x2}" y2="{rules_bottom}" '
+        f'stroke="{border_color}" stroke-width="{pw}"/>'
+    )
+    return f'<g opacity="{opacity}">{"".join(lines)}</g>'
+
+
+
+def _render_info_bar_layer(opacity: float,
+                           render: dict = None) -> str:
+    """Small dark bar at card bottom with collector info."""
+    render = render or {}
+    m = render.get('art_margin', MARGIN)
+    fr = render.get('field_radius', FIELD_R)
+    bar_h = 22
+    bar_y = VB_H - m - bar_h
+    bar_x = m
+    bar_w = VB_W - 2 * m
+    return (
+        f'<g opacity="{opacity}">'
+        f'<rect x="{bar_x}" y="{bar_y}" width="{bar_w}" height="{bar_h}" '
+        f'rx="{min(fr, 6)}" fill="rgba(0,0,0,0.65)"/>'
+        f'<text x="{bar_x + 8}" y="{bar_y + 15}" '
+        f'font-family="Helvetica, Arial, sans-serif" font-size="10" '
+        f'fill="rgba(255,255,255,0.6)">Deck Art Studio</text>'
+        f'</g>'
+    )
+
+
+def _render_bevel(path_d: str, opacity: float = 0.3) -> str:
+    """Add a bevel highlight/shadow effect to a field (retro style)."""
+    return (
+        # Top/left highlight
+        f'<path d="{path_d}" fill="none" stroke="rgba(255,255,255,{opacity})" '
+        f'stroke-width="1.5" clip-path="inset(0 50% 50% 0)"/>'
+        # Bottom/right shadow
+        f'<path d="{path_d}" fill="none" stroke="rgba(0,0,0,{opacity})" '
+        f'stroke-width="1.5" clip-path="inset(50% 0 0 50%)"/>'
+    )
+
+
+def _render_nyx_defs() -> str:
+    """SVG <pattern> definition for the Nyx/enchantment starfield effect."""
+    return '''<pattern id="nyxStars" x="0" y="0" width="40" height="40"
+  patternUnits="userSpaceOnUse" patternTransform="rotate(15)">
+  <circle cx="5" cy="8" r="1.2" fill="rgba(255,255,255,0.8)"/>
+  <circle cx="22" cy="4" r="0.7" fill="rgba(255,255,255,0.5)"/>
+  <circle cx="35" cy="12" r="0.9" fill="rgba(255,255,255,0.65)"/>
+  <circle cx="12" cy="22" r="0.5" fill="rgba(255,255,255,0.4)"/>
+  <circle cx="30" cy="25" r="1.4" fill="rgba(255,255,255,0.75)"/>
+  <circle cx="8" cy="35" r="0.6" fill="rgba(255,255,255,0.45)"/>
+  <circle cx="18" cy="32" r="1.0" fill="rgba(255,255,255,0.6)"/>
+  <circle cx="38" cy="36" r="0.8" fill="rgba(255,255,255,0.55)"/>
+  <circle cx="26" cy="15" r="0.4" fill="rgba(255,255,255,0.35)"/>
+  <circle cx="3" cy="18" r="0.6" fill="rgba(255,255,255,0.5)"/>
+</pattern>'''
+
+
+def _blend_hex(color1: str, color2: str, ratio: float) -> str:
+    """Blend two hex colors. ratio=0 returns color1, ratio=1 returns color2."""
+    try:
+        r1, g1, b1 = int(color1[1:3], 16), int(color1[3:5], 16), int(color1[5:7], 16)
+        r2, g2, b2 = int(color2[1:3], 16), int(color2[3:5], 16), int(color2[5:7], 16)
+        r = int(r1 * (1 - ratio) + r2 * ratio)
+        g = int(g1 * (1 - ratio) + g2 * ratio)
+        b = int(b1 * (1 - ratio) + b2 * ratio)
+        return f'#{r:02x}{g:02x}{b:02x}'
+    except (ValueError, IndexError):
+        return color1
+
+
+def _pt_box_path_pointed(x: float, y: float, w: float, h: float) -> str:
+    """P/T box with sharper pointed corners (retro style)."""
+    notch = 12
+    return (
+        f"M{x+notch} {y} H{x+w-notch} "
+        f"L{x+w} {y+h/2} "
+        f"L{x+w-notch} {y+h} H{x+notch} "
+        f"L{x} {y+h/2} Z"
+    )
+
+
+# ===========================================================================
+# Rules text renderer with inline mana symbols
+# ===========================================================================
+def _wrap_paragraph_with_pips(tokens: List[dict], max_width: float,
+                              font_size: int) -> List[List[dict]]:
+    """Word-wrap a tokenized paragraph into lines, estimating widths.
+
+    Returns a list of lines.  Each line is a list of items:
+        {'type': 'text', 'value': "word1 word2 ..."}   (accumulated text)
+        {'type': 'symbol', 'value': 'R'}                (pip)
+    """
+    space_w = _measure_text(' ', font_size)
+    pip_w = RULES_PIP_SIZE + 2       # width reserved for a pip image
+
+    # Break tokens into individual words and symbols, with measured widths
+    items: List[dict] = []
+    for tok in tokens:
+        if tok['type'] == 'symbol':
+            items.append(tok)
+        else:
+            for w in tok['value'].split(' '):
+                if w:
+                    items.append({'type': 'text', 'value': w,
+                                  'width': _measure_text(w, font_size)})
+
+    lines: List[List[dict]] = []
+    cur_line: List[dict] = []
+    cur_width = 0.0
+    cur_text_run = ""
+
+    def flush_text_run():
+        nonlocal cur_text_run
+        if cur_text_run:
+            cur_line.append({'type': 'text', 'value': cur_text_run})
+            cur_text_run = ""
+
+    def start_new_line():
+        nonlocal cur_line, cur_width, cur_text_run
+        flush_text_run()
+        if cur_line:
+            lines.append(cur_line)
+        cur_line = []
+        cur_width = 0.0
+
+    for item in items:
+        if item['type'] == 'symbol':
+            needed = pip_w + (space_w if cur_width > 0 else 0)
+            if cur_width > 0 and cur_width + needed > max_width:
+                start_new_line()
+            # Flush text BEFORE the space so the space is a separate gap
+            flush_text_run()
+            if cur_width > 0:
+                cur_line.append({'type': 'gap', 'width': space_w})
+                cur_width += space_w
+            cur_line.append(item)
+            cur_width += pip_w
+        else:
+            word = item['value']
+            word_width = item.get('width', _measure_text(word, font_size))
+            needed = word_width + (space_w if cur_width > 0 else 0)
+            # Punctuation sticks to previous word (no extra space)
+            if word and word[0] in ':,.;\u2014' and cur_width > 0:
+                needed = word_width
+
+            # Check if previous item was a pip (last item in cur_line is a symbol)
+            after_pip = (cur_line and cur_line[-1].get('type') == 'symbol')
+
+            if cur_width > 0 and cur_width + needed > max_width:
+                start_new_line()
+                cur_text_run = word
+                cur_width = word_width
+            else:
+                if cur_width > 0 and not (word and word[0] in ':,.;\u2014'):
+                    if after_pip:
+                        # Use exact gap after pip
+                        flush_text_run()
+                        cur_line.append({'type': 'gap', 'width': space_w})
+                    else:
+                        cur_text_run += " "
+                    cur_width += space_w
+                cur_text_run += word
+                cur_width += word_width
+
+    flush_text_run()
+    if cur_line:
+        lines.append(cur_line)
+
+    return lines
+
+
+def render_rules_text_svg(oracle_text: str, x_start: float, y_start: float,
+                          max_width: float, max_height: float,
+                          font_size: int, line_spacing: int,
+                          text_color: str = '#000',
+                          font_family: str = None,
+                          italic: bool = False) -> Tuple[List[str], float]:
+    """Render oracle text as SVG with inline pip symbols.
+
+    Text segments are rendered as single <text> elements so the SVG engine
+    handles character spacing natively.  Pips are placed inline using
+    estimated widths.
+    """
+    if not oracle_text:
+        return [], 0
+
+    if font_family is None:
+        font_family = RULES_FONT_FAMILY
+
+    italic_attr = ' font-style="italic"' if italic else ''
+
+    svg_elements = []
+    # Use actual font metrics for pixel-perfect positioning
+    space_w = font_size * 0.22
+    pip_img_w = RULES_PIP_SIZE + 2
+
+    current_y = y_start
+    paragraphs = oracle_text.split('\n')
+
+    for para_idx, paragraph in enumerate(paragraphs):
+        if not paragraph.strip():
+            current_y += line_spacing * 0.5
+            continue
+
+        tokens = tokenize_oracle_text(paragraph)
+        lines = _wrap_paragraph_with_pips(tokens, max_width, font_size)
+
+        for line_items in lines:
+            if current_y + line_spacing > y_start + max_height:
+                return svg_elements, current_y - y_start
+
+            cx = x_start
+            for seg in line_items:
+                if seg['type'] == 'gap':
+                    # Exact-width space between text and pip
+                    cx += seg['width']
+                elif seg['type'] == 'symbol':
+                    pip_x = cx
+                    pip_y = current_y - RULES_PIP_SIZE + 2
+                    # Background circle so pip is visible against any textbox color
+                    pip_cx = pip_x + RULES_PIP_SIZE / 2
+                    pip_cy = pip_y + RULES_PIP_SIZE / 2
+                    svg_elements.append(
+                        f'<circle cx="{pip_cx}" cy="{pip_cy}" r="{RULES_PIP_SIZE/2 + 1}" '
+                        f'fill="rgba(255,255,255,0.6)"/>'
+                    )
+                    svg_elements.append(_pip_image_tag(seg['value'], pip_x, pip_y, RULES_PIP_SIZE))
+                    cx += pip_img_w
+                else:
+                    # Render entire text segment as one <text> element
+                    escaped = (seg['value']
+                               .replace('&', '&amp;')
+                               .replace('<', '&lt;')
+                               .replace('>', '&gt;')
+                               .replace('"', '&quot;'))
+                    svg_elements.append(
+                        f'<text x="{cx}" y="{current_y}" font-family="{font_family}" '
+                        f'font-size="{font_size}"{italic_attr} fill="{text_color}">{escaped}</text>'
+                    )
+                    # Advance by actual measured text width
+                    cx += _measure_text(seg['value'], font_size)
+
+            current_y += line_spacing
+
+        if para_idx < len(paragraphs) - 1:
+            current_y += line_spacing * 0.35
+
+    return svg_elements, current_y - y_start
+
+
+# ===========================================================================
+# Main frame SVG generator
+# ===========================================================================
+def _measure_rules_text(oracle_text: str, max_width: float,
+                        font_size: int, line_spacing: int) -> float:
+    """Pre-measure how tall the rules text will be without rendering."""
+    if not oracle_text:
+        return 0
+
+    current_y = 0.0
+    paragraphs = oracle_text.split('\n')
+
+    for para_idx, paragraph in enumerate(paragraphs):
+        if not paragraph.strip():
+            current_y += line_spacing * 0.5
+            continue
+
+        tokens = tokenize_oracle_text(paragraph)
+        lines = _wrap_paragraph_with_pips(tokens, max_width, font_size)
+        current_y += len(lines) * line_spacing
+
+        if para_idx < len(paragraphs) - 1:
+            current_y += line_spacing * 0.35
+
+    return current_y
+
+
+# ===========================================================================
+# Planeswalker loyalty ability renderer
+# ===========================================================================
+_LOYALTY_RE = re.compile(r'^([+\-−0]+\d*)\s*:\s*')
+
+
+def _get_loyalty_shape_key(cost_str: str) -> Optional[str]:
+    """Get the SVG path key for the loyalty shape (up/down/zero arrow)
+    that corresponds to a cost string like '+1', '−2', '0'.
+    Prefers vector SVG paths from mana-master, falls back to pips_b64 PNGs.
+    """
+    normalized = cost_str.replace('\u2212', '-')
+    if normalized.startswith('+'):
+        return 'loyalty_up'
+    elif normalized.startswith('-'):
+        return 'loyalty_down'
+    else:
+        return 'loyalty_zero'
+
+
+def _loyalty_badge_path(x: float, y: float, w: float, h: float) -> str:
+    """Fallback SVG path for a loyalty ability cost badge — a pointed shield
+    shape like on real MTG planeswalker cards. Points left.
+    Used only when official Scryfall symbols aren't available.
+    """
+    arrow = 8  # pointiness of the left arrow
+    r = 4      # corner rounding on right side
+    return (
+        f"M{x} {y + h/2} "
+        f"L{x + arrow} {y + 2} "
+        f"L{x + w - r} {y} Q{x + w} {y} {x + w} {y + r} "
+        f"V{y + h - r} Q{x + w} {y + h} {x + w - r} {y + h} "
+        f"L{x + arrow} {y + h - 2} Z"
+    )
+
+
+def _loyalty_counter_path(cx: float, cy: float, size: float) -> str:
+    """Fallback SVG path for the loyalty counter — a downward-pointing
+    shield/chevron like on real MTG planeswalker cards.
+    Used only when official Scryfall symbols aren't available.
+    """
+    w = size
+    h = size * 1.15
+    x = cx - w / 2
+    y = cy - h * 0.42
+    notch = 5
+    point_y = y + h
+    return (
+        f"M{x + notch} {y} "
+        f"H{x + w - notch} "
+        f"L{x + w} {y + notch} "
+        f"V{y + h * 0.6} "
+        f"L{cx} {point_y} "
+        f"L{x} {y + h * 0.6} "
+        f"V{y + notch} Z"
+    )
+
+
+def _parse_loyalty_abilities(oracle_text: str) -> list[dict]:
+    """Parse planeswalker oracle text into loyalty abilities.
+
+    Returns list of dicts:
+        {cost: '+1', text: 'Tap target permanent...'}
+    Non-loyalty paragraphs (like static abilities) get cost=None.
+    """
+    abilities = []
+    for para in oracle_text.split('\n'):
+        para = para.strip()
+        if not para:
+            continue
+        m = _LOYALTY_RE.match(para)
+        if m:
+            cost = m.group(1)
+            # Normalize minus signs to unicode minus for display
+            cost = cost.replace('-', '\u2212')
+            text = para[m.end():].strip()
+            abilities.append({'cost': cost, 'text': text})
+        else:
+            abilities.append({'cost': None, 'text': para})
+    return abilities
+
+
+def _render_loyalty_badge_vector(cost_str: str, x: float, y: float,
+                                  w: float, h: float,
+                                  badge_font_size: int) -> Optional[list]:
+    """Render a loyalty badge using embedded SVG vector paths from mana-master.
+
+    The mana-master loyalty shapes are defined in a 32×32 viewBox.
+    We scale them to the desired size and overlay the cost number in bold white.
+
+    Returns a list of SVG elements, or None if no shape available.
+    """
+    shape_key = _get_loyalty_shape_key(cost_str)
+    if not shape_key:
+        return None
+
+    # Prefer vector path from mana-master
+    path_d = _LOYALTY_SVG_PATHS.get(shape_key)
+    if not path_d:
+        b64 = _PIPS_B64.get(shape_key)
+        if not b64:
+            return None
+
+    elements = []
+
+    if path_d:
+        # Scale the 32×32 path to target w×h
+        sx = w / 32.0
+        sy = h / 32.0
+        # Drop shadow
+        elements.append(
+            f'<g transform="translate({x + 1.5},{y + 1.5}) scale({sx:.4f},{sy:.4f})">'
+            f'<path d="{path_d}" fill="rgba(0,0,0,0.35)"/>'
+            f'</g>'
+        )
+        # Main shape
+        elements.append(
+            f'<g transform="translate({x},{y}) scale({sx:.4f},{sy:.4f})">'
+            f'<path d="{path_d}" fill="#1a1410"/>'
+            f'</g>'
+        )
+    else:
+        # Rasterized PNG fallback
+        elements.append(
+            f'<image x="{x}" y="{y}" width="{w}" height="{h}" '
+            f'href="data:image/png;base64,{b64}" />'
+        )
+
+    # ── Overlay cost text, centered on the area-weighted visual mass ──
+    # Computed from actual pixel analysis of the mana-master SVG shapes:
+    #   loyalty-up:   area-weighted center at 53.7% of viewBox height
+    #   loyalty-down: area-weighted center at 45.9% of viewBox height
+    #   loyalty-zero: area-weighted center at 49.7% of viewBox height
+    # SVG <text y="..."> is the baseline, so we add ~35% of font size
+    # to convert from visual center to text baseline position.
+    normalized = cost_str.replace('\u2212', '-')
+    num_part = normalized.lstrip('+-')
+    sign = ''
+    font_baseline_offset = badge_font_size * 0.35
+
+    if normalized.startswith('+'):
+        sign = '+'
+        text_y = y + h * 0.537 + font_baseline_offset
+    elif normalized.startswith('-'):
+        sign = '-'
+        text_y = y + h * 0.459 + font_baseline_offset
+    else:
+        text_y = y + h * 0.497 + font_baseline_offset
+
+    text_x = x + w / 2
+
+    if sign == '-':
+        # Draw minus as a line (cairosvg doesn't render Unicode minus reliably)
+        # Measure the number width to center the whole "−N" pair
+        num_w = _measure_text(num_part, badge_font_size)
+        minus_w = badge_font_size * 0.38
+        gap = badge_font_size * 0.06  # small gap between minus and number
+        total_w = minus_w + gap + num_w
+        pair_start_x = text_x - total_w / 2
+        line_y = text_y - badge_font_size * 0.28
+        elements.append(
+            f'<line x1="{pair_start_x}" y1="{line_y}" '
+            f'x2="{pair_start_x + minus_w}" y2="{line_y}" '
+            f'stroke="white" stroke-width="3.5" stroke-linecap="round"/>'
+        )
+        num_x = pair_start_x + minus_w + gap
+        elements.append(
+            f'<text x="{num_x}" y="{text_y}" '
+            f'font-family="{PT_FONT_FAMILY}" font-size="{badge_font_size}" '
+            f'font-weight="bold" fill="white">{num_part}</text>'
+        )
+    else:
+        display_text = f"{sign}{num_part}" if sign else num_part
+        elements.append(
+            f'<text x="{text_x}" y="{text_y}" text-anchor="middle" '
+            f'font-family="{PT_FONT_FAMILY}" font-size="{badge_font_size}" '
+            f'font-weight="bold" fill="white">{display_text}</text>'
+        )
+
+    return elements
+
+
+def render_planeswalker_abilities(card_oracle: str,
+                                  x_start: float, y_start: float,
+                                  max_width: float, max_height: float,
+                                  font_size: int, line_spacing: int,
+                                  text_color: str = '#1a1410',
+                                  theme: dict = None) -> tuple:
+    """Render planeswalker abilities with large loyalty cost badges and dividers.
+
+    Matches authentic MTG planeswalker card layout:
+    - Big, bold loyalty badges (up/down/zero arrows) on the left
+    - Horizontal divider lines between abilities
+    - Ability text indented past the badge with clear spacing
+    - Starting loyalty counter rendered separately by the caller
+
+    Returns (svg_elements, used_height).
+    """
+    abilities = _parse_loyalty_abilities(card_oracle)
+    if not abilities:
+        return [], 0
+
+    svg_elements = []
+    current_y = y_start
+
+    # ── Badge sizing — proportioned to match real MTG cards ──
+    # On real cards, the badge is ~14% of textbox width, prominent and bold
+    badge_w = 80       # width of loyalty shape render area
+    badge_h = 68       # height (shapes have vertical padding in 32×32 viewBox)
+    badge_margin = 12  # gap between badge right edge and ability text
+    text_indent = badge_w + badge_margin
+    badge_font_size = 28  # large, bold cost text inside badge
+
+    border_color = theme['border'] if theme else '#DAA520'
+
+    for i, ability in enumerate(abilities):
+        if current_y + line_spacing > y_start + max_height:
+            break
+
+        # ── Draw horizontal divider BEFORE each ability (except the first) ──
+        if i > 0:
+            div_y = current_y - line_spacing * 0.15
+            div_x1 = x_start
+            div_x2 = x_start + max_width
+            svg_elements.append(
+                f'<line x1="{div_x1}" y1="{div_y}" x2="{div_x2}" y2="{div_y}" '
+                f'stroke="{text_color}" stroke-width="0.8" opacity="0.25"/>'
+            )
+
+        if ability['cost'] is not None:
+            cost_str = ability['cost']
+
+            # Position badge: left-aligned, vertically centered with first text line
+            badge_x = x_start - 6  # slightly past the left padding for prominence
+            badge_y = current_y - badge_h * 0.42
+
+            # Render badge (vector path with cost overlay)
+            badge_elements = _render_loyalty_badge_vector(
+                cost_str, badge_x, badge_y, badge_w, badge_h,
+                badge_font_size
+            )
+
+            if badge_elements:
+                svg_elements.extend(badge_elements)
+            else:
+                # Fallback: draw simple badge shape
+                fb_w = 60
+                fb_h = 36
+                fb_y = current_y - fb_h * 0.55
+                path = _loyalty_badge_path(badge_x, fb_y, fb_w, fb_h)
+                svg_elements.append(
+                    f'<path d="{path}" fill="#1a1410"/>'
+                )
+                cost_text_x = badge_x + fb_w / 2 + 2
+                cost_text_y = fb_y + fb_h / 2 + badge_font_size * 0.35
+                normalized = cost_str.replace('\u2212', '-')
+                display = normalized
+                svg_elements.append(
+                    f'<text x="{cost_text_x}" y="{cost_text_y}" text-anchor="middle" '
+                    f'font-family="{PT_FONT_FAMILY}" font-size="{badge_font_size * 0.8}" '
+                    f'font-weight="bold" fill="white">{display}</text>'
+                )
+
+            # Render ability text indented past the badge
+            ability_x = x_start + text_indent
+            ability_w = max_width - text_indent
+        else:
+            # No loyalty cost — static ability, render full width
+            ability_x = x_start
+            ability_w = max_width
+
+        # Render the ability text
+        text_svg, text_h = render_rules_text_svg(
+            ability['text'],
+            ability_x, current_y,
+            ability_w, max_height - (current_y - y_start),
+            font_size, line_spacing,
+            text_color=text_color,
+        )
+        svg_elements.extend(text_svg)
+
+        # Advance by at least the badge visible height or text height
+        # The visible shape in the badge is ~65% of badge_h
+        badge_visible_h = badge_h * 0.65
+        actual_h = max(text_h, badge_visible_h) if ability['cost'] is not None else text_h
+        current_y += actual_h + line_spacing * 0.6
+
+    return svg_elements, current_y - y_start
+
+
+def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
+    """Create SVG card frame with layer-based rendering.
+
+    Renders layers in order: border → frame → crown → title_bar → pinlines →
+    type_bar → text_box → pt_box → info_bar.
+    Text/symbols always render at full opacity on top of their background layers.
+
+    Each style carries render params that control visual dimensions, shapes,
+    and textures — producing genuinely different-looking frames per MTG era.
+
+    frame_settings: dict from resolve_frame_settings() with 'layers' dict
+    controlling visibility/opacity, and 'render' dict controlling visual params.
+    """
+    fs = frame_settings or {}
+
+    theme = dict(get_color_theme(card))
+    # Apply color overrides
+    for key in ('bg', 'field', 'textbox', 'border', 'text'):
+        if key in fs.get('color_overrides', {}):
+            theme[key] = fs['color_overrides'][key]
+
+    mana_pips = parse_mana_cost(card.mana_cost)
+    layers = fs.get('layers', FRAME_STYLES['classic']['layers'])
+    render = fs.get('render', dict(DEFAULT_RENDER_PARAMS))
+
+    field = theme['field']
+    textbox = theme['textbox']
+    border_color = theme['border']
+    text_color = theme['text']
+
+    # Render params
+    fr = render.get('field_radius', FIELD_R)
+    field_path_fn = _simple_field_path if render.get('field_shape') == 'simple' else _field_path
+    use_field_stroke = render.get('field_stroke', True)
+    art_m = render.get('art_margin', MARGIN)
+    use_bevel = render.get('bevel', False)
+    pw = render.get('pinline_width', PINLINE_W)
+
+    # Visibility flags from style-level settings
+    show_oracle = fs.get('show_oracle', True)
+    show_flavor = fs.get('show_flavor', True)
+
+    fx = art_m  # field x — uses style's art_margin
+    fw = VB_W - 2 * art_m  # field width
+    rules_inner_w = fw - 2 * RULES_PADDING
+
+    # Layout positions (overridable by styles like full-art)
+    name_y = NAME_Y
+    name_bottom = NAME_Y + NAME_H
+    type_y = fs.get('type_y', TYPE_Y)
+    type_bottom = type_y + TYPE_H
+    field_gap = max(pw, 6)  # minimum 6px gap between type bar and text box
+    rules_y = type_bottom + field_gap
+    rules_bottom = fs.get('rules_bottom', RULES_BOTTOM)
+
+    # Detect legendary for crown rendering
+    is_legendary = 'Legendary' in (card.type_line or '')
+
+    # ── Start SVG ──
+    svg = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        f'<svg width="{CARD_WIDTH}" height="{CARD_HEIGHT}" '
+        f'viewBox="0 0 {VB_W} {VB_H}" '
+        f'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">',
+    ]
+
+    if _FONT_FACE_CSS:
+        svg.append(f'<style type="text/css">\n{_FONT_FACE_CSS}\n</style>')
+
+    svg.append(_svg_filters(theme))
+
+    # Add nyx starfield pattern definition if needed
+    if render.get('frame_pattern') == 'nyx':
+        svg.append(f'<defs>{_render_nyx_defs()}</defs>')
+
+    # ── Layer: Border ──
+    if _layer_visible(layers, 'border'):
+        svg.append(_render_border_layer(_layer_opacity(layers, 'border'), render))
+
+    # ── Layer: Frame background ──
+    if _layer_visible(layers, 'frame'):
+        svg.append(_render_frame_bg_layer(theme, _layer_opacity(layers, 'frame'),
+                                          type_y, render))
+
+    # ── Inner border around art window (retro style) ──
+    if render.get('inner_border') and _layer_visible(layers, 'frame'):
+        svg.append(_render_inner_border_layer(theme, _layer_opacity(layers, 'frame'),
+                                              type_y, render))
+
+
+    # ── Layer: Title bar (background + stroke + text rendered separately) ──
+    name_path = field_path_fn(fx, name_y, fw, NAME_H, fr)
+    title_opacity = _layer_opacity(layers, 'title_bar')
+    if _layer_visible(layers, 'title_bar'):
+        svg.append(f'<g opacity="{title_opacity}">')
+        name_filter = ' filter="url(#fieldShadow)"' if use_field_stroke else ''
+        svg.append(f'<path d="{name_path}" fill="{field}"{name_filter}/>')
+        svg.append(f'<path d="{name_path}" fill="url(#boxGrad)"/>')
+        if use_bevel:
+            svg.append(_render_bevel(name_path))
+        if use_field_stroke:
+            svg.append(f'<path d="{name_path}" fill="none" stroke="{border_color}" stroke-width="2"/>')
+        svg.append(f'</g>')
+
+    # Title bar text (always full opacity for readability)
+    escaped_name = card.name.replace('&', '&amp;').replace('<', '&lt;')
+    name_text_x = fx + 16
+    pips_right = fx + fw - 12
+    pips_total_w = len(mana_pips) * (MANA_PIP_SIZE + MANA_PIP_GAP) + 12 if mana_pips else 0
+    name_avail_w = fw - 32 - pips_total_w
+    name_est_w = len(card.name) * NAME_FONT * 0.62
+    actual_name_font = NAME_FONT
+    if name_est_w > name_avail_w and name_avail_w > 0:
+        actual_name_font = max(22, int(NAME_FONT * name_avail_w / name_est_w))
+    name_text_y = name_y + NAME_H / 2 + actual_name_font * 0.35
+    svg.append(
+        f'<text x="{name_text_x}" y="{name_text_y}" font-family="{NAME_FONT_FAMILY}" '
+        f'font-size="{actual_name_font}" font-weight="bold" fill="{text_color}" '
+        f'stroke="rgba(255,255,255,0.4)" stroke-width="0.3">'
+        f'{escaped_name}</text>'
+    )
+
+    # Mana pips (right-aligned in name bar, always full opacity)
+    if mana_pips:
+        pip_cy = name_y + NAME_H / 2
+        px = pips_right
+        for pip in reversed(mana_pips):
+            pip_x = px - MANA_PIP_SIZE
+            pip_y = pip_cy - MANA_PIP_SIZE / 2
+            svg.append(
+                f'<circle cx="{pip_x + MANA_PIP_SIZE/2 + 0.5}" cy="{pip_y + MANA_PIP_SIZE/2 + 1}" '
+                f'r="{MANA_PIP_SIZE/2}" fill="rgba(0,0,0,0.3)"/>'
+            )
+            svg.append(_pip_image_tag(pip, pip_x, pip_y, MANA_PIP_SIZE))
+            px -= (MANA_PIP_SIZE + MANA_PIP_GAP)
+
+    # ── Layer: Pinlines ──
+    if _layer_visible(layers, 'pinlines') and pw > 0:
+        svg.append(_render_pinlines_layer(theme, _layer_opacity(layers, 'pinlines'),
+                                          type_y, TYPE_H, render))
+
+    # ── Layer: Type bar (background + stroke + text rendered separately) ──
+    type_path = field_path_fn(fx, type_y, fw, TYPE_H, fr)
+    type_opacity = _layer_opacity(layers, 'type_bar')
+    if _layer_visible(layers, 'type_bar'):
+        svg.append(f'<g opacity="{type_opacity}">')
+        field_filter = ' filter="url(#fieldShadow)"' if use_field_stroke else ''
+        svg.append(f'<path d="{type_path}" fill="{field}"{field_filter}/>')
+        svg.append(f'<path d="{type_path}" fill="url(#boxGrad)"/>')
+        if use_bevel:
+            svg.append(_render_bevel(type_path))
+        if use_field_stroke:
+            svg.append(f'<path d="{type_path}" fill="none" stroke="{border_color}" stroke-width="2"/>')
+        svg.append(f'</g>')
+
+    # Type bar text (always full opacity)
+    escaped_type = card.type_line.replace('&', '&amp;').replace('<', '&lt;')
+    type_text_y = type_y + TYPE_H / 2 + TYPE_FONT * 0.35
+    svg.append(
+        f'<text x="{fx + 16}" y="{type_text_y}" font-family="{TYPE_FONT_FAMILY}" '
+        f'font-size="{TYPE_FONT}" fill="{text_color}">'
+        f'{escaped_type}</text>'
+    )
+
+    # ── Layer: Text box (background + stroke + text rendered separately) ──
+    rules_h = rules_bottom - rules_y
+    text_box_opacity = _layer_opacity(layers, 'text_box')
+    tb_r = fr if render.get('textbox_style') != 'squared' else max(fr - 4, 3)
+    if _layer_visible(layers, 'text_box') and rules_h > 0:
+        rules_path = field_path_fn(fx, rules_y, fw, rules_h, tb_r)
+        svg.append(f'<g opacity="{text_box_opacity}">')
+        svg.append(f'<path d="{rules_path}" fill="{textbox}"/>')
+        svg.append(f'<path d="{rules_path}" fill="url(#boxGrad)"/>')
+        if use_bevel:
+            svg.append(_render_bevel(rules_path, 0.2))
+        if use_field_stroke:
+            svg.append(f'<path d="{rules_path}" fill="none" stroke="{border_color}" stroke-width="2"/>')
+        svg.append(f'</g>')
+
+    rules_max_h = max(rules_h - RULES_PADDING * 2, 0) if rules_h > 0 else 0
+
+    # Use planeswalker-specific renderer for loyalty abilities
+    is_planeswalker = card.loyalty is not None and _LOYALTY_RE.search(card.oracle_text or '')
+    if show_oracle and rules_max_h > 0 and is_planeswalker:
+        # Smaller font & tighter line spacing for planeswalkers
+        # to fit loyalty badges + longer ability text in the textbox
+        pw_font = int(RULES_FONT * 0.82)
+        pw_line_h = int(RULES_LINE_H * 0.82)
+        rules_text_y_start = rules_y + RULES_PADDING + pw_font * 0.8
+        rules_svg, rules_used_h = render_planeswalker_abilities(
+            card.oracle_text or "",
+            fx + RULES_PADDING, rules_text_y_start,
+            rules_inner_w, rules_max_h,
+            pw_font, pw_line_h,
+            text_color=text_color,
+            theme=theme,
+        )
+    elif show_oracle and rules_max_h > 0:
+        # Auto-shrink font if oracle text overflows the textbox
+        oracle = card.oracle_text or ""
+        r_font = RULES_FONT
+        r_line_h = RULES_LINE_H
+        MIN_RULES_FONT = 16  # floor to keep text readable
+
+        needed_h = _measure_rules_text(oracle, rules_inner_w, r_font, r_line_h)
+        # Also account for flavor text height if present
+        flavor_reserve = 0
+        if card.flavor_text and card.flavor_text.strip():
+            flavor_reserve = _measure_rules_text(
+                card.flavor_text.strip(), rules_inner_w, FLAVOR_FONT, FLAVOR_LINE_H
+            ) + FLAVOR_LINE_H  # extra for divider gap
+
+        while needed_h + flavor_reserve > rules_max_h and r_font > MIN_RULES_FONT:
+            r_font -= 1
+            r_line_h = int(RULES_LINE_H * r_font / RULES_FONT)
+            needed_h = _measure_rules_text(oracle, rules_inner_w, r_font, r_line_h)
+
+        rules_text_y_start = rules_y + RULES_PADDING + r_font * 0.8
+        rules_svg, rules_used_h = render_rules_text_svg(
+            oracle,
+            fx + RULES_PADDING, rules_text_y_start,
+            rules_inner_w, rules_max_h,
+            r_font, r_line_h,
+            text_color=text_color
+        )
+    else:
+        rules_svg = []
+        rules_used_h = 0
+        rules_text_y_start = rules_y + RULES_PADDING
+    svg.extend(rules_svg)
+
+    # ── Flavor text (italic, quoted, BOTTOM-ALIGNED in textbox) ──
+    has_pt = card.power is not None and card.toughness is not None
+    if show_flavor and card.flavor_text and rules_h > 0:
+        ft = card.flavor_text.strip()
+        if not ft.startswith('"') and not ft.startswith('\u201c'):
+            ft = f'\u201c{ft}\u201d'  # wrap in curly quotes
+
+        # Pre-measure flavor text height so we can bottom-align it
+        flavor_h = _measure_rules_text(ft, rules_inner_w, FLAVOR_FONT, FLAVOR_LINE_H)
+        # Bottom of textbox minus padding, flavor grows upward from there
+        flavor_bottom = rules_y + RULES_H - RULES_BOTTOM_PAD
+        flavor_y_start = flavor_bottom - flavor_h + FLAVOR_FONT * 0.8
+
+        # Skip flavor text if it would collide with the P/T box
+        render_flavor = True
+        if has_pt and flavor_h > 0:
+            pt_x = VB_W - art_m - PT_W - 6
+            pt_y = rules_bottom - PT_H + 12
+            # Check each wrapped line — if any line in the P/T overlap zone
+            # is wide enough to reach the P/T box, skip flavor entirely
+            for paragraph in ft.split('\n'):
+                if not paragraph.strip():
+                    continue
+                tokens = tokenize_oracle_text(paragraph)
+                lines = _wrap_paragraph_with_pips(tokens, rules_inner_w, FLAVOR_FONT)
+                for line_idx, line_items in enumerate(lines):
+                    line_y = flavor_y_start + line_idx * FLAVOR_LINE_H
+                    if line_y < pt_y or line_y > pt_y + PT_H:
+                        continue
+                    # Line overlaps P/T vertically — measure its width
+                    line_w = sum(
+                        _measure_text(seg['value'], FLAVOR_FONT) if seg['type'] == 'text'
+                        else seg.get('width', RULES_PIP_SIZE + 2)
+                        for seg in line_items
+                    )
+                    if fx + RULES_PADDING + line_w > pt_x:
+                        render_flavor = False
+                        break
+                if not render_flavor:
+                    break
+
+        if render_flavor and flavor_h > 0:
+            # Subtle translucent divider between rules and flavor text
+            sep_y = flavor_y_start - FLAVOR_FONT * 0.8 - 6
+            # Only draw if there's enough space between rules text and flavor
+            if sep_y > rules_text_y_start + rules_used_h + 4:
+                sep_x1 = fx + RULES_PADDING + 40
+                sep_x2 = fx + fw - RULES_PADDING - 40
+                svg.append(
+                    f'<line x1="{sep_x1}" y1="{sep_y}" x2="{sep_x2}" y2="{sep_y}" '
+                    f'stroke="{text_color}" stroke-width="0.6" opacity="0.2"/>'
+                )
+
+            # Render flavor text as italic, bottom-aligned
+            flavor_svg, _ = render_rules_text_svg(
+                ft,
+                fx + RULES_PADDING, flavor_y_start,
+                rules_inner_w, flavor_h + FLAVOR_LINE_H,
+                FLAVOR_FONT, FLAVOR_LINE_H,
+                text_color=text_color,
+                font_family=FLAVOR_FONT_FAMILY,
+                italic=True
+            )
+            svg.append(f'<g opacity="0.85">')
+            svg.extend(flavor_svg)
+            svg.append('</g>')
+
+    # ── Layer: P/T box (background + text rendered separately) ──
+    if card.power is not None and card.toughness is not None:
+        pt_x = VB_W - art_m - PT_W - 6
+        pt_y = rules_bottom - PT_H + 12
+        pt_shape = render.get('pt_shape', 'pentagon')
+        pt_path_fn = _pt_box_path_pointed if pt_shape == 'pointed' else _pt_box_path
+        pt_path = pt_path_fn(pt_x, pt_y, PT_W, PT_H)
+        pt_shadow = pt_path_fn(pt_x + 1.5, pt_y + 1.5, PT_W, PT_H)
+        pt_opacity = _layer_opacity(layers, 'pt_box')
+        if _layer_visible(layers, 'pt_box'):
+            svg.append(f'<path d="{pt_shadow}" fill="rgba(0,0,0,0.35)"/>')
+            svg.append(f'<g opacity="{pt_opacity}">')
+            svg.append(f'<path d="{pt_path}" fill="{field}" filter="url(#ptShadow)"/>')
+            svg.append(f'<path d="{pt_path}" fill="url(#boxGrad)"/>')
+            if use_bevel:
+                svg.append(_render_bevel(pt_path, 0.25))
+            svg.append(f'</g>')
+            svg.append(f'<path d="{pt_path}" fill="none" stroke="{border_color}" stroke-width="2.5"/>')
+            pt_cx = pt_x + PT_W / 2
+            pt_cy = pt_y + PT_H / 2 + PT_FONT * 0.35
+            svg.append(
+                f'<text x="{pt_cx}" y="{pt_cy}" text-anchor="middle" '
+                f'font-family="{PT_FONT_FAMILY}" font-size="{PT_FONT}" font-weight="bold" '
+                f'fill="{text_color}">{card.power}/{card.toughness}</text>'
+            )
+
+    # ── Starting Loyalty counter — big, prominent shield at bottom-right ──
+    # Matches real MTG cards: a large dark shield/chevron overlapping the
+    # bottom of the textbox, with the starting loyalty number centered inside.
+    # The loyalty-start SVG from mana-master has path bounds y: 6.4→25.4
+    # in a 32×32 viewBox. Area-weighted visual center ≈ 49.4% of viewBox.
+    if card.loyalty:
+        loy_size = 96   # large and prominent like real MTG cards
+        loy_font = 38   # big, bold number clearly readable inside shield
+
+        # Try vector SVG path from mana-master
+        start_path_d = _LOYALTY_SVG_PATHS.get('loyalty_start')
+
+        if start_path_d:
+            # The loyalty-start shape is wider than tall (pentagon/shield)
+            # In 32×32 viewBox: x spans ~0→32, y spans ~6.4→25.4 (≈59% height)
+            loy_w = loy_size
+            loy_h = loy_size * 0.82  # slightly taller ratio to give number room
+            # Position: right-aligned, overlapping bottom of textbox
+            loy_x = VB_W - art_m - loy_w / 2 - loy_w / 2 + 4
+            loy_y = rules_bottom - loy_h * 0.40  # overlap into textbox bottom
+            sx = loy_w / 32.0
+            sy = loy_h / 32.0
+            # Drop shadow
+            svg.append(
+                f'<g transform="translate({loy_x + 2.5},{loy_y + 2.5}) scale({sx:.4f},{sy:.4f})">'
+                f'<path d="{start_path_d}" fill="rgba(0,0,0,0.45)"/>'
+                f'</g>'
+            )
+            # Main shape — dark fill
+            svg.append(
+                f'<g transform="translate({loy_x},{loy_y}) scale({sx:.4f},{sy:.4f})">'
+                f'<path d="{start_path_d}" fill="#1a1410"/>'
+                f'</g>'
+            )
+            # Loyalty number — area-weighted centered inside the shield shape
+            # loyalty-start visual center at ~49.4% of viewBox height
+            # + baseline offset (SVG text y = baseline, not center)
+            font_baseline_offset = loy_font * 0.35
+            text_x = loy_x + loy_w / 2
+            text_y = loy_y + loy_h * 0.494 + font_baseline_offset
+            svg.append(
+                f'<text x="{text_x}" y="{text_y}" text-anchor="middle" '
+                f'font-family="{PT_FONT_FAMILY}" font-size="{loy_font}" font-weight="bold" '
+                f'fill="white">{card.loyalty}</text>'
+            )
+        else:
+            # Fallback: draw shield/chevron
+            loy_cx = VB_W - art_m - loy_size / 2 + 4
+            loy_cy = rules_bottom + 2
+            loy_path = _loyalty_counter_path(loy_cx, loy_cy, loy_size)
+            loy_shadow = _loyalty_counter_path(loy_cx + 2, loy_cy + 2, loy_size)
+            svg.append(f'<path d="{loy_shadow}" fill="rgba(0,0,0,0.4)"/>')
+            svg.append(f'<path d="{loy_path}" fill="#1a1410" filter="url(#ptShadow)"/>')
+            svg.append(f'<path d="{loy_path}" fill="url(#boxGrad)"/>')
+            svg.append(f'<path d="{loy_path}" fill="none" stroke="{border_color}" stroke-width="2.5"/>')
+            font_baseline_offset = loy_font * 0.35
+            svg.append(
+                f'<text x="{loy_cx}" y="{loy_cy + font_baseline_offset}" text-anchor="middle" '
+                f'font-family="{PT_FONT_FAMILY}" font-size="{loy_font}" font-weight="bold" '
+                f'fill="white">{card.loyalty}</text>'
+            )
+
+    # ── Layer: Info bar ──
+    if _layer_visible(layers, 'info_bar'):
+        svg.append(_render_info_bar_layer(_layer_opacity(layers, 'info_bar'),
+                                          render))
+
+    svg.append('</svg>')
+    return '\n'.join(svg)
+
+
+# ===========================================================================
+# Render and composite
+# ===========================================================================
+def render_card_frame(card_dict: dict, output_path, deck_frame_settings: dict = None) -> None:
+    """Render a card frame as a transparent PNG overlay."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fs = resolve_frame_settings(card_dict, deck_frame_settings)
+    card = _build_card_data(card_dict, fs)
+    png_data = _render_frame_png(card, fs)
+
+    if png_data:
+        with open(output_path, 'wb') as f:
+            f.write(png_data)
+
+
+def _autocrop_dark_borders(img, threshold=5, max_scan=8):
+    """Crop near-black borders from edges of AI-generated art.
+
+    AI models sometimes produce thin black borders. Scans inward from each
+    edge and trims contiguous rows/columns with avg brightness < threshold.
+    Conservative: only trims truly black rows (threshold=5) and scans at
+    most 8 pixels deep to avoid eating into intentionally dark scenes.
+    Won't crop more than 3% of either dimension.
+    """
+    import numpy as np
+    arr = np.array(img)
+    h, w = arr.shape[:2]
+    brightness = arr.mean(axis=2)  # per-pixel avg across RGB
+
+    max_crop_v = h // 33
+    max_crop_h = w // 33
+
+    # Top
+    top = 0
+    for row in range(min(max_scan, max_crop_v)):
+        if brightness[row].mean() < threshold:
+            top = row + 1
+        else:
+            break
+
+    # Bottom
+    bottom = h
+    for row in range(h - 1, max(h - max_scan, h - max_crop_v) - 1, -1):
+        if brightness[row].mean() < threshold:
+            bottom = row
+        else:
+            break
+
+    # Left
+    left = 0
+    for col in range(min(max_scan, max_crop_h)):
+        if brightness[:, col].mean() < threshold:
+            left = col + 1
+        else:
+            break
+
+    # Right
+    right = w
+    for col in range(w - 1, max(w - max_scan, w - max_crop_h) - 1, -1):
+        if brightness[:, col].mean() < threshold:
+            right = col
+        else:
+            break
+
+    if top or left or bottom < h or right < w:
+        return img.crop((left, top, right, bottom))
+    return img
+
+
+def _cover_crop(img, target_w, target_h):
+    """Scale image to cover target dimensions, then center-crop.
+
+    Like CSS object-fit: cover — no gaps, no distortion, excess is cropped.
+    """
+    scale = max(target_w / img.width, target_h / img.height)
+    scaled_w = round(img.width * scale)
+    scaled_h = round(img.height * scale)
+    img = img.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
+
+    # Center-crop to exact target size
+    cx = (scaled_w - target_w) // 2
+    cy = (scaled_h - target_h) // 2
+    return img.crop((cx, cy, cx + target_w, cy + target_h))
+
+
+def _cover_crop_with_offset(img, target_w, target_h, offset_x=0, offset_y=0, zoom=1.0):
+    """Scale image with user pan/zoom, place on target canvas.
+
+    Matches the Frame Designer's canvas rendering:
+    - At zoom >= 1.0: art covers the canvas, excess is cropped
+    - At zoom < 1.0: art is smaller than canvas, placed centered with
+      dark background behind it (matching the WYSIWYG preview)
+
+    offset_x, offset_y: pixel offsets at the target resolution (+ = right/down)
+    zoom: multiplier on top of the base cover-fit scale (1.0 = no extra zoom)
+    """
+    base_scale = max(target_w / img.width, target_h / img.height)
+    scale = base_scale * max(zoom, 0.3)  # clamp zoom floor
+    scaled_w = round(img.width * scale)
+    scaled_h = round(img.height * scale)
+    img = img.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
+
+    covers_w = scaled_w >= target_w
+    covers_h = scaled_h >= target_h
+
+    if covers_w and covers_h:
+        # Art covers canvas — crop to target
+        cx = (scaled_w - target_w) / 2 - offset_x
+        cy = (scaled_h - target_h) / 2 - offset_y
+        cx = max(0, min(cx, scaled_w - target_w))
+        cy = max(0, min(cy, scaled_h - target_h))
+        return img.crop((int(cx), int(cy), int(cx) + target_w, int(cy) + target_h))
+    else:
+        # Art smaller than canvas — place centered on dark background
+        canvas = Image.new('RGB', (target_w, target_h), (10, 10, 10))
+        dx = (target_w - scaled_w) // 2 + int(offset_x)
+        dy = (target_h - scaled_h) // 2 + int(offset_y)
+        canvas.paste(img, (dx, dy))
+        return canvas
+
+
+def _build_card_data(card_dict: dict, frame_settings: dict = None) -> CardData:
+    """Build CardData from card_dict, applying text_overrides from frame_settings."""
+    text_ovr = (frame_settings or {}).get('text_overrides', {})
+    return CardData(
+        name=text_ovr.get('name') or card_dict.get('name', 'Unknown'),
+        mana_cost=text_ovr.get('mana_cost') if 'mana_cost' in text_ovr else card_dict.get('mana_cost', ''),
+        type_line=text_ovr.get('type_line') or card_dict.get('type_line', ''),
+        oracle_text=text_ovr.get('oracle_text') if 'oracle_text' in text_ovr else card_dict.get('oracle_text', ''),
+        power=text_ovr.get('power') if 'power' in text_ovr else card_dict.get('power'),
+        toughness=text_ovr.get('toughness') if 'toughness' in text_ovr else card_dict.get('toughness'),
+        loyalty=card_dict.get('loyalty'),
+        colors=card_dict.get('colors', []),
+        color_identity=card_dict.get('color_identity', []),
+        flavor_text=card_dict.get('flavor_text'),
+        is_commander=card_dict.get('is_commander', False),
+        card_type=card_dict.get('card_type', 'creature'),
+    )
+
+
+def _render_frame_png(card: CardData, frame_settings: dict = None):
+    """Render card frame SVG to PNG bytes. Returns PNG bytes or None for frameless."""
+    fs = frame_settings or {}
+    if fs.get('no_frame'):
+        return None
+
+    svg_content = create_card_frame_svg(card, frame_settings=fs)
+    return cairosvg.svg2png(
+        bytestring=svg_content.encode('utf-8'),
+        output_width=CARD_WIDTH,
+        output_height=CARD_HEIGHT,
+    )
+
+
+# ===========================================================================
+# Image-based frame rendering — uses pre-rendered PNG frame overlays
+# ===========================================================================
+FRAMES_DIR = Path(__file__).parent / "shared" / "frames"
+
+# M15 layout positions (viewBox coordinates matching the CardConjurer frame PNG)
+# These positions align text with the pre-rendered M15 frame fields.
+# Measured from actual M15 frame PNGs (750×1050 → 672×936 viewBox).
+# Pixel-to-SVG: svg = pixel * 936/1050
+M15_LAYOUT = {
+    'name_y': 47,         # title bar inner field: pixel 53→107, SVG 47→95
+    'name_h': 48,         # title bar inner height: 54px → SVG 48
+    'type_y': 522,        # type bar inner field: pixel 585→647, SVG 522→577
+    'type_h': 55,         # type bar inner height: 62px → SVG 55
+    'rules_y': 582,       # text box inner field: pixel 653→973, SVG 582→867
+    'rules_bottom': 867,  # text box inner bottom
+    'art_margin': 52,     # side border: pixel 58 → SVG 52
+    'pt_w': 80,           # P/T collision area width (SVG)
+    'pt_h': 50,           # P/T collision area height (SVG)
+    'pt_font': 22,        # smaller font for scaled-down PT box
+    # P/T box visual interior center (accounts for drop shadow + bevel)
+    # PT PNG 282×154 scaled 0.42× → 118×64, placed at pixel (600, 928)
+    # Shadow on bottom-right shifts visual center left+up from PNG center
+    'pt_center_x': 591,   # visual interior center x (SVG) — measured from composite
+    'pt_center_y': 851,   # visual interior center y (SVG)
+}
+
+
+def _determine_color_key(card_dict: dict) -> str:
+    """Map card color_identity to frame asset color key (w/u/b/r/g/m/a/c/l)."""
+    type_line = card_dict.get('type_line', '')
+    colors = card_dict.get('color_identity', []) or card_dict.get('colors', [])
+
+    # Artifact without color identity
+    if 'Artifact' in type_line and not colors:
+        return 'a'
+    # Land without color identity
+    if 'Land' in type_line and not colors:
+        return 'l'
+    # Colorless
+    if not colors:
+        return 'c'
+    # Multi-color
+    if len(colors) >= 2:
+        return 'm'
+    # Single color
+    color_map = {'W': 'w', 'U': 'u', 'B': 'b', 'R': 'r', 'G': 'g'}
+    return color_map.get(colors[0], 'c')
+
+
+def _load_frame_image(frame_set: str, component: str) -> Optional[Image.Image]:
+    """Load a pre-rendered frame PNG from shared/frames/{frame_set}/{component}.png"""
+    path = FRAMES_DIR / frame_set / f'{component}.png'
+    if path.exists():
+        return Image.open(path).convert('RGBA')
+    return None
+
+
+
+def _create_text_only_svg(card: CardData, fs: dict) -> str:
+    """Create SVG with ONLY text elements — no backgrounds, borders, or fills.
+
+    Used for image-based frame mode where a pre-rendered PNG provides
+    the frame chrome and this SVG provides the text overlay.
+    """
+    layout = fs.get('layout') or M15_LAYOUT
+    theme = dict(get_color_theme(card))
+    text_color = theme['text']
+    mana_pips = parse_mana_cost(card.mana_cost)
+
+    # Layout positions from M15 layout
+    name_y = layout.get('name_y', M15_LAYOUT['name_y'])
+    name_h = layout.get('name_h', M15_LAYOUT['name_h'])
+    type_y = layout.get('type_y', M15_LAYOUT['type_y'])
+    type_h = layout.get('type_h', M15_LAYOUT['type_h'])
+    rules_y = layout.get('rules_y', M15_LAYOUT['rules_y'])
+    rules_bottom = layout.get('rules_bottom', M15_LAYOUT['rules_bottom'])
+    art_m = layout.get('art_margin', M15_LAYOUT['art_margin'])
+    pt_w = layout.get('pt_w', M15_LAYOUT['pt_w'])
+    pt_h = layout.get('pt_h', M15_LAYOUT['pt_h'])
+
+    fw = VB_W - 2 * art_m  # field width
+    rules_inner_w = fw - 2 * RULES_PADDING
+
+    svg = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        f'<svg width="{CARD_WIDTH}" height="{CARD_HEIGHT}" '
+        f'viewBox="0 0 {VB_W} {VB_H}" '
+        f'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">',
+    ]
+
+    if _FONT_FACE_CSS:
+        svg.append(f'<style type="text/css">\n{_FONT_FACE_CSS}\n</style>')
+
+    # ── Name text ──
+    escaped_name = card.name.replace('&', '&amp;').replace('<', '&lt;')
+    name_text_x = art_m + 16
+    pips_right = art_m + fw - 12
+    pips_total_w = len(mana_pips) * (MANA_PIP_SIZE + MANA_PIP_GAP) + 12 if mana_pips else 0
+    name_avail_w = fw - 32 - pips_total_w
+    name_est_w = len(card.name) * NAME_FONT * 0.62
+    actual_name_font = NAME_FONT
+    if name_est_w > name_avail_w and name_avail_w > 0:
+        actual_name_font = max(22, int(NAME_FONT * name_avail_w / name_est_w))
+    name_text_y = name_y + name_h / 2 + actual_name_font * 0.35
+    svg.append(
+        f'<text x="{name_text_x}" y="{name_text_y}" font-family="{NAME_FONT_FAMILY}" '
+        f'font-size="{actual_name_font}" font-weight="bold" fill="{text_color}">'
+        f'{escaped_name}</text>'
+    )
+
+    # ── Mana pips ──
+    if mana_pips:
+        pip_cy = name_y + name_h / 2
+        px = pips_right
+        for pip in reversed(mana_pips):
+            pip_x = px - MANA_PIP_SIZE
+            pip_y = pip_cy - MANA_PIP_SIZE / 2
+            svg.append(
+                f'<circle cx="{pip_x + MANA_PIP_SIZE/2 + 0.5}" cy="{pip_y + MANA_PIP_SIZE/2 + 1}" '
+                f'r="{MANA_PIP_SIZE/2}" fill="rgba(0,0,0,0.3)"/>'
+            )
+            svg.append(_pip_image_tag(pip, pip_x, pip_y, MANA_PIP_SIZE))
+            px -= (MANA_PIP_SIZE + MANA_PIP_GAP)
+
+    # ── Type text ──
+    escaped_type = card.type_line.replace('&', '&amp;').replace('<', '&lt;')
+    type_text_y = type_y + type_h / 2 + TYPE_FONT * 0.35
+    svg.append(
+        f'<text x="{art_m + 16}" y="{type_text_y}" font-family="{TYPE_FONT_FAMILY}" '
+        f'font-size="{TYPE_FONT}" fill="{text_color}">'
+        f'{escaped_type}</text>'
+    )
+
+    # ── Oracle text ──
+    # For creatures with P/T, reduce text area so it doesn't overlap the P/T box
+    has_pt = card.power is not None and card.toughness is not None
+    effective_rules_bottom = rules_bottom
+    if has_pt and 'pt_center_y' in layout:
+        # P/T box top edge in SVG coords — leave margin above it
+        effective_rules_bottom = layout['pt_center_y'] - pt_h / 2 - 4
+    rules_h = effective_rules_bottom - rules_y
+    rules_max_h = max(rules_h - RULES_PADDING * 2, 0)
+    show_oracle = fs.get('show_oracle', True)
+    show_flavor = fs.get('show_flavor', True)
+
+    is_planeswalker = card.loyalty is not None and _LOYALTY_RE.search(card.oracle_text or '')
+    if show_oracle and rules_max_h > 0 and is_planeswalker:
+        pw_font = int(RULES_FONT * 0.82)
+        pw_line_h = int(RULES_LINE_H * 0.82)
+        rules_text_y_start = rules_y + RULES_PADDING + pw_font * 0.8
+        rules_svg, rules_used_h = render_planeswalker_abilities(
+            card.oracle_text or "",
+            art_m + RULES_PADDING, rules_text_y_start,
+            rules_inner_w, rules_max_h,
+            pw_font, pw_line_h,
+            text_color=text_color,
+            theme=theme,
+        )
+    elif show_oracle and rules_max_h > 0:
+        oracle = card.oracle_text or ""
+        r_font = RULES_FONT
+        r_line_h = RULES_LINE_H
+        MIN_RULES_FONT = 16
+
+        needed_h = _measure_rules_text(oracle, rules_inner_w, r_font, r_line_h)
+        flavor_reserve = 0
+        if card.flavor_text and card.flavor_text.strip():
+            flavor_reserve = _measure_rules_text(
+                card.flavor_text.strip(), rules_inner_w, FLAVOR_FONT, FLAVOR_LINE_H
+            ) + FLAVOR_LINE_H
+
+        while needed_h + flavor_reserve > rules_max_h and r_font > MIN_RULES_FONT:
+            r_font -= 1
+            r_line_h = int(RULES_LINE_H * r_font / RULES_FONT)
+            needed_h = _measure_rules_text(oracle, rules_inner_w, r_font, r_line_h)
+
+        rules_text_y_start = rules_y + RULES_PADDING + r_font * 0.8
+        rules_svg, rules_used_h = render_rules_text_svg(
+            oracle,
+            art_m + RULES_PADDING, rules_text_y_start,
+            rules_inner_w, rules_max_h,
+            r_font, r_line_h,
+            text_color=text_color
+        )
+    else:
+        rules_svg = []
+        rules_used_h = 0
+        rules_text_y_start = rules_y + RULES_PADDING
+    svg.extend(rules_svg)
+
+    # ── Flavor text ──
+    if show_flavor and card.flavor_text and rules_h > 0:
+        ft = card.flavor_text.strip()
+        if not ft.startswith('"') and not ft.startswith('\u201c'):
+            ft = f'\u201c{ft}\u201d'
+
+        flavor_h = _measure_rules_text(ft, rules_inner_w, FLAVOR_FONT, FLAVOR_LINE_H)
+        flavor_bottom = rules_y + rules_h - RULES_BOTTOM_PAD
+        flavor_y_start = flavor_bottom - flavor_h + FLAVOR_FONT * 0.8
+
+        render_flavor = True
+        if has_pt and flavor_h > 0:
+            if 'pt_center_x' in layout:
+                pt_x = layout['pt_center_x'] - pt_w / 2
+                pt_y_check = layout['pt_center_y'] - pt_h / 2
+            else:
+                pt_x = VB_W - art_m - pt_w - 6
+                pt_y_check = rules_bottom - pt_h + 12
+            for paragraph in ft.split('\n'):
+                if not paragraph.strip():
+                    continue
+                tokens = tokenize_oracle_text(paragraph)
+                lines = _wrap_paragraph_with_pips(tokens, rules_inner_w, FLAVOR_FONT)
+                for line_idx, line_items in enumerate(lines):
+                    line_y = flavor_y_start + line_idx * FLAVOR_LINE_H
+                    if line_y < pt_y_check or line_y > pt_y_check + pt_h:
+                        continue
+                    line_w = sum(
+                        _measure_text(seg['value'], FLAVOR_FONT) if seg['type'] == 'text'
+                        else seg.get('width', RULES_PIP_SIZE + 2)
+                        for seg in line_items
+                    )
+                    if art_m + RULES_PADDING + line_w > pt_x:
+                        render_flavor = False
+                        break
+                if not render_flavor:
+                    break
+
+        if render_flavor and flavor_h > 0:
+            sep_y = flavor_y_start - FLAVOR_FONT * 0.8 - 6
+            if sep_y > rules_text_y_start + rules_used_h + 4:
+                sep_x1 = art_m + RULES_PADDING + 40
+                sep_x2 = art_m + fw - RULES_PADDING - 40
+                svg.append(
+                    f'<line x1="{sep_x1}" y1="{sep_y}" x2="{sep_x2}" y2="{sep_y}" '
+                    f'stroke="{text_color}" stroke-width="0.6" opacity="0.2"/>'
+                )
+            flavor_svg, _ = render_rules_text_svg(
+                ft,
+                art_m + RULES_PADDING, flavor_y_start,
+                rules_inner_w, flavor_h + FLAVOR_LINE_H,
+                FLAVOR_FONT, FLAVOR_LINE_H,
+                text_color=text_color,
+                font_family=FLAVOR_FONT_FAMILY,
+                italic=True
+            )
+            svg.append('<g opacity="0.85">')
+            svg.extend(flavor_svg)
+            svg.append('</g>')
+
+    # ── P/T text (no box — the frame PNG or PT overlay provides the box) ──
+    if has_pt:
+        pt_font = layout.get('pt_font', PT_FONT)
+        # Prefer dynamically computed center from actual PT box bbox
+        if '_pt_center_x_svg' in fs:
+            pt_cx = fs['_pt_center_x_svg']
+            # Manual baseline offset (CairoSVG doesn't support dominant-baseline)
+            pt_cy = fs['_pt_center_y_svg'] + pt_font * 0.35
+            svg.append(
+                f'<text x="{pt_cx}" y="{pt_cy}" text-anchor="middle" '
+                f'font-family="{PT_FONT_FAMILY}" font-size="{pt_font}" font-weight="bold" '
+                f'fill="{text_color}">{card.power}/{card.toughness}</text>'
+            )
+        elif 'pt_center_x' in layout:
+            pt_cx = layout['pt_center_x']
+            pt_cy = layout['pt_center_y'] + pt_font * 0.35
+            svg.append(
+                f'<text x="{pt_cx}" y="{pt_cy}" text-anchor="middle" '
+                f'font-family="{PT_FONT_FAMILY}" font-size="{pt_font}" font-weight="bold" '
+                f'fill="{text_color}">{card.power}/{card.toughness}</text>'
+            )
+        else:
+            pt_x = VB_W - art_m - pt_w - 6
+            pt_y = rules_bottom - pt_h + 12
+            pt_cx = pt_x + pt_w / 2
+            pt_cy = pt_y + pt_h / 2 + pt_font * 0.35
+            svg.append(
+                f'<text x="{pt_cx}" y="{pt_cy}" text-anchor="middle" '
+                f'font-family="{PT_FONT_FAMILY}" font-size="{pt_font}" font-weight="bold" '
+                f'fill="{text_color}">{card.power}/{card.toughness}</text>'
+            )
+
+    # ── Loyalty counter ──
+    if card.loyalty:
+        loy_size = 96
+        loy_font = 38
+        start_path_d = _LOYALTY_SVG_PATHS.get('loyalty_start')
+        if start_path_d:
+            loy_w = loy_size
+            loy_h = loy_size * 0.82
+            loy_x = VB_W - art_m - loy_w / 2 - loy_w / 2 + 4
+            loy_y = rules_bottom - loy_h * 0.40
+            sx = loy_w / 32.0
+            sy = loy_h / 32.0
+            svg.append(
+                f'<g transform="translate({loy_x + 2.5},{loy_y + 2.5}) scale({sx:.4f},{sy:.4f})">'
+                f'<path d="{start_path_d}" fill="rgba(0,0,0,0.45)"/></g>'
+            )
+            svg.append(
+                f'<g transform="translate({loy_x},{loy_y}) scale({sx:.4f},{sy:.4f})">'
+                f'<path d="{start_path_d}" fill="#1a1410"/></g>'
+            )
+            font_baseline_offset = loy_font * 0.35
+            text_x = loy_x + loy_w / 2
+            text_y = loy_y + loy_h * 0.494 + font_baseline_offset
+            svg.append(
+                f'<text x="{text_x}" y="{text_y}" text-anchor="middle" '
+                f'font-family="{PT_FONT_FAMILY}" font-size="{loy_font}" font-weight="bold" '
+                f'fill="white">{card.loyalty}</text>'
+            )
+
+    svg.append('</svg>')
+    return '\n'.join(svg)
+
+
+def _render_image_frame(card_dict: dict, card: CardData, fs: dict) -> Image.Image:
+    """Render frame using pre-rendered PNG assets + text-only SVG overlay.
+
+    Returns an RGBA image (750×1050) with frame chrome + text, ready to
+    composite onto art.
+    """
+    color_key = _determine_color_key(card_dict)
+    frame_set = fs.get('frame_set', 'm15')
+
+    # Load main frame PNG (750×1050, RGBA — transparent art window)
+    frame_img = _load_frame_image(frame_set, color_key)
+    if frame_img is None:
+        # Fallback to colorless if specific color not found
+        frame_img = _load_frame_image(frame_set, 'c')
+    if frame_img is None:
+        # No frame images available — return empty
+        return Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+
+    # Resize frame if not already at card dimensions
+    if frame_img.size != (CARD_WIDTH, CARD_HEIGHT):
+        frame_img = frame_img.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+
+    result = frame_img.copy()
+
+    # Composite P/T box overlay for creatures
+    has_pt = card.power is not None and card.toughness is not None
+    if has_pt:
+        pt_img = _load_frame_image(frame_set, f'pt/{color_key}')
+        if pt_img is None:
+            pt_img = _load_frame_image(frame_set, 'pt/c')  # fallback to colorless
+        if pt_img is not None:
+            # Scale PT box to match authentic M15 card proportions.
+            # Raw PNG is 282×154 (37.6% of card width); real cards ~16%.
+            pt_base = CARD_WIDTH / 750.0
+            pt_box_scale = 0.42
+            pt_w = int(pt_img.width * pt_base * pt_box_scale)
+            pt_h = int(pt_img.height * pt_base * pt_box_scale)
+            pt_resized = pt_img.resize((pt_w, pt_h), Image.Resampling.LANCZOS)
+            # Position at bottom-right, centered on textbox bottom border
+            textbox_bottom_px = int(M15_LAYOUT['rules_bottom'] * CARD_HEIGHT / VB_H)
+            pt_x = CARD_WIDTH - pt_w - int(32 * pt_base)
+            pt_y = textbox_bottom_px - pt_h // 2
+            pt_layer = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+            pt_layer.paste(pt_resized, (pt_x, pt_y))
+            result = Image.alpha_composite(result, pt_layer)
+            # Compute text center from PT box interior center ratio.
+            # Measured from gray fill region of isolated scaled PT PNGs.
+            # Y ratio adjusted upward to account for baseline offset rendering.
+            _icx = pt_x + pt_w * 0.551
+            _icy = pt_y + pt_h * 0.48
+            fs['_pt_center_x_svg'] = _icx * VB_W / CARD_WIDTH
+            fs['_pt_center_y_svg'] = _icy * VB_H / CARD_HEIGHT
+
+    # Render text-only SVG and composite on top
+    text_svg = _create_text_only_svg(card, fs)
+    text_png_data = cairosvg.svg2png(
+        bytestring=text_svg.encode('utf-8'),
+        output_width=CARD_WIDTH,
+        output_height=CARD_HEIGHT,
+    )
+    text_img = Image.open(io.BytesIO(text_png_data)).convert('RGBA')
+    result = Image.alpha_composite(result, text_img)
+
+    return result
+
+
+def render_frame_layer(card_dict: dict, frame_settings: dict) -> bytes:
+    """Render just the frame chrome (no art, no text) as transparent PNG bytes.
+
+    For image-mode: returns frame PNG + crown + P/T box overlays.
+    For SVG-mode: returns the SVG frame shapes rendered as PNG.
+    Used by the WYSIWYG designer for the frame canvas layer.
+    """
+    fs = frame_settings
+    card = _build_card_data(card_dict, fs)
+
+    if fs.get('no_frame'):
+        # Empty transparent image
+        buf = io.BytesIO()
+        Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0)).save(buf, 'PNG')
+        return buf.getvalue()
+
+    if fs.get('mode') == 'image':
+        # Image-based: frame + crown + P/T box (without text)
+        color_key = _determine_color_key(card_dict)
+        frame_set = fs.get('frame_set', 'm15')
+        frame_img = _load_frame_image(frame_set, color_key)
+        if frame_img is None:
+            frame_img = _load_frame_image(frame_set, 'c')
+        if frame_img is None:
+            buf = io.BytesIO()
+            Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0)).save(buf, 'PNG')
+            return buf.getvalue()
+        if frame_img.size != (CARD_WIDTH, CARD_HEIGHT):
+            frame_img = frame_img.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+
+        result = frame_img.copy()
+
+        # P/T box for creatures
+        has_pt = card.power is not None and card.toughness is not None
+        if has_pt:
+            pt_img = _load_frame_image(frame_set, f'pt/{color_key}')
+            if pt_img is None:
+                pt_img = _load_frame_image(frame_set, 'pt/c')
+            if pt_img is not None:
+                pt_base = CARD_WIDTH / 750.0
+                pt_box_scale = 0.42
+                pt_w = int(pt_img.width * pt_base * pt_box_scale)
+                pt_h = int(pt_img.height * pt_base * pt_box_scale)
+                pt_resized = pt_img.resize((pt_w, pt_h), Image.Resampling.LANCZOS)
+                textbox_bottom_px = int(M15_LAYOUT['rules_bottom'] * CARD_HEIGHT / VB_H)
+                pt_x = CARD_WIDTH - pt_w - int(32 * pt_base)
+                pt_y = textbox_bottom_px - pt_h // 2
+                pt_layer = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+                pt_layer.paste(pt_resized, (pt_x, pt_y))
+                result = Image.alpha_composite(result, pt_layer)
+
+        buf = io.BytesIO()
+        result.save(buf, 'PNG')
+        return buf.getvalue()
+    else:
+        # SVG-mode: render frame shapes only (create_card_frame_svg renders everything)
+        png_data = _render_frame_png(card, fs)
+        return png_data
+
+
+def render_text_overlay(card_dict: dict, frame_settings: dict) -> bytes:
+    """Render just the text overlay as transparent PNG bytes.
+
+    Used by the WYSIWYG designer for the text canvas layer.
+    Only applicable for image-mode frames that use _create_text_only_svg.
+    For SVG-mode, text is integrated into the frame SVG.
+    """
+    fs = frame_settings
+    card = _build_card_data(card_dict, fs)
+
+    if fs.get('mode') == 'image':
+        # Compute dynamic PT center if not already set
+        if '_pt_center_x_svg' not in fs and card.power is not None:
+            pt_base = CARD_WIDTH / 750.0
+            pt_box_scale = 0.42
+            pt_w = int(282 * pt_base * pt_box_scale)
+            pt_h = int(154 * pt_base * pt_box_scale)
+            textbox_bottom_px = int(M15_LAYOUT['rules_bottom'] * CARD_HEIGHT / VB_H)
+            pt_x = CARD_WIDTH - pt_w - int(32 * pt_base)
+            pt_y = textbox_bottom_px - pt_h // 2
+            fs['_pt_center_x_svg'] = (pt_x + pt_w * 0.551) * VB_W / CARD_WIDTH
+            fs['_pt_center_y_svg'] = (pt_y + pt_h * 0.48) * VB_H / CARD_HEIGHT
+        text_svg = _create_text_only_svg(card, fs)
+        text_png_data = cairosvg.svg2png(
+            bytestring=text_svg.encode('utf-8'),
+            output_width=CARD_WIDTH,
+            output_height=CARD_HEIGHT,
+        )
+        return text_png_data
+    else:
+        # SVG mode: text is part of the frame render, return empty
+        buf = io.BytesIO()
+        Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0)).save(buf, 'PNG')
+        return buf.getvalue()
+
+
+def composite_card(card_dict: dict, art_path, frame_path_or_none, output_path,
+                   deck_frame_settings: dict = None) -> None:
+    """Composite art image with card frame overlay.
+
+    Supports two modes:
+    - 'svg': Renders frame from SVG (programmatic shapes, filters, text)
+    - 'image': Uses pre-rendered PNG frame + text-only SVG overlay
+
+    Card Back entries skip the frame entirely — just the art resized to card dimensions.
+    deck_frame_settings: optional deck-level frame settings for preset/color/alpha overrides.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Resolve frame settings first (needed for art_offset/art_zoom)
+    fs = resolve_frame_settings(card_dict, deck_frame_settings)
+
+    # Load art, cover-crop to card dimensions (with user offset/zoom)
+    art = Image.open(art_path).convert('RGB')
+    art_offset = fs.get('art_offset', {})
+    art_zoom = fs.get('art_zoom', 1.0)
+    if art_offset or art_zoom != 1.0:
+        art_resized = _cover_crop_with_offset(
+            art, CARD_WIDTH, CARD_HEIGHT,
+            offset_x=art_offset.get('x', 0), offset_y=art_offset.get('y', 0),
+            zoom=art_zoom)
+    else:
+        art_resized = _cover_crop(art, CARD_WIDTH, CARD_HEIGHT)
+
+    # Card Back: pure art, no frame overlay
+    if card_dict.get('type_line') == 'Card Back' or (card_dict.get('name') or '').lower().startswith('card back'):
+        art_resized.save(output_path, 'PNG')
+        return
+
+    card = _build_card_data(card_dict, fs)
+
+    # Frameless preset: just save art, no frame overlay
+    if fs.get('no_frame'):
+        art_resized.save(output_path, 'PNG')
+        return
+
+    art_rgba = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT))
+    art_rgba.paste(art_resized, (0, 0))
+
+    if fs.get('mode') == 'image':
+        # Image-based: pre-rendered frame PNG + text SVG
+        frame = _render_image_frame(card_dict, card, fs)
+    else:
+        # SVG-based: programmatic frame rendering
+        png_data = _render_frame_png(card, fs)
+        frame = Image.open(io.BytesIO(png_data)).convert('RGBA')
+
+    composite = Image.alpha_composite(art_rgba, frame)
+    composite.save(output_path, 'PNG')
+
+
+def composite_card_preview(card_dict: dict, art_path, frame_settings: dict) -> bytes:
+    """Render a preview composite and return PNG bytes (no disk write).
+
+    Used by the live preview endpoint. frame_settings is already fully resolved.
+    """
+    art = Image.open(art_path).convert('RGB')
+    art_offset = frame_settings.get('art_offset', {})
+    art_zoom = frame_settings.get('art_zoom', 1.0)
+    if art_offset or art_zoom != 1.0:
+        art_resized = _cover_crop_with_offset(
+            art, CARD_WIDTH, CARD_HEIGHT,
+            offset_x=art_offset.get('x', 0), offset_y=art_offset.get('y', 0),
+            zoom=art_zoom)
+    else:
+        art_resized = _cover_crop(art, CARD_WIDTH, CARD_HEIGHT)
+
+    if frame_settings.get('no_frame'):
+        buf = io.BytesIO()
+        art_resized.save(buf, 'PNG')
+        return buf.getvalue()
+
+    card = _build_card_data(card_dict, frame_settings)
+
+    art_rgba = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT))
+    art_rgba.paste(art_resized, (0, 0))
+
+    if frame_settings.get('mode') == 'image':
+        frame = _render_image_frame(card_dict, card, frame_settings)
+    else:
+        png_data = _render_frame_png(card, frame_settings)
+        frame = Image.open(io.BytesIO(png_data)).convert('RGBA')
+
+    composite = Image.alpha_composite(art_rgba, frame)
+    buf = io.BytesIO()
+    composite.save(buf, 'PNG')
+    return buf.getvalue()

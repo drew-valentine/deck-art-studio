@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="cardGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+    <linearGradient id="artGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#e94560"/>
+      <stop offset="50%" style="stop-color:#c73652"/>
+      <stop offset="100%" style="stop-color:#9b2948"/>
+    </linearGradient>
+    <linearGradient id="brushGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f0c040"/>
+      <stop offset="100%" style="stop-color:#e8a020"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Card shape - slightly rotated for dynamism -->
+  <g transform="translate(64,64) rotate(-8) translate(-64,-64)">
+    <!-- Card shadow -->
+    <rect x="24" y="14" width="80" height="108" rx="8" fill="rgba(0,0,0,0.3)" transform="translate(2,2)"/>
+    <!-- Card body -->
+    <rect x="24" y="14" width="80" height="108" rx="8" fill="url(#cardGrad)" stroke="#0f3460" stroke-width="2"/>
+    <!-- Card art window -->
+    <rect x="30" y="20" width="68" height="48" rx="4" fill="url(#artGrad)" opacity="0.9"/>
+    <!-- Subtle landscape in art window -->
+    <path d="M30 55 Q50 38 64 48 Q78 38 98 55 L98 68 L30 68 Z" fill="rgba(255,255,255,0.15)" rx="4"/>
+    <circle cx="88" cy="30" r="6" fill="rgba(255,200,50,0.4)"/>
+    <!-- Card name bar -->
+    <rect x="30" y="72" width="68" height="12" rx="3" fill="rgba(255,255,255,0.12)"/>
+    <!-- Card text area -->
+    <rect x="30" y="88" width="68" height="28" rx="3" fill="rgba(255,255,255,0.08)"/>
+    <!-- Text lines -->
+    <line x1="36" y1="96" x2="86" y2="96" stroke="rgba(255,255,255,0.15)" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="36" y1="102" x2="76" y2="102" stroke="rgba(255,255,255,0.12)" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="36" y1="108" x2="82" y2="108" stroke="rgba(255,255,255,0.10)" stroke-width="1.5" stroke-linecap="round"/>
+  </g>
+
+  <!-- Paint brush / wand diagonal across card -->
+  <g transform="translate(64,64) rotate(35) translate(-64,-64)" filter="url(#glow)">
+    <!-- Brush handle -->
+    <rect x="58" y="20" width="8" height="50" rx="3" fill="url(#brushGrad)"/>
+    <!-- Brush ferrule -->
+    <rect x="56" y="66" width="12" height="8" rx="2" fill="#c0c0c0"/>
+    <!-- Brush tip -->
+    <path d="M57 74 Q62 94 67 74 Z" fill="#e94560"/>
+  </g>
+
+  <!-- Sparkles -->
+  <g fill="#f0c040" opacity="0.9">
+    <!-- Top-right sparkle -->
+    <path d="M100 18 L102 24 L108 26 L102 28 L100 34 L98 28 L92 26 L98 24 Z"/>
+    <!-- Small sparkle -->
+    <path d="M112 42 L113 45 L116 46 L113 47 L112 50 L111 47 L108 46 L111 45 Z" opacity="0.7"/>
+    <!-- Bottom sparkle -->
+    <path d="M88 100 L90 104 L94 106 L90 108 L88 112 L86 108 L82 106 L86 104 Z" opacity="0.6"/>
+  </g>
+</svg>

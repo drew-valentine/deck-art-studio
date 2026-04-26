@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: CI-only tests requiring filesystem or heavy setup",
+]
+# Kill any test that takes > 10s (catches accidental network calls)
+timeout = 10

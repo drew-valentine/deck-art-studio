@@ -1,0 +1,187 @@
+name: Claude PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  basic-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libcairo2-dev
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Python syntax check
+        run: |
+          echo "Checking Python syntax..."
+          errors=0
+          for f in *.py; do
+            if ! python3 -m py_compile "$f"; then
+              echo "FAIL: $f"
+              errors=$((errors + 1))
+            fi
+          done
+          if [ "$errors" -gt 0 ]; then
+            echo "$errors file(s) failed syntax check"
+            exit 1
+          fi
+          echo "All Python files pass syntax check"
+
+      - name: Import validation
+        run: |
+          echo "Validating core module imports..."
+          python3 -c "
+          import sys
+          skip = ['local_image_generator', 'color_transfer', 'test_prompt', 'generate_deck_art']
+          modules = [
+              'deck_studio',
+              'backend_config',
+              'card_frame_renderer',
+              'prompt_generator',
+              'vision_analyzer',
+              'fetch_scryfall_art',
+              'fetch_flavor_text',
+              'scryfall_client',
+              'fetch_mtg_fonts',
+              'build_pips_from_mana',
+              'build_reference_collage',
+          ]
+          failed = []
+          for mod in modules:
+              try:
+                  __import__(mod)
+                  print(f'  OK: {mod}')
+              except Exception as e:
+                  print(f'  FAIL: {mod} — {e}')
+                  failed.append(mod)
+          if failed:
+              print(f'\n{len(failed)} module(s) failed to import: {failed}')
+              sys.exit(1)
+          print('\nAll core modules import successfully')
+          "
+
+      - name: Run pytest suite
+        run: python -m pytest tests/ -q --tb=short --no-header
+
+      - name: Flask server health check
+        run: |
+          echo "Starting Flask server on port 5099..."
+          python3 deck_studio.py --port 5099 > /tmp/flask-server.log 2>&1 &
+          SERVER_PID=$!
+          sleep 6
+
+          errors=0
+          for endpoint in "/" "/api/status" "/api/decks" "/api/model-config"; do
+            status=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:5099${endpoint}")
+            if [ "$status" = "200" ]; then
+              echo "  OK: ${endpoint} → ${status}"
+            else
+              echo "  FAIL: ${endpoint} → ${status}"
+              errors=$((errors + 1))
+            fi
+          done
+
+          kill $SERVER_PID 2>/dev/null || true
+
+          if [ "$errors" -gt 0 ]; then
+            echo "Server log:"
+            cat /tmp/flask-server.log
+            exit 1
+          fi
+          echo "All health checks passed"
+
+      - name: Extension manifest validation
+        run: |
+          python3 -c "
+          import json, sys
+          with open('extension/manifest.json') as f:
+              m = json.load(f)
+          required = ['manifest_version', 'name', 'version', 'description', 'permissions']
+          missing = [k for k in required if k not in m]
+          if missing:
+              print(f'Missing required fields: {missing}')
+              sys.exit(1)
+          if m['manifest_version'] != 3:
+              print(f'Expected MV3, got MV{m[\"manifest_version\"]}')
+              sys.exit(1)
+          print(f'Extension manifest valid: {m[\"name\"]} v{m[\"version\"]} (MV3)')
+          "
+
+  claude-review:
+    if: >
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'pull_request_review_comment' &&
+       contains(github.event.comment.body, '@claude'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Claude Code Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: "claude"
+          track_progress: true
+          claude_args: "--max-turns 30"
+          prompt: |
+            You are reviewing a pull request for Deck Art Studio.
+
+            Read CLAUDE.md for full project context.
+
+            ## Review Checklist
+            - **Path traversal**: Any new routes or file operations must use `_is_safe_deck_id()` / `_safe_deck_dir()` / `_safe_serve_image()`
+            - **XSS prevention**: All user-derived content in innerHTML must use `escapeHtml()`
+            - **Threading safety**: Any access to `generation_status` must use `with generation_lock:`
+            - **SDXL pitfalls**: float32 required for MPS, no float16
+            - **Card name apostrophes**: No inline onclick with template literal card names
+            - **Prompt merging**: Changes to art_prompts.json must merge, not overwrite
+            - **Import safety**: No unconditional imports of torch/numpy/diffusers in core modules
+            - **API key guard**: Local mode must not require OpenAI API key
+
+            ## Output Format
+            Post a review summary with:
+            1. What the PR changes (1-2 sentences)
+            2. Issues found (if any), with file:line references
+            3. Overall assessment: APPROVE, REQUEST_CHANGES, or COMMENT
+
+            Be concise. Only flag real issues, not style preferences.
+
+      - name: Enforce review assessment
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Wait briefly for the comment to be fully posted
+          sleep 5
+
+          # Get the latest comment from claude[bot] on this PR
+          ASSESSMENT=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            --jq '[.[] | select(.user.login == "claude[bot]")] | last | .body' | \
+            grep -i 'Assessment:' | sed 's/.*Assessment:[[:space:]]*//' | tr -d '[:space:]')
+
+          echo "Claude assessment: $ASSESSMENT"
+
+          if [ "$ASSESSMENT" = "REQUEST_CHANGES" ]; then
+            echo "::error::Claude Code review requested changes. Please address the review comments before merging."
+            exit 1
+          fi
+
+          echo "Review passed (assessment: $ASSESSMENT)"

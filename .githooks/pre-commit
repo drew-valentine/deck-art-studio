@@ -1,0 +1,16 @@
+#!/bin/sh
+# Pre-commit hook: run fast tests before allowing commits.
+# Skips slow/CI-only tests. Stops on first failure for speed.
+#
+# To skip temporarily: git commit --no-verify
+# To install: git config core.hooksPath .githooks
+
+echo "Running pre-commit tests..."
+python -m pytest tests/ -m "not slow" -x -q --tb=short --no-header 2>&1
+
+status=$?
+if [ $status -ne 0 ]; then
+    echo ""
+    echo "Pre-commit tests FAILED. Fix the errors above or use --no-verify to skip."
+    exit 1
+fi

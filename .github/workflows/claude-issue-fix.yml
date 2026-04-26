@@ -1,0 +1,65 @@
+name: Claude Issue Fix
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+
+jobs:
+  claude-fix:
+    if: >
+      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'claude')) ||
+      (github.event_name == 'issue_comment' &&
+       contains(github.event.issue.labels.*.name, 'claude') &&
+       contains(github.event.comment.body, '@claude'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --max-turns 50
+            --allowedTools 'Read' 'Write' 'Edit' 'Glob' 'Grep' 'Bash(python3:*)' 'Bash(git:*)' 'Bash(gh:*)' 'Bash(ls:*)' 'Bash(pip:*)'
+          prompt: |
+            You are fixing a GitHub issue for the Deck Art Studio project.
+
+            Read CLAUDE.md for full project context, architecture, and pitfalls.
+
+            ## Critical Rules
+            - Create a feature branch named `claude/issue-${{ github.event.issue.number }}-<short-slug>`
+            - NEVER commit directly to main
+            - Use `escapeHtml()` for any user-derived content in innerHTML
+            - Use `_is_safe_deck_id()` / `_safe_deck_dir()` for path traversal safety
+            - Use `with generation_lock:` for any generation_status updates
+            - Card names with apostrophes: use addEventListener, never inline onclick with template literals
+            - SDXL Turbo on MPS: must use float32, not float16
+            - When modifying art_prompts.json: merge, don't overwrite
+            - Run `python3 -m py_compile <file>` on any Python file you modify to verify syntax
+
+            ## CI Constraints
+            These modules CANNOT be imported without GPU/torch:
+            - local_image_generator.py (requires torch, diffusers)
+            - color_transfer.py (requires numpy)
+            Do NOT add imports of these to other core modules without guarding them.
+
+            ## Your Task
+            1. Read the issue carefully
+            2. Explore the codebase to understand the relevant code
+            3. Create the feature branch
+            4. Implement the fix
+            5. Verify syntax with py_compile
+            6. Commit with a descriptive message referencing the issue number
+            7. Push the branch
+            8. Open a PR linking to the issue with `Fixes #${{ github.event.issue.number }}`

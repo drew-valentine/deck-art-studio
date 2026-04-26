@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Import Shared Art – Deck Art Studio</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px;
+      color: #e0e0e0;
+      background: #1a1a2e;
+      display: flex;
+      justify-content: center;
+      padding: 40px 20px;
+    }
+    .container {
+      width: 100%;
+      max-width: 480px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 24px;
+    }
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #e94560;
+    }
+    .header .subtitle {
+      font-size: 12px;
+      color: #8888aa;
+    }
+    .section {
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .section h2 {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #8888aa;
+      margin-bottom: 10px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+      align-items: center;
+    }
+    input[type="url"] {
+      flex: 1;
+      padding: 8px 10px;
+      background: #0f3460;
+      border: 1px solid #1a1a4e;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-size: 13px;
+      outline: none;
+    }
+    input:focus { border-color: #e94560; }
+    button {
+      padding: 8px 16px;
+      background: #e94560;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover { background: #c73652; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    button.secondary {
+      background: #0f3460;
+      border: 1px solid #1a1a4e;
+    }
+    button.secondary:hover { background: #16213e; }
+    .status {
+      font-size: 12px;
+      padding: 6px 0;
+      min-height: 20px;
+    }
+    .status.success { color: #4ade80; }
+    .status.error { color: #f87171; }
+    .status.info { color: #8888aa; }
+    .drop-zone {
+      border: 2px dashed #1a1a4e;
+      border-radius: 8px;
+      padding: 24px;
+      text-align: center;
+      color: #8888aa;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      margin-bottom: 8px;
+    }
+    .drop-zone:hover {
+      border-color: #666680;
+    }
+    .drop-zone.dragover {
+      border-color: #e94560;
+      background: rgba(233, 69, 96, 0.1);
+    }
+    .drop-zone input[type="file"] { display: none; }
+    .drop-zone .icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+      display: block;
+    }
+    .progress {
+      margin-top: 12px;
+    }
+    .progress-bar {
+      height: 4px;
+      background: #0f3460;
+      border-radius: 2px;
+      overflow: hidden;
+      display: none;
+    }
+    .progress-bar .fill {
+      height: 100%;
+      background: #e94560;
+      border-radius: 2px;
+      transition: width 0.3s;
+      width: 0%;
+    }
+    .result {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 6px;
+      display: none;
+    }
+    .result.success {
+      background: rgba(74, 222, 128, 0.1);
+      border: 1px solid rgba(74, 222, 128, 0.3);
+      color: #4ade80;
+    }
+    .result.error {
+      background: rgba(248, 113, 113, 0.1);
+      border: 1px solid rgba(248, 113, 113, 0.3);
+      color: #f87171;
+    }
+    .close-note {
+      text-align: center;
+      font-size: 11px;
+      color: #666680;
+      margin-top: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <h1>Import Shared Art</h1>
+        <div class="subtitle">Import a .json manifest from a friend or URL</div>
+      </div>
+    </div>
+
+    <!-- Import from file -->
+    <div class="section">
+      <h2>From File</h2>
+      <div class="drop-zone" id="dropZone">
+        <span class="icon">&#128193;</span>
+        Drop .json manifest here or click to browse
+        <input type="file" id="fileInput" accept=".json">
+      </div>
+    </div>
+
+    <!-- Import from URL -->
+    <div class="section">
+      <h2>From URL</h2>
+      <div class="row">
+        <input type="url" id="manifestUrl" placeholder="Manifest URL (Google Drive, Dropbox, etc.)">
+        <button id="fetchUrlBtn">Fetch</button>
+      </div>
+    </div>
+
+    <!-- Progress & status -->
+    <div class="progress">
+      <div class="progress-bar" id="progressBar">
+        <div class="fill" id="progressFill"></div>
+      </div>
+      <div class="status" id="importStatus"></div>
+    </div>
+
+    <div class="result" id="resultBox"></div>
+
+    <div class="close-note">You can close this tab when done. The popup will show your imported decks.</div>
+  </div>
+
+  <script src="browser-polyfill.min.js"></script>
+  <script src="db.js"></script>
+  <script src="import.js"></script>
+</body>
+</html>

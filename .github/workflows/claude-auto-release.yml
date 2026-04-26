@@ -1,0 +1,146 @@
+name: Auto Release
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  auto-release:
+    if: github.event.review.state == 'approved'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Wait for status checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          HEAD_SHA=${{ github.event.pull_request.head.sha }}
+          echo "Waiting for checks on PR #${PR_NUMBER} (${HEAD_SHA})..."
+
+          for i in $(seq 1 30); do
+            # Get check runs status
+            RESULT=$(gh api repos/${{ github.repository }}/commits/${HEAD_SHA}/check-runs \
+              --jq '[.check_runs[] | select(.name != "auto-release")] |
+                     if length == 0 then "pending"
+                     elif all(.conclusion == "success") then "success"
+                     elif any(.conclusion == "failure") then "failure"
+                     else "pending" end')
+
+            echo "  Attempt ${i}: ${RESULT}"
+
+            if [ "$RESULT" = "success" ]; then
+              echo "All checks passed"
+              break
+            elif [ "$RESULT" = "failure" ]; then
+              echo "Some checks failed — aborting release"
+              exit 1
+            fi
+
+            sleep 20
+          done
+
+          if [ "$RESULT" != "success" ]; then
+            echo "Timed out waiting for checks"
+            exit 1
+          fi
+
+      - name: Squash merge PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          echo "Squash merging PR #${PR_NUMBER}..."
+          gh pr merge "$PR_NUMBER" --squash --delete-branch
+
+      - name: Determine version bump
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+
+          # Get labels from the PR
+          LABELS=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name')
+          echo "PR labels: ${LABELS}"
+
+          # Also check the linked issue labels
+          ISSUE_LABELS=$(gh pr view "$PR_NUMBER" --json body --jq '.body' | \
+            grep -oP '(?:Fixes|Closes|Resolves) #\K\d+' | head -1 | \
+            xargs -I{} gh issue view {} --json labels --jq '.labels[].name' 2>/dev/null || echo "")
+          echo "Issue labels: ${ISSUE_LABELS}"
+
+          ALL_LABELS="${LABELS} ${ISSUE_LABELS}"
+
+          if echo "$ALL_LABELS" | grep -q "semver:major"; then
+            echo "bump=major" >> "$GITHUB_OUTPUT"
+          elif echo "$ALL_LABELS" | grep -q "semver:minor"; then
+            echo "bump=minor" >> "$GITHUB_OUTPUT"
+          else
+            echo "bump=patch" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "Version bump: $(cat "$GITHUB_OUTPUT" | grep bump | cut -d= -f2)"
+
+      - name: Calculate next version
+        id: next
+        run: |
+          # Get latest tag
+          LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "Latest tag: ${LATEST}"
+
+          # Strip 'v' prefix and split
+          VERSION="${LATEST#v}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          PATCH=$(echo "$VERSION" | cut -d. -f3)
+
+          BUMP="${{ steps.version.outputs.bump }}"
+          if [ "$BUMP" = "major" ]; then
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+          elif [ "$BUMP" = "minor" ]; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          else
+            PATCH=$((PATCH + 1))
+          fi
+
+          NEXT="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "next=${NEXT}" >> "$GITHUB_OUTPUT"
+          echo "Next version: ${NEXT}"
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch latest main
+        run: |
+          git fetch origin main
+          git checkout main
+          git pull origin main
+
+      - name: Create tag and release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.next.outputs.next }}"
+          echo "Creating tag ${TAG}..."
+
+          git tag -a "$TAG" -m "Release ${TAG}"
+          git push origin "$TAG"
+
+          echo "Creating GitHub release..."
+          gh release create "$TAG" \
+            --title "Release ${TAG}" \
+            --generate-notes

@@ -1,0 +1,43 @@
+Deck Art Studio
+Copyright (c) 2026 Drew Valentine
+
+SOURCE CODE LICENSE
+-------------------
+The source code for Deck Art Studio is licensed under the GNU Affero General
+Public License v3.0 (AGPL-3.0). See the LICENSE file for the full text.
+
+This software is provided free of charge for personal, non-commercial use.
+It is not intended for commercial exploitation. If you are a business or
+commercial entity interested in using this software, please contact the
+author at drew@drewvalentine.com.
+
+FAN CONTENT DISCLAIMER
+-----------------------
+Deck Art Studio is unofficial Fan Content permitted under the Fan Content
+Policy. Not approved/endorsed by Wizards. Portions of the materials used
+are property of Wizards of the Coast. (c) Wizards of the Coast LLC.
+
+This tool generates original AI artwork — it does not reproduce, copy, or
+distribute official Wizards of the Coast art or card designs.
+
+Magic: The Gathering is a trademark of Wizards of the Coast LLC.
+
+THIRD-PARTY COMPONENTS
+----------------------
+This project includes the following bundled third-party components:
+
+  webextension-polyfill (browser-polyfill.min.js)
+    Copyright (c) Mozilla Foundation
+    License: MPL-2.0 (Mozilla Public License 2.0)
+    https://github.com/nicolo-ribaudo/webextension-polyfill
+
+  Mana (SVG mana symbols)
+    Copyright (c) Andrew Gioia
+    License: SIL OFL 1.1 (font), MIT (CSS/LESS/Sass)
+    https://github.com/andrewgioia/mana
+
+This project also depends on the following open-source libraries (installed
+via pip, not bundled):
+
+  Flask (BSD-3-Clause), OpenAI SDK (Apache-2.0), Pillow (MIT),
+  CairoSVG (LGPL-3.0), Ollama (MIT), pytest (MIT)

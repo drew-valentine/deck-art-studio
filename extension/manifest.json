@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Deck Art Studio – Custom Card Art",
+  "version": "1.0.0",
+  "description": "Replace Scryfall card images on edhplay.com with custom AI-generated art from Deck Art Studio.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "*://edhplay.com/*",
+    "<all_urls>"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["*://edhplay.com/*"],
+      "js": ["browser-polyfill.min.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "scripts": ["db.js", "background.js"],
+    "service_worker": "background-worker.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "deck-art-studio@edhplay",
+      "strict_min_version": "109.0"
+    }
+  }
+}

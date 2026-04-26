@@ -1,0 +1,76 @@
+# --- Secrets & local config ---
+.api_key
+backend_config.json
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# --- Generated data (per-deck art, caches, user data) ---
+decks/
+shared/*
+!shared/frames/
+ref_collages/
+proxy_cards/
+
+# --- Test & validation artifacts ---
+test_*.png
+test_frames/
+test_renders_v*/
+examples/
+frame_test/
+*.spec.js
+validation-*.png
+*-fix-validation.png
+*-generated.png
+.playwright-mcp/
+
+# --- Screenshots & debug images (from dev/testing sessions) ---
+ux-*.png
+gallery-test-*.png
+batch-*.png
+style-*.png
+e2e-*.png
+prompt-*.png
+*-ip065.png
+*-style-fix.png
+*-lightning.png
+
+# --- Dev scripts (machine-specific) ---
+scripts/
+
+# --- Large media (screen recordings, sample art) ---
+*.mov
+*.mp4
+krarks-thumb.png
+okaun.png
+propaganda.png
+stitch-in-time.png
+fD0som.png
+
+# --- Legacy one-off data files ---
+card_database.json
+art_prompts.json
+decklist.txt
+ai_art_prompts.md
+mana-master.zip
+
+# --- mana-master: only keep svg/ directory ---
+mana-master/css/
+mana-master/docs/
+mana-master/less/
+mana-master/sass/
+mana-master/package*.json
+mana-master/index.html
+
+# --- Symlinks (machine-specific) ---
+fonts
+pips
+scryfall_art

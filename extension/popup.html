@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 360px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13px;
+      color: #e0e0e0;
+      background: #1a1a2e;
+    }
+    .header {
+      background: #16213e;
+      padding: 12px 16px;
+      border-bottom: 1px solid #0f3460;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .header h1 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #e94560;
+    }
+    .header .stats {
+      margin-left: auto;
+      font-size: 11px;
+      color: #8888aa;
+    }
+    .section {
+      padding: 12px 16px;
+      border-bottom: 1px solid #0f3460;
+    }
+    .section h2 {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #8888aa;
+      margin-bottom: 8px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+      align-items: center;
+    }
+    input[type="text"], input[type="url"] {
+      flex: 1;
+      padding: 6px 8px;
+      background: #0f3460;
+      border: 1px solid #1a1a4e;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-size: 12px;
+      outline: none;
+    }
+    input:focus { border-color: #e94560; }
+    button {
+      padding: 6px 12px;
+      background: #e94560;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover { background: #c73652; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    button.secondary {
+      background: #0f3460;
+      border: 1px solid #1a1a4e;
+    }
+    button.secondary:hover { background: #16213e; }
+    button.danger { background: #6b2030; }
+    button.danger:hover { background: #8b2040; }
+    .status {
+      font-size: 11px;
+      padding: 4px 0;
+      min-height: 18px;
+    }
+    .status.success { color: #4ade80; }
+    .status.error { color: #f87171; }
+    .status.info { color: #8888aa; }
+    .drop-zone {
+      border: 2px dashed #1a1a4e;
+      border-radius: 6px;
+      padding: 16px;
+      text-align: center;
+      color: #8888aa;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .drop-zone.dragover {
+      border-color: #e94560;
+      background: rgba(233, 69, 96, 0.1);
+    }
+    .drop-zone input { display: none; }
+    .toggle-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .toggle {
+      position: relative;
+      width: 36px;
+      height: 20px;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle .slider {
+      position: absolute;
+      inset: 0;
+      background: #0f3460;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .toggle .slider::before {
+      content: '';
+      position: absolute;
+      width: 16px; height: 16px;
+      left: 2px; top: 2px;
+      background: #e0e0e0;
+      border-radius: 50%;
+      transition: transform 0.2s;
+    }
+    .toggle input:checked + .slider { background: #e94560; }
+    .toggle input:checked + .slider::before { transform: translateX(16px); }
+    .sources-list {
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    .source-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 0;
+      font-size: 11px;
+    }
+    .source-item .url {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #8888aa;
+    }
+    .source-item button {
+      padding: 2px 6px;
+      font-size: 10px;
+    }
+    .deck-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 0;
+      border-bottom: 1px solid #0f3460;
+    }
+    .deck-item:last-child { border-bottom: none; }
+    .deck-item .deck-name { color: #8888aa; font-weight: 500; }
+    .deck-item .deck-meta { color: #666680; font-size: 10px; text-align: right; flex-shrink: 0; }
+    .deck-item.active { background: rgba(233, 69, 96, 0.12); border-radius: 4px; padding: 4px 6px; margin: 0 -6px; }
+    .deck-item.active .deck-name { color: #e94560; }
+    .deck-item.active .deck-meta { color: #8888aa; }
+    .deck-radio { margin-right: 6px; font-size: 14px; color: #666680; flex-shrink: 0; }
+    .deck-item.active .deck-radio { color: #e94560; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Deck Art Studio</h1>
+    <span class="stats" id="stats">Loading...</span>
+  </div>
+
+  <!-- Toggle & controls -->
+  <div class="section">
+    <div class="toggle-row">
+      <span>Custom art on edhplay.com</span>
+      <label class="toggle">
+        <input type="checkbox" id="toggleArt" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <!-- Import from Deck Art Studio -->
+  <div class="section">
+    <h2>Import from Deck Art Studio</h2>
+    <div class="row">
+      <input type="url" id="studioUrl" placeholder="http://localhost:5001" value="http://localhost:5001">
+    </div>
+    <div class="row">
+      <select id="deckSelect" style="flex:1;padding:6px 8px;background:#0f3460;border:1px solid #1a1a4e;border-radius:4px;color:#e0e0e0;font-size:12px;">
+        <option value="">Select a deck...</option>
+      </select>
+      <button id="loadDecksBtn" class="secondary" title="Refresh deck list">Refresh</button>
+    </div>
+    <div class="row">
+      <button id="importStudioBtn" disabled>Import Deck Art</button>
+      <button id="importAllBtn" class="secondary">Import All Decks</button>
+    </div>
+    <div class="status" id="studioStatus"></div>
+  </div>
+
+  <!-- Import shared art (opens in a tab so file picker works) -->
+  <div class="section">
+    <h2>Import Shared Art</h2>
+    <div class="row">
+      <button id="openImportBtn" class="secondary" style="flex:1;">Open Import Page (file or URL)</button>
+    </div>
+    <div style="font-size:10px;color:#666680;margin-top:2px;">Opens in a new tab for reliable file import</div>
+  </div>
+
+  <!-- Imported decks -->
+  <div class="section">
+    <h2>Imported Decks</h2>
+    <div id="importedDecks" style="font-size:11px;color:#8888aa;">No decks imported yet.</div>
+  </div>
+
+  <!-- Export -->
+  <div class="section">
+    <h2>Export</h2>
+    <div class="row">
+      <button id="exportBtn" class="secondary">Export All Art as .json</button>
+    </div>
+  </div>
+
+  <!-- Manage -->
+  <div class="section">
+    <h2>Manage</h2>
+    <div class="row">
+      <button id="clearBtn" class="danger">Clear All Cached Art</button>
+    </div>
+  </div>
+
+  <div style="text-align:center;padding:8px 16px;font-size:10px;color:#666680;">
+    Made with &hearts; &mdash; <a href="https://ko-fi.com/drewvalentine" target="_blank" rel="noopener" style="color:#8888aa;text-decoration:none;">Support on Ko-fi</a>
+  </div>
+
+  <script src="browser-polyfill.min.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
