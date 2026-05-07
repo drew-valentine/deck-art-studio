@@ -7567,8 +7567,7 @@ header .separator {
             <span class="detail-section-label">Local prompt <span class="section-hint" title="Drives the NEXT local AI generation. May not match current art if art was generated with a different prompt. Edit or Regenerate to change what the next generation produces.">(?)</span></span>
             <button class="btn btn-ghost btn-xs" onclick="regenSceneDirection()" title="Generate a fresh local prompt via LLM">Regenerate</button>
           </div>
-          <input type="text" id="detailSubject" placeholder="e.g. a faerie soaring above a moonlit forest"
-                 style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface2);color:var(--text);font-size:0.82em;box-sizing:border-box;">
+          <textarea id="detailSubject" rows="3" placeholder="e.g. a faerie soaring above a moonlit forest"></textarea>
         </div>
 
         <div class="detail-section-block" id="collapsiblePrompt">
