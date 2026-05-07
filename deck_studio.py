@@ -4107,6 +4107,16 @@ def _is_prompt_stale(slug: str, current_prompt: str, card_name: str = '') -> boo
         return False
 
 
+def _composite_mtime_for(slug: str) -> int:
+    """Return composite file mtime as int seconds, or 0 if missing.
+    Used as cache-busting key in image URLs so the browser fetches a
+    fresh copy iff the file actually changed."""
+    try:
+        return int((COMPOSITE_DIR / f"{slug}.png").stat().st_mtime)
+    except (OSError, FileNotFoundError):
+        return 0
+
+
 @app.route('/api/cards')
 def get_cards():
     """Return all cards with their status."""
@@ -4146,6 +4156,7 @@ def get_cards():
             'message': status.get('message', ''),
             'has_raw_art': status.get('has_raw_art', False),
             'has_composite': status.get('has_composite', False),
+            'composite_mtime': _composite_mtime_for(slug),
             'has_ai_art': (RAW_ART_DIR / f"{slug}.meta.json").exists(),
             'prompt_stale': _is_prompt_stale(slug, prompts_map.get(name, ''), card_name=name),
             'has_scryfall_art': has_scryfall,
@@ -4597,6 +4608,11 @@ def get_status():
         # Merge batch status if viewing the batch's deck
         if batch_deck_id and batch_deck_id == active_deck_id:
             statuses.update(_batch_generation_status)
+    # Attach composite_mtime to each status entry so the poller can detect
+    # composite changes without re-fetching /api/cards.
+    for name, s in list(statuses.items()):
+        if isinstance(s, dict) and s.get('has_composite'):
+            statuses[name] = {**s, 'composite_mtime': _composite_mtime_for(name_to_slug(name))}
     return jsonify({
         'is_generating': is_generating,
         'has_api_key': openai_client is not None,
@@ -4776,7 +4792,8 @@ def recomposite_single():
                 'has_raw_art': True,
                 'has_composite': True,
             }
-        return jsonify({'success': True, 'message': f'Frame re-rendered for {card_name}'})
+        return jsonify({'success': True, 'message': f'Frame re-rendered for {card_name}',
+                         'composite_mtime': _composite_mtime_for(slug)})
     except Exception as e:
         return jsonify({'error': str(e)[:200]}), 500
 
@@ -8566,6 +8583,7 @@ function startPolling() {
         card.message = s.message || '';
         card.has_raw_art = s.has_raw_art || false;
         card.has_composite = s.has_composite || false;
+        card.composite_mtime = s.composite_mtime || card.composite_mtime || 0;
         card.step = s.step || 0;
         card.total_steps = s.total_steps || 0;
         if (s.revised_prompt) card.revised_prompt = s.revised_prompt;
@@ -8833,9 +8851,11 @@ function renderGrid() {
         'error': 'badge-error',
       }[card.status] || 'badge-pending');
 
-    // Use composite if available, then Scryfall art, then proxy frame
+    // Use composite if available, then Scryfall art, then proxy frame.
+    // Composites use mtime (changes per regeneration); others use deckCacheBust
+    // (changes per deck switch — they don't change otherwise).
     const imgSrc = card.has_composite
-      ? `/api/image/composite/${card.slug}?d=${deckCacheBust}`
+      ? `/api/image/composite/${card.slug}?v=${card.composite_mtime || 0}`
       : card.has_scryfall_art
         ? `/api/image/scryfall/${card.slug}?d=${deckCacheBust}`
         : `/api/image/proxy/${card.slug}?d=${deckCacheBust}`;
@@ -8934,14 +8954,13 @@ function updateBadges() {
         }[card.status] || 'badge-pending')
     );
 
-    // Update image when card has a composite
+    // Update image when card has a composite. Mtime-based URL changes if
+    // and only if the file changed; setting img.src to the same URL is a no-op.
     if (card.has_composite) {
       const img = tile.querySelector('img');
-      const curSrc = img.getAttribute('src') || '';
-      // Refresh if: status just changed to complete, OR image isn't showing composite yet
-      if ((prevStatus !== 'complete' && card.status === 'complete') ||
-          !curSrc.includes('/composite/')) {
-        img.src = `/api/image/composite/${card.slug}?t=${Date.now()}`;
+      const expected = `/api/image/composite/${card.slug}?v=${card.composite_mtime || 0}`;
+      if (img.getAttribute('src') !== expected) {
+        img.src = expected;
       }
     }
     // Update tile status classes
@@ -9221,7 +9240,7 @@ function updateDetailPanel(card) {
   }
 
   const imgSrc = card.has_composite
-    ? `/api/image/composite/${card.slug}?d=${deckCacheBust}&t=${Date.now()}`
+    ? `/api/image/composite/${card.slug}?v=${card.composite_mtime || 0}`
     : card.has_scryfall_art
       ? `/api/image/scryfall/${card.slug}?d=${deckCacheBust}`
       : `/api/image/proxy/${card.slug}?d=${deckCacheBust}`;
@@ -9903,9 +9922,9 @@ async function recompositeCurrent() {
   });
   const data = await resp.json();
   if (data.success) {
-    // Force reload the image
+    card.composite_mtime = data.composite_mtime || card.composite_mtime;
     const img = document.getElementById('detailImage');
-    img.src = `/api/image/composite/${card.slug}?t=${Date.now()}`;
+    img.src = `/api/image/composite/${card.slug}?v=${card.composite_mtime || 0}`;
     showToast('Frame re-rendered', 'success');
   } else {
     showToast('Recomposite error: ' + (data.error || 'Unknown'), 'error');
@@ -10837,13 +10856,15 @@ async function loadVersionHistory(cardName, slug) {
     }
 
     // Build thumbnails — newest first
+    const currentCard = allCards.find(c => c.name === cardName);
+    const currentMtime = currentCard?.composite_mtime || 0;
     let html = '';
     // Current version first (marked as "Current")
     if (data.has_current) {
       html += `
         <div class="version-thumb active" id="vthumb-current"
              data-version="" data-slug="${slug}" data-label="Current">
-          <img src="/api/image/composite/${slug}?t=${Date.now()}" alt="Current">
+          <img src="/api/image/composite/${slug}?v=${currentMtime}" alt="Current">
           <div class="version-thumb-label">Current</div>
         </div>`;
     }
@@ -10855,7 +10876,7 @@ async function loadVersionHistory(cardName, slug) {
       html += `
         <div class="version-thumb" id="vthumb-${v.version}"
              data-version="${v.version}" data-slug="${slug}" data-label="${escapeHtml(label)}">
-          <img src="/api/image/version/${slug}/${v.version}?t=${Date.now()}" alt="v${v.version}">
+          <img src="/api/image/version/${slug}/${v.version}" alt="v${v.version}">
           <div class="version-thumb-label">
             v${v.version}
             <span class="ver-model">${escapeHtml(shortModel)} ${escapeHtml(v.quality || '')}</span>
@@ -10943,11 +10964,13 @@ function openVersionModal(versionNum, slug, label) {
   const actions = document.getElementById('versionModalActions');
 
   if (versionNum === null) {
-    img.src = `/api/image/composite/${slug}?t=${Date.now()}`;
+    const currentCard = allCards.find(c => c.slug === slug);
+    const mtime = currentCard?.composite_mtime || 0;
+    img.src = `/api/image/composite/${slug}?v=${mtime}`;
     labelEl.textContent = 'Current Version';
     actions.style.display = 'none';
   } else {
-    img.src = `/api/image/version/${slug}/${versionNum}?t=${Date.now()}`;
+    img.src = `/api/image/version/${slug}/${versionNum}`;
     labelEl.textContent = label || `Version ${versionNum}`;
     actions.style.display = '';
   }
