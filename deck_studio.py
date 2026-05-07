@@ -2811,76 +2811,42 @@ def _run_subject_distillation(deck_id: str, progress_callback=None, card_names=N
 def _redistill_single_card_subject(card_name: str) -> str:
     """Re-distill a single card's subject via LLM for re-roll variety.
 
-    Returns a fresh 6-10 word CLIP subject, or '' if LLM unavailable.
-    Saves the new subject to deck metadata so the UI stays in sync.
+    Thin wrapper around vision_analyzer.distill_one_card_subject — the same
+    function used by batch distillation. Saves to deck metadata on success.
     """
+    from vision_analyzer import distill_one_card_subject
+
     card = next((c for c in cards_db if c['name'] == card_name), None)
     if not card:
         return ''
-
     prompt_text = prompts_map.get(card_name, '')
     if not prompt_text:
         print(f"  [re-distill] {card_name}: no art prompt, skipping")
         return ''
 
-    from vision_analyzer import _build_base_subject
-    base = _build_base_subject(card)
-
-    # Extract scene snippet from art prompt
-    parts = prompt_text.split('\n\n', 1)
-    body = parts[1] if len(parts) > 1 else parts[0]
-    snippet = body.strip()[:150].rsplit(' ', 1)[0]
-
-    # Use same LLM system prompt as batch distillation but for 1 card
-    system_msg = (
-        "Condense this art description into a vivid image prompt (10-25 words).\n"
-        "Keep the subject type. Include setting, mood, lighting, and key visual details.\n"
-        "Be creative — vary the setting, pose, and atmosphere from previous versions.\n\n"
-        f"Subject type: {base}\n"
-        f"Description: {snippet}\n\n"
-        "Reply with ONLY the image prompt, nothing else."
-    )
-
     bcfg = backend_config.load_config()
     llm_backend = bcfg.get('llm_backend', 'local')
     if llm_backend != 'local' and not openai_client:
         llm_backend = 'local'
+    model = bcfg.get('ollama_model', 'llama3.2:3b')
 
-    try:
-        if llm_backend == 'local':
-            model = bcfg.get('ollama_model', 'llama3.2:3b')
-            import requests
-            resp = requests.post('http://localhost:11434/api/generate', json={
-                'model': model,
-                'prompt': system_msg,
-                'stream': False,
-                'options': {'temperature': 1.2, 'num_predict': 60},
-            }, timeout=15)
-            result = resp.json().get('response', '').strip()
-        else:
-            resp = openai_client.chat.completions.create(
-                model='gpt-4o-mini',
-                messages=[{'role': 'user', 'content': system_msg}],
-                temperature=1.2,
-                max_tokens=30,
-            )
-            result = resp.choices[0].message.content.strip()
+    style_source = active_deck_meta.get('style_source', '') if active_deck_meta else ''
 
-        # Clean up: remove numbering, quotes, trailing punctuation
-        import re
-        result = re.sub(r'^\d+[\.\)]\s*', '', result)
-        result = result.strip('"\'').rstrip('.')
-        if 3 <= len(result.split()) <= 30 and result:
-            print(f"  [re-distill] {card_name}: {result}")
-            # Save to deck metadata
-            subjects = active_deck_meta.get('card_subjects', {})
-            subjects[card_name] = result
-            active_deck_meta['card_subjects'] = subjects
-            _save_deck_meta_field(active_deck_id, card_subjects=subjects)
-            return result
-    except Exception as e:
-        print(f"  [re-distill] Failed for {card_name}: {e}")
-
+    result = distill_one_card_subject(
+        card=card,
+        art_prompt=prompt_text,
+        backend=llm_backend,
+        local_model=model,
+        openai_client=openai_client,
+        style_source=style_source,
+    )
+    if result:
+        print(f"  [re-distill] {card_name}: {result}")
+        subjects = active_deck_meta.get('card_subjects', {})
+        subjects[card_name] = result
+        active_deck_meta['card_subjects'] = subjects
+        _save_deck_meta_field(active_deck_id, card_subjects=subjects)
+        return result
     return ''
 
 
