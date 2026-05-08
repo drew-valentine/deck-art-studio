@@ -794,155 +794,141 @@ def _build_base_subject(card: dict) -> str:
     return f"{name}, an enchantment" if 'enchantment' in tl else name
 
 
+def distill_one_card_subject(card: dict, art_prompt: str,
+                              backend: str = 'local',
+                              local_model: str = 'llama3.2:3b',
+                              openai_client=None,
+                              style_source: str = '',
+                              temperature: float = 1.2) -> str:
+    """Distill a single card's art prompt into a vivid CLIP-optimized subject.
+
+    Returns a 10-25 word image prompt, or '' if the LLM fails or output is
+    out of bounds. Pure function — no globals, no side effects.
+    """
+    import re as _re
+
+    if not art_prompt:
+        return ''
+
+    base = _build_base_subject(card)
+
+    # Take the first ~150 chars of the scene body (after the style preamble)
+    parts = art_prompt.split('\n\n', 1)
+    body = parts[1] if len(parts) > 1 else parts[0]
+    snippet = body.strip()[:150].rsplit(' ', 1)[0]
+
+    system_msg = (
+        "Condense this art description into a vivid image prompt (10-25 words).\n"
+        "Keep the subject type. Include setting, mood, lighting, and key visual details.\n"
+        "Be creative — vary the setting, pose, and atmosphere from previous versions.\n\n"
+        f"Subject type: {base}\n"
+        f"Description: {snippet}\n\n"
+        "Reply with ONLY the image prompt, nothing else."
+    )
+
+    try:
+        if backend == 'local':
+            from ollama import chat
+            response = chat(model=local_model, messages=[
+                {'role': 'user', 'content': system_msg},
+            ], options={'temperature': temperature, 'num_predict': 60})
+            result = response.message.content.strip()
+        else:
+            response = openai_client.chat.completions.create(
+                model='gpt-4o-mini',
+                messages=[{'role': 'user', 'content': system_msg}],
+                temperature=temperature,
+                max_tokens=60,
+            )
+            result = response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"[vision] distill_one_card_subject failed for {card.get('name','?')}: {e}")
+        return ''
+
+    # Cleanup: leading numbering, surrounding quotes, trailing punctuation
+    result = _re.sub(r'^\d+[\.\)]\s*', '', result)
+    result = result.strip('"\'').rstrip('.')
+
+    # Strip style-source name leakage (e.g. "Picasso", "Akira")
+    if style_source:
+        for word in style_source.split():
+            if len(word) > 3:
+                result = _re.sub(r'\b' + _re.escape(word) + r'\b',
+                                 '', result, flags=_re.IGNORECASE)
+        result = _re.sub(r'\s{2,}', ' ', result).strip(', ')
+
+    words = result.split()
+    if 3 <= len(words) <= 30 and result:
+        return result
+    return ''
+
+
 def distill_card_subjects(cards: list[dict], art_prompts: dict,
                            style_tokens: dict, style_source: str = '',
                            openai_client=None, backend: str = 'openai',
                            local_model: str = 'llama3.1:8b',
                            progress_callback=None) -> dict:
-    """Build CLIP-optimized subjects for each card.
+    """Build CLIP-optimized subjects for each card by calling
+    distill_one_card_subject in parallel.
 
-    Two-phase approach:
-      Phase A — Build reliable base subjects from card metadata (no LLM).
-      Phase B — LLM adds a visual detail to each base subject (batched).
+    Falls back to _build_base_subject when the LLM call fails or returns
+    out-of-bounds output. Every card with an art prompt gets a subject.
 
-    If the LLM fails or produces garbage, the base subject is used as-is.
-    Every card with an art prompt gets a subject — zero missing.
-
-    Returns {card_name: "short subject"}.
+    Returns {card_name: "short subject", "_distill_stats": {...}}.
     """
-    import re as _re
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     if not art_prompts:
         return {}
 
-    # Phase A: build base subjects from card metadata
-    base_subjects = {}  # {card_name: "a massive wurm"}
-    card_lookup = {}    # {card_name: card_dict}
+    # Filter to cards with art prompts (skip Card Back)
+    work = []
+    base_subjects = {}
     for card in cards:
         name = card.get('name', '')
-        if not name or name == 'Card Back':
+        if not name or name == 'Card Back' or name not in art_prompts:
             continue
-        if name not in art_prompts:
-            continue
-        base = _build_base_subject(card)
-        base_subjects[name] = base
-        card_lookup[name] = card
+        base_subjects[name] = _build_base_subject(card)
+        work.append((name, card))
 
-    if not base_subjects:
+    if not work:
         return {}
 
-    # Phase B: LLM condenses art prompts into short CLIP subjects
-    # Each card has a rich art prompt describing the scene. The LLM's job
-    # is to distill that into a 6-10 word visual subject, keeping the
-    # base subject's creature type as an anchor.
-    system_msg = (
-        "Condense each art description into a vivid image prompt (10-25 words).\n"
-        "Keep the subject type from the first line. Include setting, mood, "
-        "lighting, and key visual details. No proper nouns or character names.\n\n"
-        "Example input:\n"
-        "1. a massive wurm | A colossal wurm erupts from the cracked earth, "
-        "its segmented body coiling upward as dust and debris rain down...\n"
-        "2. an ooze | A small gelatinous blob oozes across a laboratory floor, "
-        "dissolving everything it touches with corrosive acid...\n\n"
-        "Example output:\n"
-        "1. a massive wurm erupting from cracked sunbaked earth, dust and debris raining down in harsh desert light\n"
-        "2. a small translucent ooze dissolving brass equipment on a dimly lit laboratory floor, green acid glow"
-    )
+    enhanced = {}
+    total = len(work)
+    completed = [0]
+    import threading
+    lock = threading.Lock()
 
-    BATCH_SIZE = 10
-    enhanced = {}  # {card_name: "enhanced subject"}
-    card_names = list(base_subjects.keys())
-    total_batches = (len(card_names) + BATCH_SIZE - 1) // BATCH_SIZE
+    def distill_one(name_card):
+        name, card = name_card
+        out = distill_one_card_subject(
+            card=card,
+            art_prompt=art_prompts.get(name, ''),
+            backend=backend,
+            local_model=local_model,
+            openai_client=openai_client,
+            style_source=style_source,
+        )
+        return name, out
 
-    for batch_num, batch_start in enumerate(range(0, len(card_names), BATCH_SIZE), 1):
-        batch_names = card_names[batch_start:batch_start + BATCH_SIZE]
-        idx_to_name = {}
+    # Local Ollama serializes through one GPU; cloud OpenAI tolerates parallelism.
+    # Use 1 worker for local (queueing helps nothing), 4 for cloud.
+    workers = 1 if backend == 'local' else 4
 
-        # Signal batch starting so frontend shows activity during LLM call
-        if progress_callback:
-            progress_callback(batch_num, total_batches, batch_start, len(card_names))
+    if progress_callback:
+        progress_callback(1, 1, 0, total)
 
-        user_msg = ''
-        for i, name in enumerate(batch_names, 1):
-            idx_to_name[str(i)] = name
-            # Include first 2 sentences of art prompt as context
-            prompt_text = art_prompts.get(name, '')
-            snippet = ''
-            if prompt_text:
-                # Strip style preamble (before the double newline)
-                parts = prompt_text.split('\n\n', 1)
-                body = parts[1] if len(parts) > 1 else parts[0]
-                # Take first ~150 chars of the scene description
-                snippet = body.strip()[:150].rsplit(' ', 1)[0]
-            user_msg += f'{i}. {base_subjects[name]} | {snippet}\n'
-
-        try:
-            if backend == 'local':
-                from ollama import chat
-                response = chat(model=local_model, messages=[
-                    {'role': 'system', 'content': system_msg},
-                    {'role': 'user', 'content': user_msg},
-                ])
-                raw = response.message.content.strip()
-            else:
-                response = openai_client.chat.completions.create(
-                    model='gpt-4o-mini',
-                    messages=[
-                        {'role': 'system', 'content': system_msg},
-                        {'role': 'user', 'content': user_msg},
-                    ],
-                    max_tokens=1500,
-                    temperature=0.3,
-                )
-                raw = response.choices[0].message.content.strip()
-
-            # Parse line-based response: "1. a massive wurm bursting from ground"
-            line_pattern = _re.compile(r'^(\d+)\.\s*(.+)$', _re.MULTILINE)
-            for num, text in line_pattern.findall(raw):
-                card_name = idx_to_name.get(num)
-                if not card_name:
-                    continue
-                val = text.strip().rstrip('.')
-
-                # Strip pipe leakage (LLM echoed the input format)
-                # Take the longer side — before pipe is the base subject,
-                # after pipe is the LLM's actual enhancement
-                if '|' in val:
-                    parts_pipe = [p.strip() for p in val.split('|', 1)]
-                    val = max(parts_pipe, key=len)
-
-                # Strip source name leakage
-                if style_source:
-                    for word in style_source.split():
-                        if len(word) > 3:
-                            val = _re.sub(r'\b' + _re.escape(word) + r'\b',
-                                          '', val, flags=_re.IGNORECASE)
-                    val = _re.sub(r'\s{2,}', ' ', val).strip(', ')
-
-                # Quality gate: 4-12 words
-                words = val.split()
-                if len(words) > 12:
-                    words = words[:12]
-                # Trim trailing filler
-                _trail = {'a', 'an', 'the', 'and', 'or', 'in', 'on',
-                          'of', 'with', 'to', 'by', 'from', 'its'}
-                while words and words[-1].lower().rstrip('.,') in _trail:
-                    words.pop()
-                val = ' '.join(words)
-
-                if len(words) >= 4:
-                    enhanced[card_name] = val
-
-            if progress_callback:
-                cards_done = min(batch_start + BATCH_SIZE, len(card_names))
-                progress_callback(batch_num, total_batches, cards_done, len(card_names))
-
-        except Exception as e:
-            print(f"[vision] Subject enhancement batch failed: {e}")
-            if progress_callback:
-                cards_done = min(batch_start + BATCH_SIZE, len(card_names))
-                progress_callback(batch_num, total_batches, cards_done, len(card_names))
-            continue
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(distill_one, nc) for nc in work]
+        for fut in as_completed(futures):
+            name, out = fut.result()
+            if out:
+                enhanced[name] = out
+            with lock:
+                completed[0] += 1
+                if progress_callback:
+                    progress_callback(1, 1, completed[0], total)
 
     # Merge: use enhanced where available, base subject as fallback
     result = {}
@@ -960,9 +946,8 @@ def distill_card_subjects(cards: list[dict], art_prompts: dict,
     if result:
         samples = list(result.items())[:3]
         print(f"[vision] Examples: {samples}")
-    # Attach stats so callers can surface warnings
     result['_distill_stats'] = {
-        'total': len(result) - 1,  # exclude _distill_stats key
+        'total': len(result) - 1,
         'enhanced': enhanced_count,
         'metadata_only': len(metadata_only),
         'metadata_only_cards': metadata_only,
