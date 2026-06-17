@@ -1375,10 +1375,15 @@ def _generate_local(card_name, model_cfg, full_prompt, ref_path_override=None, s
             if ct:
                 style_bits.append(ct)
 
-    # --- Assemble the natural-language FLUX prompt (kept well under 256 T5 tokens) ---
-    pieces = [subject.rstrip(' .')]
+    # --- Assemble the FLUX prompt: STYLE FIRST, then the scene. ---
+    # FLUX weights early tokens most, so leading with the style (rather than
+    # burying it after a long scene) stops a rich scene from drowning it. Validated
+    # empirically — the same style words buried at the tail gave ZERO style transfer;
+    # front-loaded they come through. (Kept well under the 256-token T5 budget.)
+    pieces = []
     if style_bits:
-        pieces.append("Art style: " + ", ".join(style_bits))
+        pieces.append(", ".join(style_bits))
+    pieces.append(subject.rstrip(' .'))
     if feedback_text:
         pieces.append(feedback_text.rstrip(' .'))
     flux_prompt = '. '.join(p for p in pieces if p) + '.'
@@ -3332,24 +3337,17 @@ def regenerate_prompts_from_inspiration(deck_id):
         preamble = style_preamble
         bcfg = backend_config.load_config()
 
-        # Build a concise style hint for the AI subject generator
-        _style_hint = ''
-        if style_source:
-            _style_hint = style_source
-            if preamble:
-                for _line in preamble.split('\n'):
-                    if _line.startswith('Art Style:'):
-                        _art_style = _line[len("Art Style:"):].strip().split('|')[0].strip()
-                        _style_hint += f' — {_art_style}'
-                        break
-        # Include mood and themes so subject descriptions match the atmosphere
-        _style_tokens = data.get('style_tokens', {})
-        _mood = _style_tokens.get('mood', '').strip() if _style_tokens else ''
-        if _mood:
-            _style_hint += f' | Mood: {_mood}'
-        _themes = _style_tokens.get('themes', '').strip() if _style_tokens else ''
-        if _themes:
-            _style_hint += f' | Themes: {_themes}'
+        # Build the subject-generation style hint from the CLEAN image-first
+        # descriptors (flux_style_prompt) + source name — NOT the SDXL-era mood/
+        # themes tokens. Those mislabel (e.g. tagging Wes Anderson "unsettling,
+        # eerie"), which trips the subject generator's dark/dramatic path and makes
+        # scenes dramatic — the very drama that drowns a calm style. The clean
+        # descriptors keep the subject's TONE matched to the actual style (calm
+        # styles stay calm/concrete; genuinely dark styles still read as dark).
+        _style_hint = style_source or ''
+        _flux_style = data.get('flux_style_prompt', '').strip()
+        if _flux_style:
+            _style_hint = f"{_style_hint} — {_flux_style}" if _style_hint else _flux_style
         try:
             total = len(cards)
             new_prompts = [None] * total  # preserve order
