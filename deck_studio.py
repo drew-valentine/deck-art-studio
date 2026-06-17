@@ -3319,7 +3319,7 @@ def regenerate_prompts_from_inspiration(deck_id):
         'step': 0,
         'total': len(cards),
         'pct': 0,           # 0-100 unified progress across both phases
-        'phase': 'cloud',   # 'cloud' or 'local'
+        'phase': 'generating',
         'message': 'Starting prompt generation...',
         'done': False,
         'error': None,
@@ -3397,7 +3397,7 @@ def regenerate_prompts_from_inspiration(deck_id):
                         completed[0] += 1
                         prog['step'] = completed[0]
                         prog['pct'] = 5 + int(45 * completed[0] / total)
-                        prog['message'] = f'Cloud prompts: {completed[0]}/{total}'
+                        prog['message'] = f'Generating prompts: {completed[0]}/{total}'
                         # Update in-memory immediately so frontend sees it on next poll
                         if deck_id == active_deck_id:
                             prompts_map[card['name']] = prompt
@@ -3424,7 +3424,7 @@ def regenerate_prompts_from_inspiration(deck_id):
                         prog['updated_cards'] = []
                     prog['updated_cards'].append(card['name'])
                     prog['pct'] = 5 + int(45 * (i + 1) / total)
-                    prog['message'] = f'Cloud prompts: {i + 1}/{total}'
+                    prog['message'] = f'Generating prompts: {i + 1}/{total}'
 
             # Filter any Nones (shouldn't happen but safety)
             new_prompts = [p for p in new_prompts if p]
@@ -3845,7 +3845,7 @@ def _is_prompt_stale(slug: str, current_prompt: str, card_name: str = '') -> boo
     try:
         with open(meta_path) as f:
             meta = json.load(f)
-        # Check cloud prompt
+        # Stale if the card's prompt changed since the art was generated.
         generated_with = meta.get('prompt_sent', '')
         if generated_with and current_prompt:
             if generated_with.strip() != current_prompt.strip():
@@ -11096,7 +11096,7 @@ async function regeneratePrompts() {
     // Poll for progress — use unified pct (0-100) from backend
     let lastUpdatedCount = 0;
     let _lastRegenPct = 0;
-    let _lastRegenPhase = 'cloud';
+    let _lastRegenPhase = 'generating';
     const result = await new Promise((resolve, reject) => {
       const interval = setInterval(async () => {
         try {
@@ -11105,14 +11105,14 @@ async function regeneratePrompts() {
           const prog = await r.json();
 
           batchMessage.textContent = prog.message || 'Generating prompts...';
-          // Use backend's unified percentage (0-100 across both phases)
-          // Clamp to never go backward (prevents oscillation during LLM batches)
+          // Use the backend's unified percentage (0-100). Clamp so it never goes
+          // backward (prevents oscillation while the LLM works through a batch).
           const pct = Math.max(prog.pct || 0, _lastRegenPct);
           if (pct > _lastRegenPct) {
             // Real progress — show determinate bar
             progressFill.classList.remove('indeterminate');
-          } else if (prog.phase === 'local') {
-            // Local phase stalled (LLM processing batch) — pulse to show activity
+          } else if (!prog.done) {
+            // Stalled mid-generation (LLM working) — pulse to show activity
             progressFill.classList.add('indeterminate');
           }
           progressFill.style.width = pct + '%';
