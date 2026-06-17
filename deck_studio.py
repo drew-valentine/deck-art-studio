@@ -11692,27 +11692,14 @@ if __name__ == '__main__':
     # MLX text/vision models (mlx-lm, mlx-vlm) download lazily from the
     # HuggingFace hub on first use — no startup pull needed.
 
-    # Preload the FLUX image model in the BACKGROUND so it's ready by the time the
-    # user generates — without blocking server startup (first run downloads weights,
-    # later runs are ~30-60s). Generation also auto-loads as a fallback if a request
-    # arrives before this finishes. The LLM/VLM evict FLUX when they load, so this
-    # preload won't cause an 18 GB co-residency OOM during prompt/style work.
-    _preload_key = MODEL_OPTIONS.get(active_model_key, {}).get('model') \
-        or _bcfg.get('local_image_model', 'flux-schnell-4bit')
-
-    def _preload_image_model():
-        if not backend_config.check_diffusers_installed():
-            print("[backend] mflux (MLX) not installed — image generation unavailable")
-            print("[backend] Install with: pip install -r requirements-mac.txt")
-            return
-        print(f"[backend] Preloading FLUX image model in background: {_preload_key}")
-        try:
-            ok, msg = backend_config.activate_local_image_model(_preload_key)
-            print(f"[backend] Image model preload: {msg}")
-        except Exception as e:
-            print(f"[backend] Image model preload failed: {e}")
-
-    threading.Thread(target=_preload_image_model, daemon=True).start()
+    # NB: we deliberately do NOT preload the FLUX image model on startup. On an
+    # 18 GB machine a resident FLUX (~12 GB) collides with the mlx-lm/mlx-vlm models
+    # used for prompt/style work (~5 GB) and OOM-kills the process. Instead, FLUX is
+    # auto-loaded on demand at generation time (single-card and batch), and loading
+    # an LLM/VLM evicts FLUX — so only one heavy model is ever resident.
+    if not backend_config.check_diffusers_installed():
+        print("[backend] mflux (MLX) not installed — image generation unavailable")
+        print("[backend] Install with: pip install -r requirements-mac.txt")
 
     # Load active deck (or first available)
     registry = _load_deck_registry()
