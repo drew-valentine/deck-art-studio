@@ -90,12 +90,28 @@ def unload():
         print(f"[mlx] Unloaded {kind} model {mid}")
 
 
+def _free_image_model():
+    """Evict the resident FLUX image model before loading an LLM/VLM.
+
+    Single-resident is symmetric on an 18 GB machine: loading FLUX unloads the
+    text/vision model (see local_image_generator), and loading text/vision must
+    unload FLUX — otherwise a preloaded FLUX (~12 GB) plus an LLM/VLM (~5 GB) would
+    co-reside and OOM. Lazy import avoids a circular dependency.
+    """
+    try:
+        import local_image_generator
+        local_image_generator.get_generator().unload()
+    except Exception:
+        pass
+
+
 def _ensure_text(model_id: str):
     """Load (and cache) an mlx-lm text model, unloading any other resident model."""
     global _resident
     if _resident and _resident["kind"] == "text" and _resident["id"] == model_id:
         return _resident["model"], _resident["aux"]
     unload()
+    _free_image_model()
     from mlx_lm import load
     print(f"[mlx] Loading text model {model_id} ...")
     model, tokenizer = load(model_id)
@@ -109,6 +125,7 @@ def _ensure_vision(model_id: str):
     if _resident and _resident["kind"] == "vision" and _resident["id"] == model_id:
         return _resident["model"], _resident["aux"]
     unload()
+    _free_image_model()
     from mlx_vlm import load
     print(f"[mlx] Loading vision model {model_id} ...")
     model, processor = load(model_id)

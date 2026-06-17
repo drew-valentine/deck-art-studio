@@ -1512,8 +1512,19 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None, ref_path
         return False, "No API key configured"
     if backend == 'local':
         from local_image_generator import get_generator
-        if not get_generator().is_loaded:
-            return False, "Local model not loaded. Load it from the model selector first."
+        gen = get_generator()
+        if not gen.is_loaded:
+            # Auto-load on the user's behalf — generating should just work.
+            with generation_lock:
+                _status[card_name] = {
+                    'status': 'generating',
+                    'message': 'Loading image model (first run downloads weights)...',
+                    'has_raw_art': _status.get(card_name, {}).get('has_raw_art', False),
+                    'has_composite': _status.get(card_name, {}).get('has_composite', False),
+                }
+            ok, load_msg = gen.load_model(model_name)
+            if not ok:
+                return False, f"Image model failed to load: {load_msg}"
 
     card = next((c for c in _cards_db if c['name'] == card_name), None)
     if not card:
@@ -4226,10 +4237,9 @@ def generate_single():
     if not card_name:
         return jsonify({'error': 'No card name'}), 400
 
-    if model_cfg.get('backend') == 'local':
-        from local_image_generator import get_generator
-        if not get_generator().is_loaded:
-            return jsonify({'error': 'Local model not loaded. Select a model from the dropdown first.'}), 400
+    # NB: no "model not loaded" guard — the worker (via generate_art_for_card)
+    # auto-loads the image model on demand, showing a "Loading image model..."
+    # status, and surfaces a clear error on the card if the load fails.
 
     # Set status immediately so the poller picks it up before the thread starts
     slug = name_to_slug(card_name)
@@ -11682,22 +11692,27 @@ if __name__ == '__main__':
     # MLX text/vision models (mlx-lm, mlx-vlm) download lazily from the
     # HuggingFace hub on first use — no startup pull needed.
 
-    # Auto-load the FLUX image model only if explicitly requested. Loading FLUX
-    # is heavy (first run downloads several GB), so default to load-on-demand
-    # from the UI rather than blocking every server start.
-    _autoload_model = None
-    if _bcfg.get('local_image_autoload'):
-        _autoload_model = MODEL_OPTIONS.get(active_model_key, {}).get('model') \
-            or _bcfg.get('local_image_model', DEFAULT_MODEL_KEY)
+    # Preload the FLUX image model in the BACKGROUND so it's ready by the time the
+    # user generates — without blocking server startup (first run downloads weights,
+    # later runs are ~30-60s). Generation also auto-loads as a fallback if a request
+    # arrives before this finishes. The LLM/VLM evict FLUX when they load, so this
+    # preload won't cause an 18 GB co-residency OOM during prompt/style work.
+    _preload_key = MODEL_OPTIONS.get(active_model_key, {}).get('model') \
+        or _bcfg.get('local_image_model', 'flux-schnell-4bit')
 
-    if _autoload_model:
-        if backend_config.check_diffusers_installed():
-            print(f"[backend] Auto-loading FLUX image model: {_autoload_model}")
-            success, msg = backend_config.activate_local_image_model(_autoload_model)
-            print(f"[backend] {msg}")
-        else:
+    def _preload_image_model():
+        if not backend_config.check_diffusers_installed():
             print("[backend] mflux (MLX) not installed — image generation unavailable")
             print("[backend] Install with: pip install -r requirements-mac.txt")
+            return
+        print(f"[backend] Preloading FLUX image model in background: {_preload_key}")
+        try:
+            ok, msg = backend_config.activate_local_image_model(_preload_key)
+            print(f"[backend] Image model preload: {msg}")
+        except Exception as e:
+            print(f"[backend] Image model preload failed: {e}")
+
+    threading.Thread(target=_preload_image_model, daemon=True).start()
 
     # Load active deck (or first available)
     registry = _load_deck_registry()
