@@ -1697,11 +1697,34 @@ def batch_generate_worker(card_names, feedback_map=None):
         is_local = model_cfg.get('backend') == 'local'
         workers = 1 if is_local else PARALLEL_WORKERS
 
-        # Gate: ensure all Ollama models are unloaded before claiming GPU for SDXL
+        # Gate: wait for any in-flight LLM/VLM work to finish and unload it, then
+        # ensure the FLUX image model is loaded — auto-load on the user's behalf so
+        # "Generate" just works. If the load fails (e.g. a gated model with no HF
+        # login), mark the cards with a clear error instead of silently hanging.
         if is_local:
             batch_phase = 'waiting_ollama'
             batch_phase_detail = 'Waiting for style analysis to finish...'
             _wait_for_ollama_idle(timeout=120)
+
+            from local_image_generator import get_generator
+            gen = get_generator()
+            if not gen.is_loaded:
+                batch_phase = 'loading_model'
+                batch_phase_detail = 'Loading image model (first run downloads weights)...'
+                ok, load_msg = gen.load_model(model_cfg['model'])
+                if not ok:
+                    err = f'Image model failed to load: {load_msg}'
+                    print(f"  [batch] Aborting — {err}")
+                    with generation_lock:
+                        for name in card_names:
+                            prev = _batch_generation_status.get(name, {})
+                            _batch_generation_status[name] = {
+                                'status': 'error',
+                                'message': err,
+                                'has_raw_art': prev.get('has_raw_art', False),
+                                'has_composite': prev.get('has_composite', False),
+                            }
+                    return  # finally block resets is_generating / batch_phase
 
         # Pre-fetch Scryfall art in parallel before generation starts (local only)
         prefetched_refs = {}
@@ -8408,6 +8431,9 @@ function startPolling() {
           document.getElementById('batchProgressFill').style.width = pct + '%';
         }
         msgEl.textContent = detail || 'Downloading reference art...';
+      } else if (phase === 'loading_model') {
+        document.getElementById('batchProgressFill').classList.add('indeterminate');
+        msgEl.textContent = detail || 'Loading image model...';
       } else {
         // Phase is 'generating' — show card-level progress
         document.getElementById('batchProgressFill').classList.remove('indeterminate');
