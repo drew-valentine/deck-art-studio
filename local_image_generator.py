@@ -79,18 +79,9 @@ LOCAL_MODELS = {
         "memory_gb": 12,
         "description": "FLUX.1 schnell (4-bit). High quality, ~40-70s on M3 Pro. img2img + txt2img.",
     },
-    "flux-schnell-8bit": {
-        "mflux_name": "schnell",
-        "quantize": 8,
-        # No non-gated 8-bit mirror — uses the gated official repo (needs HF auth).
-        "repo": None,
-        "default_steps": 4,
-        "recommended_size": (1024, 1024),
-        "supports_img2img": True,
-        "default_strength": 0.45,
-        "memory_gb": 16,
-        "description": "FLUX.1 schnell (8-bit). Best quality, heavier — tight on 18GB. Needs HF login.",
-    },
+    # NB: no 8-bit variant — there's no non-gated 8-bit mflux mirror (the official
+    # repo is gated), and 8-bit won't fit alongside everything on 18 GB. It only
+    # ever produced a gated 401 on load, so it's intentionally omitted.
 }
 
 DEFAULT_LOCAL_MODEL = "flux-schnell-4bit"

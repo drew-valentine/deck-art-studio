@@ -121,10 +121,19 @@ class TestApiSecurity:
 # ===========================================================================
 class TestApiModelSwitch:
     def test_switch_model(self, client):
-        resp = client.post('/api/model-config',
-                           json={'model_key': 'local-flux-schnell-8bit'})
-        assert resp.status_code == 200
-        assert deck_studio.active_model_key == 'local-flux-schnell-8bit'
+        # Save/restore the persisted config — the endpoint writes backend_config.json,
+        # and we must not poison the real active_model_key from a test run.
+        import backend_config
+        original = backend_config.load_config()
+        orig_active = deck_studio.active_model_key
+        try:
+            resp = client.post('/api/model-config',
+                               json={'model_key': 'local-flux-schnell'})
+            assert resp.status_code == 200
+            assert deck_studio.active_model_key == 'local-flux-schnell'
+        finally:
+            backend_config.save_config(original)
+            deck_studio.active_model_key = orig_active
 
     def test_invalid_model_rejected(self, client):
         resp = client.post('/api/model-config',

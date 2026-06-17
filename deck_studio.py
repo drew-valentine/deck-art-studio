@@ -108,15 +108,8 @@ MODEL_OPTIONS = {
         'label': 'FLUX.1 schnell (4-bit) | txt2img + ControlNet',
         'description': 'High quality, ~40-70s on M3 Pro. Recommended.',
     },
-    'local-flux-schnell-8bit': {
-        'model': 'flux-schnell-8bit', 'quality': 'standard',
-        'size': '768x1024', 'landscape_size': '1024x768',
-        'supports_edit': False,
-        'supports_img2img': True,
-        'cost_per_image': 0.00, 'backend': 'local',
-        'label': 'FLUX.1 schnell (8-bit) | needs HF login',
-        'description': 'Best quality, heavier — tight on 18GB.',
-    },
+    # NB: no 8-bit option — it has no non-gated mirror (needs an HF login) and is
+    # too large for an 18 GB machine, so it was a guaranteed load failure.
 }
 DEFAULT_MODEL_KEY = 'local-flux-schnell'
 
