@@ -1,30 +1,31 @@
 #!/usr/bin/env python3
 """
-Backend configuration for Deck Art Studio.
+Backend configuration for Deck Art Studio (MLX-native, Apple Silicon only).
 
-Manages switching between OpenAI (cloud) and local (Ollama/Diffusers) backends
-for LLM prompt generation, vision analysis, and image generation. Persists
-settings to backend_config.json. Handles Ollama server lifecycle automatically.
+The pipeline is fully local and MLX-based:
+  - text  → mlx-lm   (prompt generation, style/subject distillation)
+  - vision → mlx-vlm  (inspiration image style analysis)
+  - image → mflux    (FLUX.1 image generation)
+
+This module just persists model selections to backend_config.json. The old
+OpenAI-cloud / Ollama-server lifecycle has been removed — MLX models are loaded
+in-process and downloaded lazily from the HuggingFace hub on first use (see
+mlx_llm.py and local_image_generator.py).
 """
 
 import json
-import shutil
-import subprocess
-import time
-import urllib.request
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).parent / "backend_config.json"
 
 DEFAULTS = {
-    "llm_backend": "openai",          # "openai" or "local"
-    "ollama_model": "llama3.2:3b",     # model for prompt generation
-    "ollama_vision_model": "llava:7b", # model for vision/style analysis
-    "local_image_model": "sdxl-turbo", # local image generation model
-    "local_image_autoload": False,     # auto-load local image model on startup
+    # Retained for call-site compatibility; the pipeline is always MLX/local now.
+    "llm_backend": "local",
+    "ollama_model": "llama3.1:8b",      # mapped to an MLX repo by mlx_llm.py
+    "ollama_vision_model": "llava:7b",  # mapped to an MLX repo by mlx_llm.py
+    "local_image_model": "flux-schnell-4bit",
+    "local_image_autoload": False,      # auto-load image model on startup
 }
-
-_ollama_process = None  # track the subprocess we started
 
 
 def load_config() -> dict:
@@ -37,6 +38,9 @@ def load_config() -> dict:
             cfg.update(saved)
         except Exception as e:
             print(f"[backend] Could not load config: {e}")
+    # The cloud backend is gone — force any legacy "openai" value to local.
+    if cfg.get("llm_backend") != "local":
+        cfg["llm_backend"] = "local"
     return cfg
 
 
@@ -46,152 +50,37 @@ def save_config(cfg: dict):
         json.dump(cfg, f, indent=2)
 
 
-def check_ollama_installed() -> bool:
-    """Check if the ollama binary is available on PATH."""
-    return shutil.which("ollama") is not None
+def get_mlx_status() -> dict:
+    """Report MLX text/vision availability for the UI.
 
-
-def is_ollama_running() -> bool:
-    """Check if the Ollama server is responding."""
+    Keeps the legacy key shape (installed/running/models/models_ready) so the
+    frontend's backend panel keeps working; on Apple Silicon the MLX runtime is
+    always "installed and running" in-process, with models pulled lazily.
+    """
     try:
-        urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2)
-        return True
+        import mlx_llm
+        available = mlx_llm.is_available()
     except Exception:
-        return False
-
-
-def ensure_ollama_running() -> bool:
-    """Start the Ollama server if it's not already running.
-
-    Returns True if the server is available after this call.
-    """
-    global _ollama_process
-
-    if is_ollama_running():
-        return True
-
-    if not check_ollama_installed():
-        print("[backend] Ollama is not installed. Install with: brew install ollama")
-        return False
-
-    print("[backend] Starting Ollama server...")
-    try:
-        _ollama_process = subprocess.Popen(
-            ["ollama", "serve"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception as e:
-        print(f"[backend] Failed to start Ollama: {e}")
-        return False
-
-    # Wait for server to be ready (up to 10 seconds)
-    for _ in range(20):
-        time.sleep(0.5)
-        if is_ollama_running():
-            print("[backend] Ollama server started successfully")
-            return True
-
-    print("[backend] Ollama server did not start within 10 seconds")
-    return False
-
-
-def list_installed_models() -> list[str]:
-    """Return list of model names currently installed in Ollama."""
-    try:
-        import ollama
-        response = ollama.list()
-        return [m.model for m in response.models]
-    except Exception as e:
-        print(f"[backend] Could not list Ollama models: {e}")
-        return []
-
-
-def ensure_models_pulled(models: list[str], progress_callback=None) -> dict:
-    """Pull any missing models. Returns status dict per model.
-
-    Args:
-        models: List of model names to ensure are available.
-        progress_callback: Optional callable(message: str) for progress updates.
-
-    Returns:
-        Dict like {"llama3.1:8b": "already_installed", "llava:7b": "pulled"}
-    """
-    import ollama
-
-    installed = set(list_installed_models())
-    result = {}
-
-    for model in models:
-        if model in installed:
-            result[model] = "already_installed"
-            continue
-
-        msg = f"Pulling {model} (this may take a few minutes on first run)..."
-        print(f"[backend] {msg}")
-        if progress_callback:
-            progress_callback(msg)
-
-        try:
-            ollama.pull(model)
-            result[model] = "pulled"
-            print(f"[backend] {model} pulled successfully")
-        except Exception as e:
-            result[model] = f"error: {e}"
-            print(f"[backend] Failed to pull {model}: {e}")
-
-    return result
-
-
-def get_ollama_status() -> dict:
-    """Get comprehensive Ollama status for the UI."""
-    installed = check_ollama_installed()
-    running = is_ollama_running() if installed else False
-    models = list_installed_models() if running else []
+        available = False
 
     cfg = load_config()
     needed_models = [cfg["ollama_model"], cfg["ollama_vision_model"]]
-    models_ready = all(m in models for m in needed_models)
-
     return {
-        "installed": installed,
-        "running": running,
-        "models": models,
+        "backend": "mlx",
+        "installed": available,
+        "running": available,
+        "models": needed_models if available else [],
         "needed_models": needed_models,
-        "models_ready": models_ready,
+        "models_ready": available,
     }
 
 
-def activate_local_backend(progress_callback=None) -> tuple[bool, str]:
-    """Activate the local backend: start Ollama and ensure models are pulled.
-
-    Returns (success: bool, message: str).
-    """
-    if not check_ollama_installed():
-        return False, "Ollama is not installed. Install with: brew install ollama"
-
-    if not ensure_ollama_running():
-        return False, "Could not start Ollama server"
-
-    cfg = load_config()
-    needed = [cfg["ollama_model"], cfg["ollama_vision_model"]]
-    results = ensure_models_pulled(needed, progress_callback=progress_callback)
-
-    failures = {m: r for m, r in results.items() if r.startswith("error")}
-    if failures:
-        return False, f"Failed to pull models: {failures}"
-
-    cfg["llm_backend"] = "local"
-    save_config(cfg)
-    return True, "Local backend activated"
-
-
 # ---------------------------------------------------------------------------
-# Local image generation (Diffusers + MPS)
+# Local image generation (mflux / FLUX)
 # ---------------------------------------------------------------------------
 
 def check_diffusers_installed() -> bool:
-    """Check if torch + diffusers are available."""
+    """Check if the MLX image backend (mflux) is available."""
     try:
         from local_image_generator import check_dependencies
         available, _ = check_dependencies()

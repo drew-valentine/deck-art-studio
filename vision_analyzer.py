@@ -2,13 +2,103 @@
 """
 Vision-based style analysis for inspiration images.
 
-Uses GPT-4o vision or a local Ollama vision model (e.g. LLaVA) to analyze
-an uploaded inspiration image and extract a structured art style description
-that can drive prompt generation.
+Uses an MLX vision model (Qwen2.5-VL via mlx-vlm) to analyze an uploaded
+inspiration image and extract a structured art style description that drives
+prompt generation.
 """
 
-import base64
 from pathlib import Path
+
+
+def build_flux_style_descriptors(image_path, style_source: str = '',
+                                 backend: str = 'local',
+                                 vision_model: str = 'llava:7b',
+                                 text_model: str = 'llama3.1:8b') -> str:
+    """Derive FLUX-ready style descriptors, image-first and source-agnostic.
+
+    This is the general, *dynamically determined* style path: the vision model
+    looks at the actual inspiration image and writes FLUX-friendly style
+    descriptors (medium, composition, palette, lighting, mood, technique) — so it
+    works for ANY uploaded style, named or not.
+
+    If `style_source` is provided, a second LLM pass reconciles the image read
+    with the model's knowledge of that named style — trusting the named style's
+    medium and signature techniques (which fixes vision mislabels, e.g. tagging a
+    live-action film still as "digital painting") while keeping the image's own
+    palette and mood.
+
+    Returns one comma-separated descriptor line, or '' on failure.
+    """
+    image_path = Path(image_path)
+    if not image_path.exists():
+        return ''
+
+    vlm_prompt = (
+        "Describe ONLY the VISUAL STYLE of this image (ignore the subject/content) "
+        "as 10-16 comma-separated descriptors for a text-to-image model. Cover, in "
+        "order: medium (be precise — photograph, live-action film still, oil "
+        "painting, watercolor, 3D render, cel animation, ink illustration, pixel "
+        "art, etc.), composition and framing, color palette (name the actual hues), "
+        "lighting, mood, and signature technique. Use concrete multi-word phrases, "
+        "not single vague words. Output ONLY the comma-separated descriptors."
+    )
+    try:
+        import mlx_llm
+        img_desc = mlx_llm.vision(str(image_path), vlm_prompt, model=vision_model,
+                                  max_tokens=160, temperature=0.4)
+    except Exception as e:
+        print(f"  [style] VLM style read failed: {e}")
+        img_desc = ''
+    img_desc = (img_desc or '').strip().splitlines()
+    img_desc = img_desc[0].strip() if img_desc else ''
+
+    if not style_source:
+        return _clean_descriptors(img_desc, style_source)
+
+    # Reconcile the image read with knowledge of the named style.
+    system_msg = (
+        "You produce style descriptors for the FLUX text-to-image model. You are "
+        "given (a) a visual-style read of reference images and (b) the NAME of the "
+        "intended style. Output ONE line of 10-16 comma-separated descriptors that "
+        "best reproduce the intended style.\n"
+        "Trust the NAMED style's true medium and signature techniques — use your "
+        "knowledge to CORRECT any medium error in the image read (e.g. a live-action "
+        "film still wrongly called 'digital painting'). Keep the specific color "
+        "palette and mood from the image read. Use concrete multi-word phrases. "
+        "Describe ONLY visual style — no subject, no proper nouns, no character or "
+        "place names. Output ONLY the comma-separated descriptors."
+    )
+    user_msg = (f"Image read: {img_desc or '(none)'}\n"
+                f"Intended style name: {style_source}\nDescriptors:")
+    try:
+        import mlx_llm
+        out = mlx_llm.chat(
+            messages=[{'role': 'system', 'content': system_msg},
+                      {'role': 'user', 'content': user_msg}],
+            model=text_model, max_tokens=140, temperature=0.4,
+        )
+    except Exception as e:
+        print(f"  [style] descriptor reconcile failed: {e}")
+        out = img_desc
+    return _clean_descriptors(out, style_source)
+
+
+def _clean_descriptors(text: str, style_source: str = '') -> str:
+    """Tidy a descriptor line: first line only, strip source-name leakage + labels."""
+    import re as _re
+    if not text:
+        return ''
+    out = text.strip().splitlines()[0].strip()
+    # Drop a leading "Descriptors:"/"Style:" label if the model echoed it.
+    out = _re.sub(r'^\s*(descriptors|style|visual style)\s*:\s*', '', out, flags=_re.IGNORECASE)
+    # Strip the source name if it leaked into the values.
+    if style_source:
+        for word in style_source.split():
+            if len(word) > 3:
+                out = _re.sub(r'\b' + _re.escape(word) + r'\b', '', out, flags=_re.IGNORECASE)
+    out = _re.sub(r'\s{2,}', ' ', out)
+    out = _re.sub(r'\s*,\s*,+', ', ', out)
+    return out.strip(' ,.')
 
 
 def analyze_inspiration_style(image_path: str | Path, openai_client=None,
@@ -83,91 +173,22 @@ def analyze_inspiration_style(image_path: str | Path, openai_client=None,
     )
 
     try:
-        if backend == 'local':
-            from ollama import chat
-            # Ollama llava can't process WebP — convert to PNG for local vision
-            local_image_path = str(image_path)
-            if image_path.suffix.lower() == '.webp':
-                from PIL import Image
-                import tempfile
-                _img = Image.open(image_path).convert('RGB')
-                _tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-                _img.save(_tmp.name, 'PNG')
-                local_image_path = _tmp.name
-                print(f"[vision] Converted WebP to PNG for Ollama: {image_path.name}")
-
-            # Stage 1: Simple medium classification (llava hallucinates with complex prompts)
-            pre_resp = chat(model=local_model, messages=[{
-                'role': 'user',
-                'content': (
-                    "What medium is this image? Answer with ONLY one of: "
-                    "photograph, film still, oil painting, digital painting, "
-                    "watercolor, 3D render, anime, pixel art, pencil drawing, "
-                    "ink illustration, mixed media. "
-                    "One word or two-word answer only."
-                ),
-                'images': [local_image_path],
-            }])
-            detected_medium = pre_resp.message.content.strip().lower()
-            print(f"[vision] Pre-classification: {detected_medium}")
-
-            # Stage 2: Full analysis with medium hint to prevent hallucination
-            medium_hint = ""
-            if any(w in detected_medium for w in ('photograph', 'film', 'photo', 'cinema')):
-                medium_hint = (
-                    "\n\nIMPORTANT: This image has been identified as a PHOTOGRAPH or FILM STILL. "
-                    "Your Medium MUST be photography/cinematography. Do NOT describe painting "
-                    "techniques like brushstrokes, impasto, or glazing. Describe camera, lens, "
-                    "film stock, lighting, and color grading instead."
-                )
-            elif any(w in detected_medium for w in ('3d', 'render', 'cgi')):
-                medium_hint = (
-                    "\n\nIMPORTANT: This image has been identified as a 3D RENDER. "
-                    "Your Medium MUST be 3D/CGI. Describe rendering style, lighting, "
-                    "and modeling approach."
-                )
-
-            response = chat(model=local_model, messages=[{
-                'role': 'user',
-                'content': (
-                    system_msg + medium_hint +
-                    "\n\nAnalyze this image's art style for use as a reference "
-                    "in MTG card art generation:"
-                ),
-                'images': [local_image_path],
-            }])
-            description = response.message.content.strip()
-            # Clean up temp PNG if we converted from WebP
-            if local_image_path != str(image_path):
-                import os
-                os.unlink(local_image_path)
-        else:
-            # Encode image to base64 for OpenAI
-            with open(image_path, 'rb') as f:
-                img_bytes = f.read()
-            b64 = base64.standard_b64encode(img_bytes).decode('utf-8')
-
-            suffix = image_path.suffix.lower()
-            mime = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-                    '.webp': 'image/webp', '.gif': 'image/gif'}.get(suffix, 'image/png')
-
-            response = openai_client.chat.completions.create(
-                model='gpt-4o',
-                messages=[
-                    {'role': 'system', 'content': system_msg},
-                    {'role': 'user', 'content': [
-                        {'type': 'text', 'text': 'Analyze this image\'s art style for use as a reference in MTG card art generation:'},
-                        {'type': 'image_url', 'image_url': {
-                            'url': f'data:{mime};base64,{b64}',
-                            'detail': 'auto',
-                        }},
-                    ]},
-                ],
-                max_tokens=300,
-                temperature=0.7,
-            )
-            description = response.choices[0].message.content.strip()
-
+        # Qwen2.5-VL (via mlx-vlm) reads medium/technique accurately in a single
+        # pass — no llava-style anti-hallucination pre-classification needed, and
+        # PIL handles WebP/PNG/JPG natively so no format conversion is required.
+        import mlx_llm
+        prompt = (
+            system_msg +
+            "\n\nAnalyze this image's art style for use as a reference "
+            "in MTG card art generation:"
+        )
+        description = mlx_llm.vision(
+            image_path=str(image_path),
+            prompt=prompt,
+            model=local_model,
+            max_tokens=400,
+            temperature=0.7,
+        )
         print(f"[vision] Style analysis complete: {description[:80]}...")
         return description
     except Exception as e:
@@ -396,24 +417,16 @@ def distill_style_tokens(descriptions: list[str], style_source: str = '',
         user_msg += f"--- Image {i + 1} ---\n{desc}\n\n"
 
     try:
-        if backend == 'local':
-            from ollama import chat
-            response = chat(model=local_model, messages=[
+        import mlx_llm
+        raw = mlx_llm.chat(
+            messages=[
                 {'role': 'system', 'content': system_msg},
                 {'role': 'user', 'content': user_msg},
-            ])
-            raw = response.message.content.strip()
-        else:
-            response = openai_client.chat.completions.create(
-                model='gpt-4o-mini',
-                messages=[
-                    {'role': 'system', 'content': system_msg},
-                    {'role': 'user', 'content': user_msg},
-                ],
-                max_tokens=400,
-                temperature=0.3,
-            )
-            raw = response.choices[0].message.content.strip()
+            ],
+            model=local_model,
+            max_tokens=400,
+            temperature=0.3,
+        )
 
         # Strip markdown code fences if present
         if raw.startswith('```'):
@@ -638,25 +651,18 @@ def build_clip_directives(style_tokens: dict, descriptions: list[str],
         user_msg += f"\nFull style descriptions:\n{desc_text}\n"
 
     try:
-        if backend == 'local':
-            from ollama import chat
-            response = chat(model=local_model, messages=[
+        import mlx_llm
+        # MLX has no native JSON mode, but the system prompt demands raw JSON and
+        # the parsing below strips fences + has a regex fallback for stray prose.
+        raw = mlx_llm.chat(
+            messages=[
                 {'role': 'system', 'content': system_msg},
                 {'role': 'user', 'content': user_msg},
-            ])
-            raw = response.message.content.strip()
-        else:
-            response = openai_client.chat.completions.create(
-                model='gpt-4o-mini',
-                messages=[
-                    {'role': 'system', 'content': system_msg},
-                    {'role': 'user', 'content': user_msg},
-                ],
-                max_tokens=300,
-                temperature=0.3,
-                response_format={'type': 'json_object'},
-            )
-            raw = response.choices[0].message.content.strip()
+            ],
+            model=local_model,
+            max_tokens=300,
+            temperature=0.3,
+        )
 
         # Strip markdown code fences if present
         if raw.startswith('```'):
@@ -827,20 +833,13 @@ def distill_one_card_subject(card: dict, art_prompt: str,
     )
 
     try:
-        if backend == 'local':
-            from ollama import chat
-            response = chat(model=local_model, messages=[
-                {'role': 'user', 'content': system_msg},
-            ], options={'temperature': temperature, 'num_predict': 60})
-            result = response.message.content.strip()
-        else:
-            response = openai_client.chat.completions.create(
-                model='gpt-4o-mini',
-                messages=[{'role': 'user', 'content': system_msg}],
-                temperature=temperature,
-                max_tokens=60,
-            )
-            result = response.choices[0].message.content.strip()
+        import mlx_llm
+        result = mlx_llm.chat(
+            messages=[{'role': 'user', 'content': system_msg}],
+            model=local_model,
+            max_tokens=60,
+            temperature=temperature,
+        )
     except Exception as e:
         print(f"[vision] distill_one_card_subject failed for {card.get('name','?')}: {e}")
         return ''

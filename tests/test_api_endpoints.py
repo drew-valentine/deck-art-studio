@@ -122,9 +122,9 @@ class TestApiSecurity:
 class TestApiModelSwitch:
     def test_switch_model(self, client):
         resp = client.post('/api/model-config',
-                           json={'model_key': 'dall-e-3-standard'})
+                           json={'model_key': 'local-flux-schnell-8bit'})
         assert resp.status_code == 200
-        assert deck_studio.active_model_key == 'dall-e-3-standard'
+        assert deck_studio.active_model_key == 'local-flux-schnell-8bit'
 
     def test_invalid_model_rejected(self, client):
         resp = client.post('/api/model-config',

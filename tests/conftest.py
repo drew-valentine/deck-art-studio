@@ -175,7 +175,7 @@ def populated_state(sample_cards):
     deck_studio.prompts_map = {c['name']: f"Art prompt for {c['name']}" for c in sample_cards}
     deck_studio.active_deck_id = 'test-deck'
     deck_studio.active_deck_meta = {'name': 'Test Deck'}
-    deck_studio.active_model_key = 'dall-e-3-hd'
+    deck_studio.active_model_key = 'local-flux-schnell'
     for card in sample_cards:
         name = card['name']
         slug = deck_studio.name_to_slug(name)

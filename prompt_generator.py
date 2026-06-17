@@ -514,24 +514,16 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     )
 
     try:
-        if backend == 'local':
-            from ollama import chat
-            response = chat(model=local_model, messages=[
+        import mlx_llm
+        return mlx_llm.chat(
+            messages=[
                 {'role': 'system', 'content': system_msg},
                 {'role': 'user', 'content': user_msg},
-            ])
-            return response.message.content.strip()
-        else:
-            response = openai_client.chat.completions.create(
-                model='gpt-4o-mini',
-                messages=[
-                    {'role': 'system', 'content': system_msg},
-                    {'role': 'user', 'content': user_msg},
-                ],
-                max_tokens=200,
-                temperature=0.8,
-            )
-            return response.choices[0].message.content.strip()
+            ],
+            model=local_model,
+            max_tokens=200,
+            temperature=0.8,
+        )
     except Exception as e:
         print(f"  [prompt_gen] AI failed for {name}: {e}, using rule-based")
         return generate_subject_description(card)
@@ -575,6 +567,67 @@ def generate_prompts_with_ai(
         time.sleep(0.05)  # Brief rate limit
 
     return prompts
+
+
+# ---------------------------------------------------------------------------
+# Source-canonical style descriptors for FLUX
+# ---------------------------------------------------------------------------
+def build_source_style_prompt(style_source: str, backend: str = 'local',
+                              local_model: str = 'llama3.1:8b') -> str:
+    """Ask the LLM for a named style's *canonical* visual descriptors for FLUX.
+
+    The vision model often mislabels a recognizable style's medium (e.g. tagging
+    Wes Anderson live-action films as "digital painting"), and those wrong tokens
+    fight the style. FLUX knows famous named styles well, and so does the LLM —
+    so for a recognized source we generate accurate descriptors from the source
+    NAME (composition, framing, palette, lighting, mood, signature technique)
+    rather than trusting the per-image vision distillation.
+
+    Returns a single comma-separated descriptor line, or '' on failure.
+    """
+    if not style_source or not style_source.strip():
+        return ''
+    system_msg = (
+        "You are a prompt engineer for the FLUX text-to-image model. Given the name "
+        "of a visual/artistic style, output ONE line of 10-16 comma-separated visual "
+        "descriptors that capture that style's MOST DISTINCTIVE, RECOGNIZABLE look so "
+        "FLUX reproduces it unmistakably.\n"
+        "Include concrete, specific phrases for: the actual medium (e.g. 'live-action "
+        "35mm film still', 'cel animation', 'oil painting'); composition and framing "
+        "(e.g. 'perfectly symmetrical', 'centered head-on framing', 'flat planimetric "
+        "staging'); color palette (specific hues); lighting; and mood.\n"
+        "Rules: be SPECIFIC to THIS style, not generic. Use multi-word descriptor "
+        "phrases, not single vague words. Do NOT output category labels like "
+        "'medium' or 'composition' themselves — output the actual descriptive values. "
+        "No subject matter, no proper nouns, no character/place names. Output ONLY the "
+        "comma-separated descriptor phrases, nothing else."
+    )
+    user_msg = (
+        "Style: Studio Ghibli\nDescriptors: hand-painted cel animation, lush "
+        "watercolor backgrounds, soft rounded character designs, gentle naturalistic "
+        "lighting, painterly clouds, warm nostalgic palette, whimsical, serene\n\n"
+        f"Style: {style_source}\nDescriptors:"
+    )
+    try:
+        import mlx_llm
+        out = mlx_llm.chat(
+            messages=[
+                {'role': 'system', 'content': system_msg},
+                {'role': 'user', 'content': user_msg},
+            ],
+            model=local_model, max_tokens=120, temperature=0.4,
+        )
+        # Single line, strip the source name if it leaked in.
+        out = out.strip().splitlines()[0] if out.strip() else ''
+        import re as _re
+        for word in style_source.split():
+            if len(word) > 3:
+                out = _re.sub(r'\b' + _re.escape(word) + r'\b', '', out, flags=_re.IGNORECASE)
+        out = _re.sub(r'\s{2,}', ' ', out).strip(' ,')
+        return out
+    except Exception as e:
+        print(f"  [style] build_source_style_prompt failed for '{style_source}': {e}")
+        return ''
 
 
 # ---------------------------------------------------------------------------
@@ -635,24 +688,16 @@ def generate_flavor_text(card: dict, inspiration_description: str = '',
     )
 
     try:
-        if backend == 'local':
-            from ollama import chat
-            response = chat(model=local_model, messages=[
+        import mlx_llm
+        text = mlx_llm.chat(
+            messages=[
                 {'role': 'system', 'content': system_msg},
                 {'role': 'user', 'content': user_msg},
-            ])
-            text = response.message.content.strip()
-        else:
-            response = openai_client.chat.completions.create(
-                model='gpt-4o-mini',
-                messages=[
-                    {'role': 'system', 'content': system_msg},
-                    {'role': 'user', 'content': user_msg},
-                ],
-                max_tokens=100,
-                temperature=0.9,
-            )
-            text = response.choices[0].message.content.strip()
+            ],
+            model=local_model,
+            max_tokens=100,
+            temperature=0.9,
+        )
 
         # Clean up LLM artifacts
         # Strip markdown formatting (* _ ** __)

@@ -52,6 +52,7 @@ jobs:
               'card_frame_renderer',
               'prompt_generator',
               'vision_analyzer',
+              'mlx_llm',
               'fetch_scryfall_art',
               'fetch_flavor_text',
               'scryfall_client',

@@ -96,87 +96,36 @@ _inspiration_composite_cache = {'key': None, 'image': None}
 # ---------------------------------------------------------------------------
 # Model configurations with pricing
 # ---------------------------------------------------------------------------
+# MLX-native (Apple Silicon, local-only) image models. Keys map to
+# local_image_generator.LOCAL_MODELS via the 'model' field.
 MODEL_OPTIONS = {
-    'gpt-image-1-high': {
-        'model': 'gpt-image-1', 'quality': 'high',
-        'size': '1024x1536', 'landscape_size': '1536x1024',
-        'oversized': '1536x1536',
-        'supports_edit': True,
-        'cost_per_image': 0.25, 'backend': 'openai',
-        'label': 'gpt-image-1 (High)',
-        'description': 'Best quality, highest cost',
-    },
-    'gpt-image-1-medium': {
-        'model': 'gpt-image-1', 'quality': 'medium',
-        'size': '1024x1536', 'landscape_size': '1536x1024',
-        'oversized': '1536x1536',
-        'supports_edit': True,
-        'cost_per_image': 0.06, 'backend': 'openai',
-        'label': 'gpt-image-1 (Medium)',
-        'description': 'Great quality, good price — recommended',
-    },
-    'gpt-image-1-low': {
-        'model': 'gpt-image-1', 'quality': 'low',
-        'size': '1024x1536', 'landscape_size': '1536x1024',
-        'oversized': '1536x1536',
-        'supports_edit': True,
-        'cost_per_image': 0.016, 'backend': 'openai',
-        'label': 'gpt-image-1 (Low)',
-        'description': 'Budget option, decent quality',
-    },
-    'dall-e-3-hd': {
-        'model': 'dall-e-3', 'quality': 'hd',
-        'size': '1024x1792', 'landscape_size': '1792x1024',
-        'oversized': '1792x1024',
-        'supports_edit': False,
-        'cost_per_image': 0.12, 'backend': 'openai',
-        'label': 'DALL·E 3 (HD)',
-        'description': 'Previous gen, no reference image support',
-    },
-    'dall-e-3-standard': {
-        'model': 'dall-e-3', 'quality': 'standard',
-        'size': '1024x1792', 'landscape_size': '1792x1024',
-        'oversized': '1792x1024',
-        'supports_edit': False,
-        'cost_per_image': 0.08, 'backend': 'openai',
-        'label': 'DALL·E 3 (Standard)',
-        'description': 'Previous gen, no reference image support',
-    },
-    'local-sdxl-lightning': {
-        'model': 'sdxl-lightning-4step', 'quality': 'standard',
+    'local-flux-schnell': {
+        'model': 'flux-schnell-4bit', 'quality': 'standard',
         'size': '768x1024', 'landscape_size': '1024x768',
         'supports_edit': False,
         'supports_img2img': True,
         'cost_per_image': 0.00, 'backend': 'local',
-        'label': 'SDXL Lightning 12GB | img2img + txt2img',
-        'description': '4 steps, 768x1024',
+        'label': 'FLUX.1 schnell (4-bit) | txt2img + ControlNet',
+        'description': 'High quality, ~40-70s on M3 Pro. Recommended.',
     },
-    'local-hyper-sdxl': {
-        'model': 'hyper-sdxl-2step', 'quality': 'standard',
+    'local-flux-schnell-8bit': {
+        'model': 'flux-schnell-8bit', 'quality': 'standard',
         'size': '768x1024', 'landscape_size': '1024x768',
-        'supports_edit': False,
-        'supports_img2img': False,
-        'cost_per_image': 0.00, 'backend': 'local',
-        'label': 'Hyper-SD 12GB | txt2img only',
-        'description': '2 steps, 768x1024, fastest',
-    },
-    'local-sdxl-turbo': {
-        'model': 'sdxl-turbo', 'quality': 'standard',
-        'size': '512x768', 'landscape_size': '768x512',
         'supports_edit': False,
         'supports_img2img': True,
         'cost_per_image': 0.00, 'backend': 'local',
-        'label': 'SDXL Turbo 10GB | img2img + txt2img',
-        'description': '4 steps, 512x768',
+        'label': 'FLUX.1 schnell (8-bit) | needs HF login',
+        'description': 'Best quality, heavier — tight on 18GB.',
     },
 }
-DEFAULT_MODEL_KEY = 'gpt-image-1-medium'
+DEFAULT_MODEL_KEY = 'local-flux-schnell'
 
 # Active model selection (mutable at runtime via API)
 active_model_key = DEFAULT_MODEL_KEY
 
-# Whether to use Scryfall original art as additional reference
-use_scryfall_ref = True
+# Composition mode toggle. False (default) = fast txt2img; True = faithful Canny
+# ControlNet off the Scryfall art (locks composition, ~14 steps, slower).
+use_scryfall_ref = False
 
 
 # ---------------------------------------------------------------------------
@@ -202,13 +151,18 @@ model_load_progress = {}      # empty = idle; active: {phase, message, pct, mode
 ollama_pull_progress = {}     # empty = idle; active: {model, status, completed_gb, total_gb, pct}
 
 # ---------------------------------------------------------------------------
-# Ollama GPU memory guard
+# MLX unified-memory guard
 # ---------------------------------------------------------------------------
-# Ollama models (llava, llama3) share MPS unified memory with SDXL.
-# This guard ensures all Ollama models are unloaded before SDXL generation
-# starts, preventing OOM lockups on Apple Silicon.
+# The MLX LLM/VLM models (mlx-lm Llama, mlx-vlm Qwen-VL) and the FLUX image
+# transformer (mflux) all share the same Metal unified-memory pool — and on an
+# 18 GB machine they cannot be co-resident. This guard tracks in-flight LLM/VLM
+# work so the image pipeline can wait for it to finish and then unload the text
+# models (freeing the full budget for FLUX) before generating.
+#
+# The function names below retain their historical "ollama" spelling so the many
+# call sites stay stable; they now coordinate in-process MLX models, not a
+# separate Ollama server.
 
-OLLAMA_KNOWN_MODELS = ['llava:7b', 'llama3.2:3b', 'llama3.1:8b']
 _ollama_active_count = 0
 _ollama_count_lock = threading.Lock()
 ollama_idle = threading.Event()
@@ -216,25 +170,25 @@ ollama_idle.set()  # Initially idle
 
 
 def _ollama_work_start():
-    """Mark the start of background Ollama work. Clears the idle event."""
+    """Mark the start of background MLX LLM/VLM work. Clears the idle event."""
     global _ollama_active_count
     with _ollama_count_lock:
         _ollama_active_count += 1
         ollama_idle.clear()
-    print(f"[ollama_guard] Ollama work started (active={_ollama_active_count})")
+    print(f"[mlx_guard] LLM/VLM work started (active={_ollama_active_count})")
 
 
 def _ollama_work_done():
-    """Mark the end of background Ollama work.
+    """Mark the end of background MLX LLM/VLM work.
 
-    When the last active thread finishes, unloads all known Ollama models
-    from GPU memory and signals that it's safe to start SDXL.
+    When the last active thread finishes, unloads the resident text/vision model
+    from unified memory and signals that it's safe to load FLUX.
     """
     global _ollama_active_count
     with _ollama_count_lock:
         _ollama_active_count = max(0, _ollama_active_count - 1)
         count = _ollama_active_count
-    print(f"[ollama_guard] Ollama work done (active={count})")
+    print(f"[mlx_guard] LLM/VLM work done (active={count})")
     if count == 0:
         _unload_all_ollama_models()
         ollama_idle.set()
@@ -303,31 +257,27 @@ def _ollama_pull_progress_clear():
 
 
 def _unload_all_ollama_models():
-    """Stop all known Ollama models to free GPU/unified memory."""
-    import subprocess
-    for model in OLLAMA_KNOWN_MODELS:
-        try:
-            subprocess.run(
-                ['ollama', 'stop', model],
-                capture_output=True, text=True, timeout=30,
-            )
-        except Exception:
-            pass
-    print("[ollama_guard] All Ollama models unloaded from GPU")
+    """Free the resident MLX text/vision model from unified memory."""
+    try:
+        import mlx_llm
+        mlx_llm.unload()
+    except Exception as e:
+        print(f"[mlx_guard] Could not unload MLX models: {e}")
+    print("[mlx_guard] MLX LLM/VLM models unloaded from unified memory")
 
 
 def _wait_for_ollama_idle(timeout=120):
-    """Block until all Ollama background work finishes.
+    """Block until all background MLX LLM/VLM work finishes.
 
-    Called by the generation pipeline before starting SDXL.
-    Force-unloads on timeout to prevent indefinite stalls.
+    Called by the generation pipeline before loading FLUX so the text/vision
+    models can be unloaded first. Force-unloads on timeout to avoid stalls.
     """
     if ollama_idle.is_set():
         return
-    print(f"[ollama_guard] Waiting for Ollama work to finish (timeout={timeout}s)...")
+    print(f"[mlx_guard] Waiting for LLM/VLM work to finish (timeout={timeout}s)...")
     result = ollama_idle.wait(timeout=timeout)
     if not result:
-        print("[ollama_guard] Timeout waiting for Ollama — force unloading")
+        print("[mlx_guard] Timeout waiting for LLM/VLM — force unloading")
         _unload_all_ollama_models()
         with _ollama_count_lock:
             _ollama_active_count = 0
@@ -515,24 +465,11 @@ def save_api_key(key: str):
 
 
 def load_saved_api_key():
-    """Load and validate a previously saved API key on startup."""
-    global openai_client
-    if not API_KEY_PATH.exists():
-        return
+    """No-op — the cloud (OpenAI) backend was removed in the MLX-native build.
 
-    key = API_KEY_PATH.read_text().strip()
-    if not key:
-        return
-
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=key)
-        client.models.list()  # Quick validation
-        openai_client = client
-        print(f"API key loaded from {API_KEY_PATH.name} — connected!")
-    except Exception as e:
-        print(f"Saved API key is invalid or expired: {e}")
-        print("You'll need to enter a new key in the web UI.")
+    Kept as a stub so the startup sequence and any callers stay intact.
+    """
+    return
 
 
 # ---------------------------------------------------------------------------
@@ -1361,7 +1298,14 @@ def _build_negative_fallback(style_tokens: dict, deck_meta: dict) -> str:
 
 
 def _generate_local(card_name, model_cfg, full_prompt, ref_path_override=None, status_dict=None, size_override=None):
-    """Generate image using local Stable Diffusion model. Returns a PIL Image."""
+    """Generate an image with the local FLUX model (mflux). Returns a PIL Image.
+
+    Style always rides in the text prompt (the style source name + distilled
+    clip_directives.style_tags + the distilled card subject) — FLUX's strong T5
+    prompt adherence replaces SDXL's IP-Adapter. Composition has two modes,
+    selected by the use_scryfall_ref toggle: fast txt2img (FLUX composes from the
+    prompt) or faithful Canny ControlNet off the Scryfall art's edges (slower).
+    """
     _status = status_dict if status_dict is not None else generation_status
     from local_image_generator import get_generator
 
@@ -1369,18 +1313,78 @@ def _generate_local(card_name, model_cfg, full_prompt, ref_path_override=None, s
     size_str = size_override or model_cfg['size']
     w, h = [int(x) for x in size_str.split('x')]
 
-    # Cap resolution for Turbo when IP-Adapter active (memory pressure).
-    # Lightning and Hyper-SD at 768x1024 produce much higher quality art.
-    has_inspiration = bool(active_inspiration_paths or
-                          (active_inspiration_path and active_inspiration_path.exists()))
-    if has_inspiration and gen._ip_adapter_loaded and gen.active_model == 'sdxl-turbo':
-        w = min(w, 512)
-        h = min(h, 768)
+    clip_directives = active_deck_meta.get('clip_directives', {})
+    style_tokens = active_deck_meta.get('style_tokens', {})
 
-    # Prompt already has subject first, style preamble after --- delimiter
-    styled_prompt = full_prompt
+    # --- Subject: the single per-card prompt (art_prompts.json), used directly. ---
+    # FLUX's 256-token budget means no distillation/truncation is needed — the card
+    # prompt IS the scene. We only strip legacy bundling: the cloud-era "{style_tag}.
+    # \n\n{subject}\n\n---\n\n{prose}" format and any "Additional direction:" feedback.
+    body = full_prompt.split('\n\n---\n\n', 1)[0]
+    feedback_text = ''
+    fb_marker = 'Additional direction:'
+    fb_idx = body.find(fb_marker)
+    if fb_idx >= 0:
+        feedback_text = body[fb_idx + len(fb_marker):].strip()
+        body = body[:fb_idx].strip()
+    # Drop a leading "{style_tag}.\n\n" if this is a legacy bundled prompt.
+    secs = body.split('.\n\n', 1)
+    subject = (secs[1] if len(secs) == 2 else body).strip()
 
-    # Progress callback — updates status per inference step
+    # --- Card Back override (avoid FLUX rendering a literal physical card back) ---
+    if card_name.lower().startswith('card back'):
+        subject = ('ornate symmetrical decorative pattern, central medallion, '
+                   'intricate border filigree, repeating geometric motifs')
+
+    # --- Rendering style for FLUX (rich, uncapped) ---
+    # FLUX's T5 encoder accepts 256 tokens (~190 words) — far more than SDXL's
+    # 77-token CLIP — so we feed it the FULL distilled style description, not the
+    # 25-word `style_tags` subset that was capped for SDXL.
+    #
+    # FLUX also applies a NAMED style strongly and stays controllable (SDXL would
+    # clone the source's characters), so we LEAD with the style-source name — the
+    # single strongest signal. When a named source is present we deliberately DROP
+    # the distilled `rendering`/`tradition`/`surface`/`edges` fields: the vision
+    # model often mislabels the medium (e.g. tagging live-action film as "digital
+    # painting"), which fights the named style. We keep the accurate descriptive
+    # fields — palette, lighting/coloring, mood — for concrete detail.
+    style_source = (active_deck_meta.get('style_source') or '').strip()
+    flux_style_prompt = (active_deck_meta.get('flux_style_prompt') or '').strip()
+    st = style_tokens or {}
+
+    style_bits = []
+    if style_source:
+        style_bits.append(f"in the style of {style_source}")
+    if flux_style_prompt:
+        # Image-first descriptors (the vision model read the actual inspiration,
+        # reconciled with the named style if one was given). Works for ANY style,
+        # named or not. We use ONLY these — NOT the SDXL-era vision tokens, whose
+        # mislabeled medium and warm palette pull back toward generic fantasy.
+        style_bits.append(flux_style_prompt)
+    else:
+        # No recognized source (or no canonical descriptors yet) — use the full
+        # vision-distilled tokens so the look isn't left undefined.
+        for key, prefix in (('coloring', 'lighting and color: '), ('palette', 'color palette of '),
+                            ('mood', 'mood: '), ('tradition', ''), ('rendering', ''),
+                            ('edges', ''), ('surface', '')):
+            v = (st.get(key) or '').strip()
+            if v:
+                style_bits.append(f"{prefix}{v}")
+        if not st:
+            ct = (clip_directives.get('style_tags') or '').strip()
+            if ct:
+                style_bits.append(ct)
+
+    # --- Assemble the natural-language FLUX prompt (kept well under 256 T5 tokens) ---
+    pieces = [subject.rstrip(' .')]
+    if style_bits:
+        pieces.append("Art style: " + ", ".join(style_bits))
+    if feedback_text:
+        pieces.append(feedback_text.rstrip(' .'))
+    flux_prompt = '. '.join(p for p in pieces if p) + '.'
+    flux_prompt += ' No text, no words, no watermark, no card frame, no borders.'
+
+    # --- Progress callback — updates status per inference step ---
     def on_step(step, total):
         with generation_lock:
             s = _status.get(card_name)
@@ -1389,182 +1393,27 @@ def _generate_local(card_name, model_cfg, full_prompt, ref_path_override=None, s
                 s['total_steps'] = total
                 s['message'] = f'Step {step}/{total}...'
 
-    # Always use txt2img for maximum creative freedom — img2img anchors
-    # too strongly to the Scryfall art's rendering style and fights the
-    # inspiration style. IP-Adapter handles style through cross-attention.
+    # --- Mode: fast txt2img (default) vs faithful Canny ControlNet (toggle) ---
+    # The "Style reference" toggle (use_scryfall_ref) decides the mode:
+    #   * OFF  -> fast txt2img (~4 steps): FLUX composes from the prompt; strongest
+    #             style, no init image. Best for arting a whole deck quickly.
+    #   * ON   -> Canny ControlNet (~14 steps): locks this card's composition to the
+    #             Scryfall art's EDGES while the prompt owns the style. Slower but
+    #             keeps the original layout. We pass the raw Scryfall crop; mflux
+    #             runs Canny on it internally.
+    # NB: do NOT use img2img off the Scryfall crop — img2img preserves the crop's
+    # colours/rendering (the very style we're replacing). ControlNet keeps only the
+    # geometry, so the prompt's style fully takes over.
+    control_path = ref_path_override if (ref_path_override and model_cfg.get('supports_img2img')) else None
 
-    # Optimize prompt for CLIP's 77-token budget
-    # Full prompt: "{style_tag}.\n\n{subject}\n\n---\n\n{prose}"
-    # Strip prose after --- (local models can't use it, beyond token budget)
-    parts = styled_prompt.split('\n\n---\n\n')
-    clip_prompt = parts[0]  # style_tag + subject
-
-    # Load inspiration composite for IP-Adapter style injection.
-    # Always use the full composite — single random images can produce noise
-    # from unstable CLIP embeddings (especially small/dark images).
-    insp_pil, insp_cache_key = _get_inspiration_composite()
-
-    # When IP-Adapter is active, build a SHORT prompt optimized for 77 CLIP tokens.
-    # Everything is derived from the vision analysis + card metadata — nothing hardcoded.
-    #
-    # Structure: [creature subtype], [subject + physical traits], [art style + technique]
-    # - Creature subtype from card type_line → anchors WHAT to draw
-    # - First 2 sentences of AI subject → scene + physical traits
-    # - Art Style + Technique from vision analysis → rendering approach
-    #   (NOT source name, which causes SDXL to draw the source's characters)
-    # - IP-Adapter at 0.90 carries the visual style (color palette, linework, shading)
-    # - CFG 2.5 gives text more control over subject identity
-    # - Anti-gradient negatives push toward flat cel-shaded rendering
-    #
-    # Tuned via test_prompt.py grid iterations (Rounds 1-9).
-    ip_negative = ''
-    ip_scale_override = None
-    clip_directives = active_deck_meta.get('clip_directives', {})
-    if insp_pil is not None:
-        import re as _re
-        sections = clip_prompt.split('.\n\n', 1)
-        style_tokens = active_deck_meta.get('style_tokens', {})
-        if len(sections) == 2:
-            style_tag, subject = sections
-
-            # --- Extract user feedback before truncating subject text ---
-            # Feedback is appended as "Additional direction: ..." by
-            # generate_art_for_card(). Without extraction the CLIP rebuilder
-            # silently drops it during truncation.
-            feedback_text = ''
-            feedback_marker = 'Additional direction:'
-            fb_idx = subject.find(feedback_marker)
-            if fb_idx >= 0:
-                feedback_text = subject[fb_idx + len(feedback_marker):].strip()
-                fb_words = feedback_text.split()
-                if len(fb_words) > 20:
-                    feedback_text = ' '.join(fb_words[:20])
-                subject = subject[:fb_idx].strip()
-
-            # --- Use distilled card subject if available, else build from card data ---
-            card_subjects = active_deck_meta.get('card_subjects', {})
-            distilled = card_subjects.get(card_name, '')
-            if distilled:
-                subject_text = distilled
-                sw = subject_text.split()
-                if len(sw) > 25:
-                    subject_text = ' '.join(sw[:25])
-            else:
-                # No distilled subject — build from card metadata.
-                card_entry = next((c for c in cards_db if c['name'] == card_name), None)
-                if card_entry:
-                    tl = card_entry.get('type_line', '')
-                    subject_text = tl.replace('—', ',').strip()
-                    sw = subject_text.split()
-                    if len(sw) > 20:
-                        subject_text = ' '.join(sw[:20])
-                else:
-                    sentences = _re.split(r'(?<=[.!?])\s+', subject.strip())
-                    subject_text = ' '.join(sentences[:2]).strip()
-                    swords = subject_text.split()
-                    if len(swords) > 25:
-                        subject_text = ' '.join(swords[:25])
-
-            # --- Card Back override ---
-            # "Card Back" in CLIP makes SDXL generate a photo of the back of a
-            # physical card.  Override both card_name and subject_text to describe
-            # the decorative art we actually want.
-            _is_card_back = card_name.lower().startswith('card back')
-            if _is_card_back:
-                card_name_for_clip = 'ornate symmetrical decorative pattern'
-                subject_text = 'central medallion, intricate border filigree, repeating geometric motifs'
-            else:
-                card_name_for_clip = card_name
-
-            # --- Extract creature anchor + determine IP scale ---
-            creature_anchor = ''
-            is_creature = False
-            card_entry = next((c for c in cards_db if c['name'] == card_name), None)
-            if card_entry:
-                tl = card_entry.get('type_line', '')
-                is_creature = 'creature' in tl.lower()
-                if is_creature and ('\u2014' in tl or '—' in tl):
-                    sub_part = _re.split(r'[—\u2014]', tl, 1)[1].strip()
-                    if sub_part:
-                        creature_anchor = f"{sub_part} creature"
-
-            # --- Build minimal CLIP prompt ---
-            # CLIP has a 77-token budget.  IP-Adapter carries the visual style
-            # (palette, linework, vibe) from the reference images.  The CLIP
-            # prompt must prioritize WHAT to draw (subject) over HOW to draw it
-            # (style).  Early tokens get the most weight in CLIP, so:
-            #   1. Subject FIRST (creature type + distilled scene)
-            #   2. Card name (identity anchor)
-            #   3. Minimal style anchor LAST (just the rendering medium)
-            _person_words = {'dude', 'guy', 'man', 'woman', 'person',
-                             'figure', 'people', 'warrior', 'soldier',
-                             'knight', 'wizard', 'mage', 'king', 'queen',
-                             'elf', 'noble', 'cleric', 'druid', 'ranger',
-                             'halfling', 'guard', 'shaman', 'giant',
-                             'avatar', 'pirate', 'thief', 'assassin',
-                             'arrest', 'prisoner', 'captive'}
-            _subj_lower = subject_text.lower()
-            has_person = is_creature or any(
-                pw in _subj_lower for pw in _person_words)
-
-            # IP-Adapter scale: FULL when a character/person is depicted
-            # (creatures, humanoid spell scenes).
-            # REDUCED for pure objects/landscapes/patterns — preserves palette
-            # and linework but prevents unwanted humanoid figures.
-            from local_image_generator import IP_ADAPTER_STYLE_SCALE_REDUCED
-            if not has_person:
-                ip_scale_override = IP_ADAPTER_STYLE_SCALE_REDUCED
-
-            # Build a SHORT style anchor — IP-Adapter handles the full style,
-            # so CLIP only needs the rendering medium (e.g. "digital painting").
-            # Use tradition token (2-5 words) instead of full style_tags.
-            _tradition = style_tokens.get('tradition', '').strip()
-            if not _tradition:
-                if clip_directives and clip_directives.get('style_tags'):
-                    # Extract just the first phrase from verbose style_tags
-                    _st = clip_directives['style_tags']
-                    _tradition = _st.split(',')[0].strip()
-                else:
-                    _tradition, _ = _build_clip_directives_fallback(
-                        style_tokens, has_person)
-                    # Take only the first anchor phrase
-                    if ',' in _tradition:
-                        _tradition = _tradition.split(',')[0].strip()
-
-            # Subject-first ordering: creature anchor, subject, name, style
-            parts = []
-            if creature_anchor:
-                parts.append(creature_anchor)
-            parts.append(subject_text)
-            parts.append(card_name_for_clip)
-            if feedback_text:
-                parts.append(feedback_text)
-            if _tradition:
-                parts.append(_tradition)
-            clip_prompt = ', '.join(p for p in parts if p)
-
-        # Negative prompt: LLM-generated or hardcoded fallback.
-        if clip_directives and clip_directives.get('negative'):
-            ip_negative = clip_directives['negative']
-        else:
-            ip_negative = _build_negative_fallback(style_tokens, active_deck_meta)
-        scale_label = "reduced" if ip_scale_override else "full"
-        print(f"[local_img] CLIP prompt ({len(clip_prompt.split())} words, IP={scale_label}): {clip_prompt}")
-
-    # Pre-encode CLIP embeddings once and cache — avoids per-card CLIP ViT-H encoding.
-    ip_embeds = None
-    if insp_pil is not None:
-        ip_embeds = gen.encode_style_image(insp_pil, cache_key=insp_cache_key)
-
+    print(f"[local_img] FLUX prompt ({len(flux_prompt.split())} words): {flux_prompt}")
     with generation_lock:
-        _status[card_name]['message'] = 'Generating from text prompt...'
+        _status[card_name]['message'] = ('Generating (faithful composition, ~slower)...'
+                                         if control_path else 'Generating from text prompt...')
     return gen.generate(
-        prompt=clip_prompt,
-        negative_prompt=ip_negative,
+        prompt=flux_prompt,
         width=w, height=h,
-        style_image=insp_pil if ip_embeds is None else None,
-        ip_adapter_image_embeds=ip_embeds,
-        ip_adapter_scale=ip_scale_override,
+        control_image_path=control_path,
         progress_callback=on_step,
     )
 
@@ -2638,9 +2487,7 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
     style_source = data.get('style_source', '')
 
     bcfg = backend_config.load_config()
-    llm_backend = bcfg.get('llm_backend', 'local')
-    if llm_backend != 'local' and not openai_client and backend_config.is_ollama_running():
-        llm_backend = 'local'
+    llm_backend = 'local'  # MLX-native pipeline is always local
 
     if progress_callback:
         progress_callback('Distilling style tokens...')
@@ -2668,18 +2515,44 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         )
     data['clip_directives'] = clip_dirs
 
+    # Image-first FLUX style descriptors: the vision model reads the actual
+    # inspiration image (works for ANY style, named or not); if a source name is
+    # set, an LLM pass reconciles it with knowledge of that named style (fixing
+    # vision medium-mislabels). Cached and used by _generate_local for both modes.
+    flux_style_prompt = ''
+    insp_imgs = data.get('inspiration_images', [])
+    first_img = None
+    for img in insp_imgs:
+        cand = deck_dir / img.get('filename', '')
+        if img.get('filename') and cand.exists():
+            first_img = cand
+            break
+    if first_img is not None:
+        if progress_callback:
+            progress_callback('Building style descriptors from inspiration...')
+        from vision_analyzer import build_flux_style_descriptors
+        flux_style_prompt = build_flux_style_descriptors(
+            first_img, style_source=style_source, backend=llm_backend,
+            vision_model=bcfg.get('ollama_vision_model', 'llava:7b'),
+            text_model=bcfg.get('ollama_model', 'llama3.2:3b'))
+        if flux_style_prompt:
+            print(f"  [distill] FLUX style descriptors ({'named: '+style_source if style_source else 'image-only'}): {flux_style_prompt}")
+    data['flux_style_prompt'] = flux_style_prompt
+
     with open(deck_json_path, 'w') as f:
         json.dump(data, f, indent=2)
 
     if deck_id == active_deck_id:
         active_deck_meta['style_tokens'] = tokens
         active_deck_meta['clip_directives'] = clip_dirs
+        active_deck_meta['flux_style_prompt'] = flux_style_prompt
 
     if tokens:
         print(f"  [distill] Style tokens saved for {deck_id}: {list(tokens.keys())}")
-        _run_subject_distillation(deck_id, progress_callback=subject_progress_callback)  # Chain: re-distill subjects with new style
     else:
         print(f"  [distill] Style token distillation returned empty for {deck_id}")
+    # NB: no card-subject distillation chain — each card's single rich prompt
+    # (art_prompts.json) drives generation directly; style is applied separately.
 
 
 def _run_subject_distillation(deck_id: str, progress_callback=None, card_names=None):
@@ -2725,53 +2598,12 @@ def _run_subject_distillation(deck_id: str, progress_callback=None, card_names=N
     style_source = data.get('style_source', '')
 
     bcfg = backend_config.load_config()
-    llm_backend = bcfg.get('llm_backend', 'local')
-    if llm_backend != 'local' and not openai_client and backend_config.is_ollama_running():
-        llm_backend = 'local'
+    llm_backend = 'local'  # MLX-native pipeline is always local
 
-    # For local backend, prefer llama3.1:8b for subject distillation
-    # (better quality than 3b), then unload it to free RAM for SDXL
-    distill_model = bcfg.get('ollama_model', 'llama3.2:3b')
-    did_pull_8b = False
-    if llm_backend == 'local':
-        preferred_model = 'llama3.1:8b'
-        try:
-            import subprocess
-            result = subprocess.run(
-                ['ollama', 'list'], capture_output=True, text=True, timeout=10
-            )
-            has_8b = preferred_model in result.stdout
-            if not has_8b:
-                print(f"  [distill] Pulling {preferred_model} for higher-quality subject distillation...")
-                try:
-                    import ollama as ollama_client
-                    stream = ollama_client.pull(preferred_model, stream=True)
-                    for chunk in stream:
-                        status = getattr(chunk, 'status', '') or ''
-                        completed = getattr(chunk, 'completed', 0) or 0
-                        total = getattr(chunk, 'total', 0) or 0
-                        if total > 0:
-                            pct = completed / total * 100
-                            _ollama_pull_progress_update(
-                                preferred_model, status,
-                                completed_gb=completed / (1024**3),
-                                total_gb=total / (1024**3),
-                                pct=pct,
-                            )
-                        elif status:
-                            _ollama_pull_progress_update(preferred_model, status)
-                    _ollama_pull_progress_clear()
-                    has_8b = True
-                    did_pull_8b = True
-                    print(f"  [distill] Successfully pulled {preferred_model}")
-                except Exception as pull_err:
-                    _ollama_pull_progress_clear()
-                    print(f"  [distill] Failed to pull {preferred_model}: {pull_err}, falling back to {distill_model}")
-            if has_8b:
-                distill_model = preferred_model
-        except Exception as e:
-            _ollama_pull_progress_clear()
-            print(f"  [distill] Error checking for {preferred_model}: {e}, using {distill_model}")
+    # Prefer the 8B model for subject distillation (better quality than 3B).
+    # mlx_llm downloads it lazily from the HuggingFace hub on first use; no
+    # separate model-pull step is needed.
+    distill_model = 'llama3.1:8b'
 
     from vision_analyzer import distill_card_subjects
     print(f"  [distill] Distilling subjects for {len(art_prompts)} cards using {llm_backend}/{distill_model}")
@@ -2825,9 +2657,7 @@ def _redistill_single_card_subject(card_name: str) -> str:
         return ''
 
     bcfg = backend_config.load_config()
-    llm_backend = bcfg.get('llm_backend', 'local')
-    if llm_backend != 'local' and not openai_client:
-        llm_backend = 'local'
+    llm_backend = 'local'  # MLX-native pipeline is always local
     model = bcfg.get('ollama_model', 'llama3.2:3b')
 
     style_source = active_deck_meta.get('style_source', '') if active_deck_meta else ''
@@ -3035,21 +2865,10 @@ def upload_inspiration(deck_id):
                                'Analyzing image style...', sub_phase='api_call')
         try:
             bcfg = backend_config.load_config()
-            use_local = bcfg['llm_backend'] == 'local'
-            if not use_local and not openai_client:
-                if backend_config.is_ollama_running():
-                    use_local = True
-                    print("[inspiration] No OpenAI key — falling back to Ollama for vision analysis")
-                else:
-                    print("[inspiration] No AI backend available — skipping vision analysis")
-                    _style_progress_update('analyzing', 0, 3,
-                                          'No AI backend available. Add an OpenAI API key or enable Ollama.')
-                    time.sleep(3)
-                    return
             from vision_analyzer import analyze_inspiration_style
             desc = analyze_inspiration_style(
                 dest, openai_client,
-                backend='local' if use_local else bcfg['llm_backend'],
+                backend='local',
                 local_model=bcfg['ollama_vision_model'],
             )
             if desc:
@@ -3161,17 +2980,6 @@ def reanalyze_inspiration(deck_id):
         _style_progress_update('analyzing', 0, total_steps, 'Starting style analysis...')
         try:
             bcfg = backend_config.load_config()
-            use_local = bcfg['llm_backend'] == 'local'
-            if not use_local and not openai_client:
-                if backend_config.is_ollama_running():
-                    use_local = True
-                    print("[inspiration] No OpenAI key — falling back to Ollama for style re-analysis")
-                else:
-                    print("[inspiration] No AI backend available — skipping re-analysis")
-                    _style_progress_update('analyzing', 0, total_steps,
-                                          'No AI backend available. Add an OpenAI API key or enable Ollama.')
-                    time.sleep(3)
-                    return
             from vision_analyzer import analyze_inspiration_style
 
             with open(deck_json) as f:
@@ -3185,7 +2993,7 @@ def reanalyze_inspiration(deck_id):
                 print(f"[inspiration] Re-analyzing image {idx + 1}/{n_images}: {img_entry['filename']}")
                 desc = analyze_inspiration_style(
                     insp_path, openai_client,
-                    backend='local' if use_local else bcfg['llm_backend'],
+                    backend='local',
                     local_model=bcfg['ollama_vision_model'],
                 )
                 _style_progress_update('analyzing', step_num, total_steps,
@@ -3582,12 +3390,10 @@ def regenerate_prompts_from_inspiration(deck_id):
                                 subject = generate_subject_description(card)
                                 break
 
-                    if preamble:
-                        from prompt_generator import _split_preamble
-                        style_tag, prose = _split_preamble(preamble)
-                        prompt = f"{style_tag}.\n\n{subject}\n\n---\n\n{prose}"
-                    else:
-                        prompt = subject
+                    # Store the rich subject as the single per-card prompt. Style is
+                    # applied separately (deck-level flux_style_prompt) at generation,
+                    # so we no longer bundle a style preamble or distill it down.
+                    prompt = subject
                     new_prompts[idx] = {'name': card['name'], 'prompt': prompt}
                     with lock:
                         completed[0] += 1
@@ -3610,7 +3416,7 @@ def regenerate_prompts_from_inspiration(deck_id):
                     prog['ai_fallback'] = True
                     print(f"  [regen] AI requested but no backend available — using rule-based prompts")
                 for i, card in enumerate(cards):
-                    prompt = generate_prompt(card, preamble)
+                    prompt = generate_prompt(card, None)  # plain scene, no style preamble
                     new_prompts[i] = {'name': card['name'], 'prompt': prompt}
                     prog['step'] = i + 1
                     # Update in-memory immediately
@@ -3646,46 +3452,12 @@ def regenerate_prompts_from_inspiration(deck_id):
 
             prog['count'] = len(new_prompts)
             prog['style_preamble_preview'] = (preamble[:200] + '...') if len(preamble) > 200 else preamble
-            prog['pct'] = 50
-            prog['phase'] = 'local'
-            prog['message'] = f'Distilling local prompts for {len(new_prompts)} cards...'
             print(f"  [regen] Prompts done: {deck_id} — {len(new_prompts)} prompts")
 
-            # Re-distill local prompts from the new cloud prompts
-            distill_stats = {}
-            try:
-                regen_names = [p['name'] for p in new_prompts]
-                total_local = len(regen_names)
-
-                def on_distill_progress(batch_num, total_batches, cards_done, cards_total):
-                    # Map local distillation progress to 50-95% of overall bar
-                    local_pct = int(50 + 45 * cards_done / max(cards_total, 1))
-                    prog['pct'] = min(local_pct, 95)
-                    if cards_done < cards_total:
-                        prog['message'] = f'Local prompts: {cards_done}/{cards_total} (batch {batch_num}/{total_batches})...'
-                    else:
-                        prog['message'] = f'Local prompts: {cards_done}/{cards_total}'
-
-                print(f"  [regen] Starting local prompt distillation for {total_local} cards in {deck_id}...")
-                distill_stats = _run_subject_distillation(
-                    deck_id, card_names=regen_names,
-                    progress_callback=on_distill_progress) or {}
-                prog['pct'] = 95
-                print(f"  [regen] Local prompt distillation complete for {deck_id}")
-            except Exception as _e:
-                import traceback
-                print(f"  [regen] Subject distillation after regen failed: {_e}")
-                traceback.print_exc()
-
-            # Surface local prompt quality in the completion message
-            meta_only = distill_stats.get('metadata_only', 0)
+            # One rich prompt per card now drives generation directly — no separate
+            # subject-distillation pass (FLUX has the token budget for the full scene).
             if prog.get('ai_fallback'):
                 prog['message'] = f'Generated {len(new_prompts)} rule-based prompts (AI unavailable)'
-            elif meta_only > 0:
-                prog['message'] = (f'Regenerated {len(new_prompts)} prompts. '
-                                   f'WARNING: {meta_only} local prompts used basic metadata '
-                                   f'(LLM enhancement failed)')
-                prog['local_prompt_warning'] = meta_only
             else:
                 prog['message'] = f'Regenerated {len(new_prompts)} prompts!'
             prog['pct'] = 100
@@ -3956,35 +3728,24 @@ def clear_api_key():
 
 @app.route('/api/backend', methods=['GET'])
 def get_backend():
-    """Return the current backend configuration."""
+    """Return the current backend configuration (MLX-native, always local)."""
     cfg = backend_config.load_config()
-    status = backend_config.get_ollama_status()
+    status = backend_config.get_mlx_status()
     return jsonify({
         'config': cfg,
         'ollama_status': status,
-        'has_openai_key': openai_client is not None,
+        'has_openai_key': False,
     })
 
 
 @app.route('/api/backend', methods=['POST'])
 def set_backend():
-    """Set the backend configuration."""
+    """Update model selections. The backend is always MLX/local now."""
     data = request.json or {}
     cfg = backend_config.load_config()
 
-    if 'llm_backend' in data:
-        new_backend = data['llm_backend']
-        if new_backend not in ('openai', 'local'):
-            return jsonify({'error': 'Invalid backend. Use "openai" or "local"'}), 400
-
-        if new_backend == 'local':
-            # Activate local backend (starts Ollama, pulls models)
-            success, message = backend_config.activate_local_backend()
-            if not success:
-                return jsonify({'error': message}), 400
-            cfg['llm_backend'] = 'local'
-        else:
-            cfg['llm_backend'] = 'openai'
+    # llm_backend is fixed to 'local' (MLX); ignore any cloud switch request.
+    cfg['llm_backend'] = 'local'
 
     if 'ollama_model' in data:
         cfg['ollama_model'] = data['ollama_model']
@@ -3997,8 +3758,8 @@ def set_backend():
 
 @app.route('/api/ollama-status')
 def ollama_status():
-    """Return Ollama installation and server status."""
-    return jsonify(backend_config.get_ollama_status())
+    """Return MLX text/vision availability (legacy route name)."""
+    return jsonify(backend_config.get_mlx_status())
 
 
 @app.route('/api/local-image-status')
@@ -7461,6 +7222,8 @@ header .separator {
           title="Regenerate art prompts for selected cards">Prompts (0)</button>
   <button class="btn btn-secondary btn-sm" id="btnGenFlavor" onclick="generateFlavorText()" disabled
           title="Generate themed flavor text for selected cards">Flavor (0)</button>
+  <button class="btn btn-ghost btn-xs" id="btnCompMode" data-faithful="false" onclick="toggleCompMode()"
+          title="Composition mode. Fast: txt2img (~70s/card) — FLUX composes from the prompt, strongest style. Faithful: Canny ControlNet (~6 min/card) — keeps each card's original composition.">⚡ Fast</button>
   <button class="btn btn-gold btn-sm" id="btnGenArt" onclick="generateArt()" disabled
           title="Generate artwork for selected cards">Art (0)</button>
   <button class="btn btn-secondary btn-sm" id="btnRenderFrames" onclick="renderFrames()" disabled
@@ -7481,31 +7244,20 @@ header .separator {
   <div class="card-grid-container">
     <div id="welcomeHero" style="display:none;">
       <div class="welcome-title">Deck Art Studio</div>
-      <div class="welcome-subtitle">Generate custom AI art for every card in your Magic deck. Choose how you want to create.</div>
+      <div class="welcome-subtitle">Generate custom AI art for every card in your Magic deck &mdash; fully local on your Mac, powered by MLX.</div>
       <div class="welcome-backends">
-        <div class="welcome-card" id="welcomeCloud">
-          <div class="welcome-card-icon">&#9729;</div>
-          <div class="welcome-card-title">Cloud</div>
-          <div class="welcome-card-desc">OpenAI &middot; Best quality<br>~$0.06/card (gpt-image-1)</div>
-          <div class="welcome-card-status" id="welcomeCloudStatus" style="display:none;"></div>
-          <button class="btn btn-secondary btn-sm welcome-card-action" id="welcomeCloudBtn" onclick="toggleWelcomeSetup('cloud')">Set up</button>
-          <div class="welcome-card-setup" id="welcomeCloudSetup" style="display:none;">
-            <input type="password" id="welcomeApiKeyInput" placeholder="Paste OpenAI API key">
-            <button class="btn btn-gold btn-sm" onclick="welcomeConnectKey()">Connect</button>
-          </div>
-        </div>
-        <div class="welcome-card" id="welcomeLocal">
+        <div class="welcome-card setup-done" id="welcomeLocal">
           <div class="welcome-card-icon">&#9889;</div>
-          <div class="welcome-card-title">Local</div>
-          <div class="welcome-card-desc">SDXL + Ollama &middot; Free &amp; private<br>Apple Silicon 16GB+ RAM</div>
-          <div class="welcome-card-status" id="welcomeLocalStatus" style="display:none;"></div>
-          <button class="btn btn-secondary btn-sm welcome-card-action" id="welcomeLocalBtn" onclick="toggleWelcomeSetup('local')">Set up</button>
+          <div class="welcome-card-title">MLX-Native</div>
+          <div class="welcome-card-desc">FLUX.1 art &middot; Llama + Qwen-VL prompts<br>Free &amp; private &middot; Apple Silicon</div>
+          <div class="welcome-card-status" id="welcomeLocalStatus">&#10003; Ready</div>
+          <button class="btn btn-secondary btn-sm welcome-card-action" id="welcomeLocalBtn" onclick="toggleWelcomeSetup('local')">Check setup</button>
           <div class="welcome-card-setup" id="welcomeLocalSetup" style="display:none;">
             <div class="welcome-check-list" id="welcomeLocalChecks"></div>
           </div>
         </div>
       </div>
-      <div class="welcome-divider">&mdash; or skip setup for now &mdash;</div>
+      <div class="welcome-divider">&mdash; import a deck to begin &mdash;</div>
       <button class="btn btn-gold welcome-import-btn" onclick="openImportModal()">Import Your First Deck</button>
     </div>
     <div class="card-grid" id="cardGrid"></div>
@@ -7579,20 +7331,12 @@ header .separator {
         <div class="detail-action-area" id="detailActionArea"></div>
 
         <!-- Zone 4: Editable fields -->
-        <div class="detail-section-block" id="collapsibleSubject">
-          <div class="detail-section-header">
-            <span class="detail-section-label">Local prompt <span class="section-hint" title="Drives the NEXT local AI generation. May not match current art if art was generated with a different prompt. Edit or Regenerate to change what the next generation produces.">(?)</span></span>
-            <button class="btn btn-ghost btn-xs" onclick="regenSceneDirection()" title="Generate a fresh local prompt via LLM">Regenerate</button>
-          </div>
-          <textarea id="detailSubject" rows="3" placeholder="e.g. a faerie soaring above a moonlit forest"></textarea>
-        </div>
-
         <div class="detail-section-block" id="collapsiblePrompt">
           <div class="detail-section-header">
-            <span class="detail-section-label">Cloud prompt <span class="section-hint" title="Full prompt for GPT-image-1 and DALL-E. Not used by local models (SDXL).">(?)</span></span>
-            <button class="btn btn-ghost btn-xs" id="btnRegenPromptSingle" onclick="regeneratePromptForCard()" title="Regenerate cloud prompt">Regenerate</button>
+            <span class="detail-section-label">Prompt <span class="section-hint" title="The scene this card depicts — it drives the NEXT generation. The deck's style is applied automatically on top, so describe only WHAT to depict. Edit or Regenerate to change the result.">(?)</span></span>
+            <button class="btn btn-ghost btn-xs" id="btnRegenPromptSingle" onclick="regeneratePromptForCard()" title="Generate a fresh scene prompt via the local LLM">Regenerate</button>
           </div>
-          <textarea id="detailPrompt" rows="6" placeholder="Cloud prompt will appear here after generation..."></textarea>
+          <textarea id="detailPrompt" rows="6" placeholder="e.g. a faerie soaring above a moonlit forest"></textarea>
         </div>
 
         <div class="detail-section-block" id="collapsibleFlavor">
@@ -7787,6 +7531,23 @@ function escapeHtml(str) {
   return d.innerHTML;
 }
 
+// Extract the plain scene from a prompt that may still be in the legacy cloud
+// bundled format ("{style_tag}.\n\n{scene}\n\n---\n\n{prose}"). New prompts are
+// already plain scenes, so this is a no-op for them. Keeps the single Prompt
+// field clean for decks generated before the prompt pipeline was collapsed.
+function cleanScenePrompt(p) {
+  if (!p) return '';
+  let body = p.split('\n\n---\n\n')[0];          // drop cloud-only prose
+  const fb = body.indexOf('Additional direction:');
+  if (fb >= 0) body = body.slice(0, fb).trim();
+  const secs = body.split('.\n\n');
+  // If the head looks like a style tag (Source:/Art Style:), keep the scene part.
+  if (secs.length > 1 && /^(Source:|Art Style:)/i.test(secs[0].trim())) {
+    return secs.slice(1).join('.\n\n').trim();
+  }
+  return body.trim();
+}
+
 let allCards = [];
 let selectedCard = null;
 let lastSelectedStatus = null;  // tracks status transitions for selected card
@@ -7913,6 +7674,7 @@ async function init() {
 
   // Load mode handles: backend state, model config, dropdown, ref toggle, cost
   await loadMode();
+  initCompMode();  // sync the action-bar composition-mode toggle
 
   renderGrid();  // also calls syncPinnedCards()
   updateFilterIndicator();  // restore indicator if browser autofilled filters
@@ -7950,32 +7712,8 @@ async function init() {
     }
   });
 
-  // ── Auto-save scene direction (distilled subject) on blur ──
-  document.getElementById('detailSubject').addEventListener('blur', async (e) => {
-    if (!selectedCard) return;
-    const newSubject = e.target.value.trim();
-    const card = allCards.find(c => c.name === selectedCard);
-    if (card && card.distilled_subject === newSubject) return;
-    try {
-      const deckId = document.getElementById('deckSelect').value;
-      const resp = await fetch(`/api/decks/${deckId}/card-subject`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ card_name: selectedCard, subject: newSubject }),
-      });
-      const data = await resp.json();
-      if (data.success) {
-        if (card) {
-          card.distilled_subject = newSubject;
-          if (card.has_ai_art) card.prompt_stale = true;
-          updateDetailPanel(card);
-        }
-        showToast('Local prompt saved', 'success');
-      }
-    } catch (err) {
-      console.error('Failed to save local prompt:', err);
-    }
-  });
+  // (The separate "scene direction" field was merged into the single Prompt
+  // field above; its art_prompts.json blur-save handler lives just above.)
 
   // ── Auto-save flavor text on blur ──
   document.getElementById('detailFlavorEdit').addEventListener('blur', async (e) => {
@@ -8554,6 +8292,40 @@ async function toggleScryfallRef(checkbox) {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({enabled}),
   });
+  setCompModeUI(enabled);  // keep the action-bar toggle in sync
+}
+
+// Composition mode toggle (action bar): Fast txt2img <-> Faithful ControlNet.
+function setCompModeUI(faithful) {
+  const btn = document.getElementById('btnCompMode');
+  if (btn) {
+    btn.dataset.faithful = faithful ? 'true' : 'false';
+    btn.textContent = faithful ? '🔒 Faithful' : '⚡ Fast';
+    btn.classList.toggle('btn-gold', faithful);
+    btn.classList.toggle('btn-ghost', !faithful);
+  }
+  const hub = document.getElementById('hubRefToggle');
+  if (hub) hub.checked = faithful;
+}
+
+async function toggleCompMode() {
+  const btn = document.getElementById('btnCompMode');
+  const faithful = !(btn && btn.dataset.faithful === 'true');
+  await fetch('/api/scryfall-ref', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({enabled: faithful}),
+  });
+  setCompModeUI(faithful);
+  showToast(faithful ? 'Faithful mode: keeps composition (ControlNet, ~6 min/card)'
+                     : 'Fast mode: txt2img (~70s/card)', 'success');
+}
+
+async function initCompMode() {
+  try {
+    const r = await (await fetch('/api/scryfall-ref')).json();
+    setCompModeUI(!!r.enabled);
+  } catch (e) { /* default Fast */ }
 }
 
 
@@ -9212,7 +8984,7 @@ function updateDetailPanel(card) {
   // Only update prompt textarea if user isn't actively editing it
   const promptEl = document.getElementById('detailPrompt');
   if (document.activeElement !== promptEl) {
-    promptEl.value = card.prompt;
+    promptEl.value = cleanScenePrompt(card.prompt);
   }
 
   // Populate scene direction (distilled subject)
@@ -9395,8 +9167,8 @@ function populateModelDropdown() {
   // Restore previous selection or pick default
   if (prevValue && sel.querySelector('option[value="' + prevValue + '"]')) {
     sel.value = prevValue;
-  } else if (sel.querySelector('option[value="gpt-image-1-medium"]')) {
-    sel.value = 'gpt-image-1-medium';
+  } else if (sel.querySelector('option[value="local-flux-schnell"]')) {
+    sel.value = 'local-flux-schnell';
   } else {
     sel.value = sel.options[0]?.value || '';
   }
@@ -11589,120 +11361,46 @@ function showWelcomeIfNeeded() {
 }
 
 async function refreshWelcomeStatus() {
+  // MLX-native: the local backend is always available on Apple Silicon once
+  // mflux is installed. No cloud/API-key path remains.
   try {
-    const [backendResp, modelResp] = await Promise.all([
-      fetch('/api/backend'), fetch('/api/model-config')
-    ]);
-    const backend = await backendResp.json();
-    const models = await modelResp.json();
-
-    // Cloud status
-    const cloudStatus = document.getElementById('welcomeCloudStatus');
-    const cloudBtn = document.getElementById('welcomeCloudBtn');
-    const cloudCard = document.getElementById('welcomeCloud');
-    if (backend.has_openai_key) {
-      cloudStatus.innerHTML = '&#10003; Connected';
-      cloudStatus.style.display = '';
-      cloudBtn.style.display = 'none';
-      document.getElementById('welcomeCloudSetup').style.display = 'none';
-      cloudCard.classList.add('setup-done');
-    }
-
-    // Local status
+    const local = await (await fetch('/api/local-image-status')).json();
     const localStatus = document.getElementById('welcomeLocalStatus');
-    const localBtn = document.getElementById('welcomeLocalBtn');
-    const localCard = document.getElementById('welcomeLocal');
-    const hasDiffusers = !Object.values(models.options).some(o => o.is_local && o.disabled);
-    const ollamaOk = backend.ollama_status && backend.ollama_status.installed;
-    if (hasDiffusers && ollamaOk) {
-      localStatus.innerHTML = '&#10003; Ready';
+    if (localStatus) {
+      localStatus.innerHTML = local.available ? '&#10003; Ready' : 'mflux not installed';
       localStatus.style.display = '';
-      localBtn.style.display = 'none';
-      document.getElementById('welcomeLocalSetup').style.display = 'none';
-      localCard.classList.add('setup-done');
     }
-
-    // Update cached state for setup bar
-    _setupBarState.hasApiKey = backend.has_openai_key;
-    _setupBarState.hasLocalDeps = hasDiffusers;
-
+    _setupBarState.hasApiKey = false;
+    _setupBarState.hasLocalDeps = !!local.available;
   } catch(e) { /* silent */ }
 }
 
 function toggleWelcomeSetup(backend) {
-  const cloudSetup = document.getElementById('welcomeCloudSetup');
   const localSetup = document.getElementById('welcomeLocalSetup');
-
-  if (backend === 'cloud') {
-    const showing = cloudSetup.style.display !== 'none';
-    cloudSetup.style.display = showing ? 'none' : '';
-    localSetup.style.display = 'none';
-    if (!showing) document.getElementById('welcomeApiKeyInput').focus();
-  } else {
-    const showing = localSetup.style.display !== 'none';
-    localSetup.style.display = showing ? 'none' : '';
-    cloudSetup.style.display = 'none';
-    if (!showing) refreshLocalChecklist();
-  }
-}
-
-async function welcomeConnectKey() {
-  const input = document.getElementById('welcomeApiKeyInput');
-  const key = input.value.trim();
-  if (!key) return;
-  try {
-    const resp = await fetch('/api/set-key', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({key})
-    });
-    const data = await resp.json();
-    if (data.success) {
-      showToast('API key connected', 'success');
-      refreshWelcomeStatus();
-      updateSetupBar();
-    } else {
-      showToast(data.error || 'Invalid API key', 'error');
-    }
-  } catch(e) {
-    showToast('Connection error: ' + e.message, 'error');
-  }
+  if (!localSetup) return;
+  const showing = localSetup.style.display !== 'none';
+  localSetup.style.display = showing ? 'none' : '';
+  if (!showing) refreshLocalChecklist();
 }
 
 async function refreshLocalChecklist() {
   const container = document.getElementById('welcomeLocalChecks');
+  if (!container) return;
   container.innerHTML = '<span style="color:var(--text-muted)">Checking...</span>';
   try {
-    const [backendResp, localResp] = await Promise.all([
-      fetch('/api/backend'), fetch('/api/local-image-status')
-    ]);
-    const backend = await backendResp.json();
-    const local = await localResp.json();
-
-    const checks = [
-      { label: 'torch', ok: local.dependencies_installed },
-      { label: 'diffusers', ok: local.dependencies_installed },
-      { label: 'Ollama installed', ok: backend.ollama_status?.installed },
-      { label: 'Ollama running', ok: backend.ollama_status?.running },
-    ];
-
+    const local = await (await fetch('/api/local-image-status')).json();
+    const checks = [ { label: 'mflux (MLX) installed', ok: !!local.available } ];
     container.innerHTML = checks.map(c =>
       `<div class="welcome-check-item">
         <span class="${c.ok ? 'check-ok' : 'check-missing'}">${c.ok ? '&#10003;' : '&#9675;'}</span>
         <span>${escapeHtml(c.label)}</span>
       </div>`
     ).join('');
-
-    const allOk = checks.every(c => c.ok);
-    if (allOk) {
-      container.innerHTML += '<div style="margin-top:6px;color:var(--success);font-size:0.9em;font-weight:600;">All prerequisites met!</div>';
-    } else if (!local.dependencies_installed) {
+    if (local.available) {
+      container.innerHTML += '<div style="margin-top:6px;color:var(--success);font-size:0.9em;font-weight:600;">Ready to generate! Open the model picker to load FLUX.</div>';
+    } else {
       container.innerHTML += `<div style="margin-top:6px;font-size:0.85em;color:var(--text-muted);">
-        Run: <code style="color:var(--gold);">pip install torch torchvision diffusers transformers accelerate peft</code>
-      </div>`;
-    }
-    if (!backend.ollama_status?.installed) {
-      container.innerHTML += `<div style="margin-top:4px;font-size:0.85em;color:var(--text-muted);">
-        Install Ollama: <code style="color:var(--gold);">brew install ollama</code>
+        Run: <code style="color:var(--gold);">pip install -r requirements-mac.txt</code>
       </div>`;
     }
   } catch(e) {
@@ -11759,7 +11457,7 @@ async function openModelHub() {
         } else if (cached) {
           statusHtml = '<span class="dot dot-green"></span> <span style="color:var(--success)">Downloaded</span>';
         } else {
-          statusHtml = '<span class="dot dot-dim"></span> <span>Not cached (~5GB)</span>';
+          statusHtml = '<span class="dot dot-dim"></span> <span>Not cached (~7GB)</span>';
         }
       }
 
@@ -11777,7 +11475,7 @@ async function openModelHub() {
 
       // Capabilities
       const caps = [];
-      if (m.supports_ref_image || m.supports_img2img) caps.push('img2img');
+      if (m.supports_ref_image || m.supports_img2img) caps.push('ControlNet');
       const size = m.size || '';
       const memMatch = m.label?.match(/(\\d+GB)/);
       const mem = memMatch ? memMatch[1] + ' VRAM' : '';
@@ -11794,56 +11492,19 @@ async function openModelHub() {
       </div>`;
     }
 
-    // Cloud section with inline API key management
-    let apiKeyHtml;
-    if (backend.has_openai_key) {
-      apiKeyHtml = `<div class="model-hub-apikey connected">
-        <span class="api-status connected">API Key Connected</span>
-        <button class="model-hub-change-key" onclick="document.getElementById('hubKeyChangeRow').style.display='flex';this.style.display='none';">Change</button>
-        <button class="model-hub-change-key" onclick="clearApiKeyFromHub()">Remove</button>
-        <div id="hubKeyChangeRow" class="model-hub-key-row" style="display:none;flex:1;">
-          <input type="password" class="model-hub-key-input" id="hubApiKeyInput" placeholder="New API key">
-          <button class="btn btn-sm btn-secondary" onclick="setApiKeyFromHub()">Update</button>
-        </div>
-      </div>`;
-    } else {
-      apiKeyHtml = `<div class="model-hub-apikey">
-        <div class="model-hub-key-row">
-          <input type="password" class="model-hub-key-input" id="hubApiKeyInput" placeholder="OpenAI API key">
-          <button class="btn btn-sm btn-gold" onclick="setApiKeyFromHub()">Connect</button>
-        </div>
-      </div>`;
-    }
-
+    // MLX-native, local only — no cloud backend / API key.
     let html = `<div class="model-hub-section">
       <div class="model-hub-header">
-        <h3>Cloud (OpenAI)</h3>
-      </div>
-      ${apiKeyHtml}
-      <div class="model-hub-grid">${cloud.map(m => renderModelCard(m, false)).join('')}</div>
-    </div>`;
-
-    // Local section
-    html += `<div class="model-hub-section">
-      <div class="model-hub-header">
-        <h3>Local (Stable Diffusion)</h3>
-        <span style="font-size:0.72em;color:var(--text-muted);">Apple Silicon recommended</span>
+        <h3>FLUX (MLX)</h3>
+        <span style="font-size:0.72em;color:var(--text-muted);">Apple Silicon &middot; local &amp; free</span>
       </div>
       <div class="model-hub-grid">${loc.map(m => renderModelCard(m, true)).join('')}</div>`;
 
     // Prerequisites
-    const depsInstalled = local.dependencies_installed;
-    const ollamaInstalled = backend.ollama_status?.installed;
-    const ollamaRunning = backend.ollama_status?.running;
-    const ollamaModels = backend.ollama_status?.models || [];
-    const neededModels = backend.ollama_status?.needed_models || ['llama3.2:3b', 'llava:7b'];
+    const depsInstalled = local.available;
     const prereqs = [
-      { label: 'torch / diffusers', ok: depsInstalled },
-      { label: 'Ollama installed', ok: ollamaInstalled },
+      { label: 'mflux (MLX) installed', ok: depsInstalled, hint: 'pip install -r requirements-mac.txt' },
     ];
-    neededModels.forEach(m => {
-      prereqs.push({ label: m, ok: ollamaModels.includes(m), hint: 'will auto-pull' });
-    });
 
     html += `<div class="model-prereqs">
       <h4>Prerequisites</h4>
@@ -11859,10 +11520,10 @@ async function openModelHub() {
 
     // Generation Options — ref toggle
     const isLocal = modelConfig && modelConfig.options[modelConfig.active]?.is_local;
-    const refLabel = isLocal ? 'Style reference' : 'Scryfall reference';
-    const refHint = isLocal
-      ? 'Use inspiration image as img2img style reference during generation'
-      : 'Use original Scryfall card art as an additional reference during generation';
+    const refLabel = 'Lock composition (ControlNet, slower)';
+    const refHint = "ON: keep each card's original composition via Canny ControlNet "
+      + "(~14 steps, ~6 min/card). OFF: fast txt2img (~4 steps, ~70s) — FLUX composes "
+      + "from the prompt, strongest style.";
     const refChecked = modelConfig?.use_scryfall_ref !== false ? 'checked' : '';
     html += `<div class="model-hub-gen-options">
       <h4>Generation Options</h4>
@@ -12001,33 +11662,25 @@ if __name__ == '__main__':
         active_model_key = _saved_model
         print(f"Restored active model: {active_model_key}")
 
-    # Start Ollama if local backend is configured
-    if _bcfg['llm_backend'] == 'local':
-        if backend_config.check_ollama_installed():
-            if backend_config.ensure_ollama_running():
-                backend_config.ensure_models_pulled([
-                    _bcfg['ollama_model'],
-                    _bcfg['ollama_vision_model'],
-                ])
-        else:
-            print("[backend] Ollama not installed — local backend unavailable")
-            print("[backend] Install with: brew install ollama")
+    # MLX text/vision models (mlx-lm, mlx-vlm) download lazily from the
+    # HuggingFace hub on first use — no startup pull needed.
 
-    # Auto-load local image model if the persisted model is local, or if autoload is set
+    # Auto-load the FLUX image model only if explicitly requested. Loading FLUX
+    # is heavy (first run downloads several GB), so default to load-on-demand
+    # from the UI rather than blocking every server start.
     _autoload_model = None
-    if active_model_key.startswith('local-'):
-        _autoload_model = MODEL_OPTIONS[active_model_key]['model']
-    elif _bcfg.get('local_image_autoload'):
-        _autoload_model = _bcfg.get('local_image_model', 'sdxl-turbo')
+    if _bcfg.get('local_image_autoload'):
+        _autoload_model = MODEL_OPTIONS.get(active_model_key, {}).get('model') \
+            or _bcfg.get('local_image_model', DEFAULT_MODEL_KEY)
 
     if _autoload_model:
         if backend_config.check_diffusers_installed():
-            print(f"[backend] Auto-loading local image model: {_autoload_model}")
+            print(f"[backend] Auto-loading FLUX image model: {_autoload_model}")
             success, msg = backend_config.activate_local_image_model(_autoload_model)
             print(f"[backend] {msg}")
         else:
-            print("[backend] Diffusers not installed — local image generation unavailable")
-            print("[backend] Install with: pip install torch diffusers transformers accelerate peft")
+            print("[backend] mflux (MLX) not installed — image generation unavailable")
+            print("[backend] Install with: pip install -r requirements-mac.txt")
 
     # Load active deck (or first available)
     registry = _load_deck_registry()
@@ -12104,10 +11757,7 @@ if __name__ == '__main__':
     print(f"  Deck Art Studio")
     print(f"  Active deck: {active_deck_id or '(none)'}")
     print(f"  Open http://{args.host}:{args.port} in your browser")
-    if openai_client:
-        print(f"  API key: loaded from .api_key")
-    else:
-        print(f"  API key: not set — enter in web UI")
+    print(f"  Backend: MLX-native (mflux FLUX + mlx-lm + mlx-vlm), Apple Silicon")
     print(f"{'='*60}\n")
 
     # Prevent debug mode when exposed on the network (debug enables code execution)
