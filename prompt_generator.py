@@ -460,6 +460,9 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         "Given an MTG card and a reference description, rewrite it into a more "
         "creative and evocative 2-3 sentence scene. Keep the same subject and "
         "focal point — enhance the imagery, don't change what's being depicted. "
+        "Be inventive and VARY it each time: choose a fresh setting, camera angle, "
+        "distance, time of day, weather, and composition so re-rolls feel distinct "
+        "rather than repeating the same scene. "
         "Do NOT include any style directions — just describe the subject matter."
     )
     if style_hint:
@@ -522,7 +525,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             ],
             model=local_model,
             max_tokens=200,
-            temperature=0.8,
+            temperature=0.95,  # varied between re-rolls without going incoherent
         )
     except Exception as e:
         print(f"  [prompt_gen] AI failed for {name}: {e}, using rule-based")

@@ -30,6 +30,7 @@ Dependencies (Mac only): pip install -r requirements-mac.txt
 """
 
 import gc
+import random
 import threading
 from typing import Optional
 
@@ -332,7 +333,10 @@ class LocalImageGenerator:
                 cs = float(controlnet_strength if controlnet_strength is not None
                            else CONTROLNET_DEFAULT_STRENGTH)
                 if seed is None:
-                    seed = abs(hash((prompt, w, h, n_steps, "cn"))) % (2**31)
+                    # Fresh random seed every call so re-rolling the same prompt
+                    # produces a genuinely different image (the seed is recorded in
+                    # the .meta.json for that version).
+                    seed = random.randint(0, 2**31 - 1)
                 self._register_progress(self._controlnet, progress_callback, n_steps)
                 print(f"[flux] controlnet(canny, strength={cs}) {w}x{h}, steps={n_steps}: {prompt[:80]}")
                 start = time.time()
@@ -355,7 +359,9 @@ class LocalImageGenerator:
                     raise RuntimeError(f"No FLUX model loaded: {msg}")
             n_steps = int(steps or cfg.get("default_steps", 4))
             if seed is None:
-                seed = abs(hash((prompt, w, h, n_steps))) % (2**31)
+                # Fresh random seed every call (see controlnet path above) so
+                # re-rolls vary even with an unchanged prompt.
+                seed = random.randint(0, 2**31 - 1)
             self._register_progress(self._flux, progress_callback, n_steps)
             print(f"[flux] txt2img {w}x{h}, steps={n_steps}: {prompt[:90]}")
             start = time.time()
