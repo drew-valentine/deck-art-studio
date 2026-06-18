@@ -7350,7 +7350,7 @@ header .separator {
         </div>
 
         <div id="staleArtBanner" style="display:none;padding:6px 10px;background:rgba(240,192,64,0.12);border:1px solid rgba(240,192,64,0.3);border-radius:6px;font-size:0.75em;color:var(--gold);margin-bottom:6px;">
-          Prompt updated since this art was generated — re-roll or regenerate to apply
+          Prompt changed since this art was generated — click Render Art to apply it
         </div>
 
         <!-- Zone 3: Smart Action Area (populated by JS state machine) -->
@@ -7359,7 +7359,7 @@ header .separator {
         <!-- Zone 4: Editable fields -->
         <div class="detail-section-block" id="collapsiblePrompt">
           <div class="detail-section-header">
-            <span class="detail-section-label">Prompt <span class="section-hint" title="The scene this card depicts — it drives the NEXT generation. The deck's style is applied automatically on top, so describe only WHAT to depict. Edit or Regenerate to change the result.">(?)</span></span>
+            <span class="detail-section-label">Prompt <span class="section-hint" title="The scene this card depicts — it drives the NEXT generation. The deck's style is applied automatically on top, so describe only WHAT to depict. Edit it directly, or use Generate Random / Steer & Render to change it.">(?)</span></span>
             <button class="btn btn-ghost btn-xs" id="btnRegenPromptSingle" onclick="regeneratePromptForCard()" title="Write a brand-new random scene prompt (no steer). Doesn't render — edit it, then Render Art.">Generate Random</button>
           </div>
           <textarea id="detailPrompt" rows="6" placeholder="e.g. a faerie soaring above a moonlit forest"></textarea>
@@ -8988,7 +8988,7 @@ function renderActionArea(card) {
       <div class="detail-feedback-row">
         <input type="text" id="detailFeedback" class="detail-feedback-input"
                placeholder="Steer a new prompt (e.g. at night, underwater, more whimsical)…"
-               title="Regenerate rewrites the prompt in this direction, then renders it. Leave blank for a fresh, undirected take.">
+               title="Steer & Render rewrites the prompt in this direction, then renders it. Leave blank for a fresh, undirected take.">
         <button class="btn btn-gold" id="btnRegenerateCurrent"
                 onclick="regenerateCurrent(this)"
                 title="Rewrite the prompt (steered by the text on the left), then render it. Blank steer = a fresh directed take.">Steer &amp; Render</button>
@@ -11207,7 +11207,7 @@ async function regeneratePrompts() {
       showToast('AI backend unavailable — used rule-based prompts.', 'warning');
     }
     if (result.local_prompt_warning) {
-      showToast(`${result.local_prompt_warning} cards got basic local prompts (LLM enhancement failed). Try Regenerate on individual cards.`, 'warning');
+      showToast(`${result.local_prompt_warning} cards got basic prompts (LLM enhancement failed). Try Generate Random on individual cards.`, 'warning');
     }
 
     // Reload cards to get new prompts
