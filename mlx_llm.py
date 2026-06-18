@@ -37,8 +37,10 @@ DEFAULT_TEXT_MODEL = "mlx-community/Llama-3.2-3B-Instruct-4bit"
 DEFAULT_VISION_MODEL = "mlx-community/Qwen2.5-VL-7B-Instruct-4bit"
 
 _lock = threading.RLock()
-# Single resident model: {"id": str, "kind": "text"|"vision", "model", "aux"}
-_resident = None
+# The text/vision models run in a SUBPROCESS (mlx_worker.py), not here — see
+# mlx_worker.py for why (repeated in-process model swaps fragment the Metal heap
+# and OOM-kill Flask). `_proc` is the live worker, or None.
+_proc = None
 
 
 def is_available() -> bool:
@@ -68,35 +70,49 @@ def resolve_vision_model(name: str | None) -> str:
 
 
 def unload():
-    """Free the resident MLX model and clear the Metal cache.
+    """Terminate the MLX worker subprocess — the OS reclaims its full memory.
 
-    Safe to call when nothing is loaded. Called before loading FLUX so the
-    image transformer has the full memory budget.
+    This is the eviction primitive: like the FLUX worker, killing the process
+    guarantees the text/vision models' GPU/wired memory is fully returned (no
+    fragmentation residue). Called (a) before FLUX loads, and (b) by
+    deck_studio's _ollama_work_done when a work session ends — so each style
+    analysis runs in a FRESH worker process and never inherits the heap
+    fragmentation that previously OOM-killed the 2nd analysis. Safe when nothing
+    is running.
     """
-    global _resident
+    global _proc
     with _lock:
-        if _resident is None:
+        if _proc is None:
             return
-        kind = _resident.get("kind")
-        mid = _resident.get("id")
-        _resident = None
-        import gc
-        gc.collect()
+        proc = _proc
+        _proc = None
+        import json as _json
         try:
-            import mlx.core as mx
-            mx.clear_cache()
+            proc.stdin.write(_json.dumps({"cmd": "shutdown"}) + "\n")
+            proc.stdin.flush()
         except Exception:
             pass
-        print(f"[mlx] Unloaded {kind} model {mid}")
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        print("[mlx] Terminated MLX worker (memory reclaimed by OS)")
 
 
 def _free_image_model():
-    """Evict the resident FLUX image model before loading an LLM/VLM.
+    """Evict the FLUX worker before loading the text/vision worker.
 
-    Single-resident is symmetric on an 18 GB machine: loading FLUX unloads the
-    text/vision model (see local_image_generator), and loading text/vision must
-    unload FLUX — otherwise a preloaded FLUX (~12 GB) plus an LLM/VLM (~5 GB) would
-    co-reside and OOM. Lazy import avoids a circular dependency.
+    Single-resident is symmetric: the FLUX worker (~13 GB) and this MLX worker
+    (~5 GB) cannot co-reside on an 18 GB machine, so we kill FLUX first. Killing
+    its process fully reclaims the GPU memory. Lazy import avoids a circular
+    dependency.
     """
     try:
         import local_image_generator
@@ -105,69 +121,92 @@ def _free_image_model():
         pass
 
 
-def _ensure_text(model_id: str):
-    """Load (and cache) an mlx-lm text model, unloading any other resident model."""
-    global _resident
-    if _resident and _resident["kind"] == "text" and _resident["id"] == model_id:
-        return _resident["model"], _resident["aux"]
-    unload()
-    _free_image_model()
-    from mlx_lm import load
-    print(f"[mlx] Loading text model {model_id} ...")
-    model, tokenizer = load(model_id)
-    _resident = {"id": model_id, "kind": "text", "model": model, "aux": tokenizer}
-    return model, tokenizer
+def _worker_alive():
+    return _proc is not None and _proc.poll() is None
 
 
-def _ensure_vision(model_id: str):
-    """Load (and cache) an mlx-vlm model, unloading any other resident model."""
-    global _resident
-    if _resident and _resident["kind"] == "vision" and _resident["id"] == model_id:
-        return _resident["model"], _resident["aux"]
-    unload()
+def _ensure_worker():
+    """Spawn the MLX worker subprocess (idempotent). Caller holds _lock."""
+    global _proc
+    if _worker_alive():
+        return
+    import os
+    import subprocess
+    import sys
+    # The MLX worker is about to wire ~5 GB; evict the FLUX worker (~13 GB) first
+    # so they don't co-reside and OOM.
     _free_image_model()
-    from mlx_vlm import load
-    print(f"[mlx] Loading vision model {model_id} ...")
-    model, processor = load(model_id)
-    _resident = {"id": model_id, "kind": "vision", "model": model, "aux": processor}
-    return model, processor
+    here = os.path.dirname(os.path.abspath(__file__))
+    _proc = subprocess.Popen(
+        [sys.executable, "-u", os.path.join(here, "mlx_worker.py")],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=None,  # worker logs flow to the Flask log
+        text=True, bufsize=1, cwd=here, env=dict(os.environ),
+    )
+    print(f"[mlx] Spawned MLX worker subprocess (pid {_proc.pid})")
+
+
+def _request(req: dict) -> str:
+    """Send one request to the worker and return its text reply.
+
+    Raises RuntimeError if the worker errors or dies. Resets the worker on death
+    so the next call respawns a fresh process.
+    """
+    global _proc
+    import json as _json
+    import mlx_worker
+    sentinel = mlx_worker.SENTINEL
+    with _lock:
+        _ensure_worker()
+        try:
+            _proc.stdin.write(_json.dumps(req) + "\n")
+            _proc.stdin.flush()
+        except Exception as e:
+            _proc = None
+            raise RuntimeError(f"MLX worker write failed: {e}")
+        while True:
+            line = _proc.stdout.readline()
+            if line == "":
+                code = _proc.poll()
+                _proc = None
+                raise RuntimeError(f"MLX worker exited unexpectedly (code {code})")
+            line = line.rstrip("\n")
+            if not line.startswith(sentinel):
+                if line.strip():
+                    print(line)  # library noise -> Flask log
+                continue
+            try:
+                msg = _json.loads(line[len(sentinel):].strip())
+            except Exception:
+                continue
+            if msg.get("error"):
+                raise RuntimeError(f"MLX worker error: {msg['error']}")
+            return (msg.get("text") or "").strip()
 
 
 def chat(messages: list[dict], model: str | None = None,
          max_tokens: int = 512, temperature: float = 0.7) -> str:
-    """Run a chat completion with an MLX text model. Returns the reply string.
+    """Run a chat completion with an MLX text model (in the worker subprocess).
 
     `messages` is the OpenAI/ollama-style list of {role, content} dicts.
     `model` accepts an ollama name (mapped) or an MLX repo id.
     """
-    model_id = resolve_text_model(model)
-    with _lock:
-        mdl, tok = _ensure_text(model_id)
-        from mlx_lm import generate
-        from mlx_lm.sample_utils import make_sampler
-        prompt = tok.apply_chat_template(messages, add_generation_prompt=True)
-        sampler = make_sampler(temp=float(temperature))
-        text = generate(mdl, tok, prompt, max_tokens=max_tokens,
-                        sampler=sampler, verbose=False)
-    return (text or "").strip()
+    return _request({
+        "cmd": "chat", "messages": messages,
+        "model": resolve_text_model(model),
+        "max_tokens": int(max_tokens), "temperature": float(temperature),
+    })
 
 
 def vision(image_path: str, prompt: str, model: str | None = None,
            max_tokens: int = 400, temperature: float = 0.7) -> str:
-    """Analyze an image with an MLX vision-language model. Returns the reply.
+    """Analyze an image with an MLX vision-language model (in the worker subprocess).
 
     Qwen2.5-VL (via PIL) handles PNG/JPG/WebP natively — no format conversion
     needed (unlike the old llava path).
     """
-    model_id = resolve_vision_model(model)
-    with _lock:
-        mdl, processor = _ensure_vision(model_id)
-        from mlx_vlm import generate
-        from mlx_vlm.prompt_utils import apply_chat_template
-        formatted = apply_chat_template(processor, mdl.config, prompt, num_images=1)
-        result = generate(mdl, processor, formatted, image=[str(image_path)],
-                          max_tokens=max_tokens, temperature=float(temperature),
-                          verbose=False)
-    # mlx-vlm returns a GenerationResult; older/newer variants may return str.
-    text = getattr(result, "text", result)
-    return (text or "").strip()
+    return _request({
+        "cmd": "vision", "image_path": str(image_path), "prompt": prompt,
+        "model": resolve_vision_model(model),
+        "max_tokens": int(max_tokens), "temperature": float(temperature),
+    })

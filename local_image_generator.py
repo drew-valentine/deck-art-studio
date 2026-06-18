@@ -30,9 +30,126 @@ Dependencies (Mac only): pip install -r requirements-mac.txt
 """
 
 import gc
+import json
 import random
 import threading
 from typing import Optional
+
+
+def _phys_footprint_gb():
+    """This process's current physical memory footprint in GB, or None.
+
+    Uses macOS `footprint`, which (unlike `ps` RSS) counts MLX's Metal/unified
+    memory. Reads `phys_footprint:` (current), NOT `phys_footprint_peak:`.
+    """
+    import os
+    import subprocess
+    try:
+        out = subprocess.run(["footprint", str(os.getpid())],
+                             capture_output=True, text=True, timeout=5).stdout
+        for line in out.splitlines():
+            s = line.strip().lower()
+            if s.startswith("phys_footprint:"):
+                # The unit VARIES by magnitude: "13 GB" / "645 MB" / "9632 KB".
+                # Must handle all of them — treating KB as MB (the earlier bug)
+                # under-reported by 1000x and made the settle a silent no-op.
+                parts = line.split(":", 1)[1].strip().split()
+                num = float(parts[0])
+                unit = (parts[1].upper() if len(parts) > 1 else "B")
+                factor = {"B": 1 / 1024**3, "KB": 1 / 1024**2,
+                          "MB": 1 / 1024, "GB": 1.0, "TB": 1024.0}.get(unit, 1 / 1024)
+                return num * factor
+    except Exception:
+        pass
+    return None
+
+
+def free_mlx_memory(settle_below_gb=None, timeout=8.0):
+    """Aggressively return freed MLX/Metal buffers to the OS.
+
+    A plain ``del model; gc.collect(); mx.clear_cache()`` is NOT enough on an
+    18 GB machine: when we evict one heavy model to load the next, the old
+    model's Metal buffers can linger in the allocator's cache pool while the
+    new model starts allocating — a transient ~2x peak that OOM-kills the
+    process. To make the eviction actually release before the next load:
+
+      1. ``mx.synchronize()`` — wait for in-flight GPU work so the arrays are
+         no longer referenced by a pending command buffer.
+      2. two ``gc.collect()`` passes — the mflux/mlx-vlm models hold reference
+         cycles (model <-> submodules), so a single pass may not reclaim them.
+      3. ``mx.clear_cache()`` — hand the now-unreferenced buffers back.
+
+    ``settle_below_gb``: after evicting a LARGE model (FLUX, ~13 GB), macOS
+    reclaims its GPU/wired pages ASYNCHRONOUSLY. ``mx.clear_cache()`` returns
+    the buffers to MLX but the process footprint can stay pinned at ~13 GB for
+    a few seconds. If the next big model (the 5.3 GB vision model) is wired on
+    top of that un-reclaimed footprint, the process exceeds the ~13 GB GPU
+    working-set limit and the OS hard-kills it (this was the "analyze-style
+    crashes almost every time" bug — a reclaim-timing RACE, which is why it
+    only crashed sometimes). When set, we BLOCK until the measured footprint
+    drops below this threshold (re-nudging the allocator each loop), making the
+    reclaim deterministic instead of timing-dependent. Lazy MLX import keeps
+    this importable on non-Mac CI.
+    """
+    import time
+    gc.collect()
+    gc.collect()
+    try:
+        import mlx.core as mx
+        mx.synchronize()
+        mx.clear_cache()
+    except Exception:
+        pass
+
+    if settle_below_gb is None:
+        return
+
+    start_foot = _phys_footprint_gb()
+    deadline = time.time() + timeout
+    waited = False
+    while time.time() < deadline:
+        foot = _phys_footprint_gb()
+        if foot is None:
+            time.sleep(1.0)  # can't measure — give the OS a fixed beat instead
+            break
+        if foot <= settle_below_gb:
+            if waited:
+                print(f"[mlx-mem] settle ok: footprint={foot:.1f} GB "
+                      f"(was {start_foot:.1f}, target <{settle_below_gb})")
+            return
+        # Still holding the old model's footprint — nudge the allocator and wait
+        # for the OS to reclaim before we let the next big model load.
+        waited = True
+        gc.collect()
+        try:
+            import mlx.core as mx
+            mx.clear_cache()
+        except Exception:
+            pass
+        time.sleep(0.4)
+    foot = _phys_footprint_gb()
+    print(f"[mlx-mem] settle TIMEOUT: footprint={foot:.1f} GB still above "
+          f"{settle_below_gb} GB after {timeout}s — proceeding (OOM risk)"
+          if foot is not None else
+          "[mlx-mem] settle done (footprint unmeasured)")
+
+
+def mlx_mem_str(tag: str = "") -> str:
+    """True MLX/Metal GPU memory in GB (active/peak/cache).
+
+    ``ps`` RSS and ``vm_stat`` free both MISS this — MLX allocates through Metal
+    unified memory, which is the dominant term for FLUX (~12 GB) and is what
+    actually drives the 18 GB OOM. This reads MLX's own allocator counters.
+    """
+    try:
+        import mlx.core as mx
+        gb = 1024 ** 3
+        act = mx.get_active_memory() / gb
+        peak = mx.get_peak_memory() / gb
+        cache = mx.get_cache_memory() / gb
+        return f"[mlx-mem{(' ' + tag) if tag else ''}] active={act:.1f} peak={peak:.1f} cache={cache:.1f} GB"
+    except Exception as e:
+        return f"[mlx-mem] unavailable ({e})"
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +191,10 @@ LOCAL_MODELS = {
         # download, no auth, no quantization spike. Override via env if desired.
         "repo": "dhairyashil/FLUX.1-schnell-mflux-4bit",
         "default_steps": 4,
-        "recommended_size": (1024, 1024),
+        # 672x896 (3:4): peak ~15.5 GB. 1024x1024 / 768x1024 peak ~17.5 GB, which
+        # OOM-kills Flask on an 18 GB machine. deck_studio overrides via 'size',
+        # but keep this fallback safe too. See MODEL_OPTIONS note in deck_studio.py.
+        "recommended_size": (672, 896),
         "supports_img2img": True,
         "default_strength": 0.45,   # img2img: lower = freer, higher = closer to ref
         "memory_gb": 12,
@@ -105,9 +225,11 @@ class LocalImageGenerator:
     on 18 GB, so requesting the other swaps it in."""
 
     def __init__(self):
-        self._flux = None          # txt2img Flux1
-        self._controlnet = None    # Flux1Controlnet (Canny)
-        self._active_model: Optional[str] = None  # LOCAL_MODELS key
+        # FLUX runs in a SUBPROCESS (flux_worker.py), not in this process — see
+        # the module docstring and flux_worker.py for why. We keep the same
+        # public API; `_proc` is the live worker (or None).
+        self._proc = None                          # subprocess.Popen | None
+        self._active_model: Optional[str] = None   # LOCAL_MODELS key the worker holds
         self._device: Optional[str] = "gpu"
         self._lock = threading.RLock()
         # Retained for call-site compatibility (no IP-Adapter under FLUX).
@@ -116,7 +238,7 @@ class LocalImageGenerator:
     # --- status -----------------------------------------------------------
     @property
     def is_loaded(self) -> bool:
-        return self._flux is not None or self._controlnet is not None
+        return self._worker_alive() and self._active_model is not None
 
     @property
     def active_model(self) -> Optional[str]:
@@ -166,140 +288,150 @@ class LocalImageGenerator:
             },
         }
 
-    # --- load / unload ----------------------------------------------------
-    def load_model(self, model_key: str, progress_callback=None,
-                   download_progress_callback=None) -> tuple[bool, str]:
-        """Load a FLUX model. Returns (success, message).
+    # --- worker subprocess management -------------------------------------
+    def _worker_path(self):
+        import os
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "flux_worker.py")
 
-        First run downloads FLUX.1-schnell weights (~24 GB) from the HF hub and
-        quantizes them; they stay cached for subsequent runs. The mlx-lm/mlx-vlm
-        text/vision models are unloaded first so FLUX gets the full memory budget.
-        """
-        with self._lock:
-            if model_key not in LOCAL_MODELS:
-                return False, f"Unknown model: {model_key}. Available: {list(LOCAL_MODELS.keys())}"
+    def _worker_alive(self):
+        return self._proc is not None and self._proc.poll() is None
 
-            if self._active_model == model_key and self._flux is not None:
-                if progress_callback:
-                    progress_callback(f"{model_key} already loaded")
-                return True, f"{model_key} already loaded"
-
-            available, dep_msg = check_dependencies()
-            if not available:
-                return False, dep_msg
-
-            cfg = LOCAL_MODELS[model_key]
-
-            # Free unified memory: drop any other FLUX model AND the MLX LLM/VLM.
-            self.unload()
-            try:
-                import mlx_llm
-                mlx_llm.unload()
-            except Exception:
-                pass
-
-            try:
-                import os
-                from mflux.models.flux.variants.txt2img.flux import Flux1
-                from mflux.models.common.config.model_config import ModelConfig
-                repo = os.environ.get("MFLUX_SCHNELL_REPO") or cfg.get("repo")
-                if progress_callback:
-                    progress_callback(
-                        f"Loading FLUX ({cfg['mflux_name']}, {cfg['quantize']}-bit) — "
-                        + ("first run downloads ~6-9 GB (pre-quantized)."
-                           if repo else
-                           "first run downloads ~24 GB and quantizes; needs HF login.")
-                    )
-                if repo:
-                    # Pre-quantized mflux mirror (or local dir) loaded via model_path.
-                    self._flux = Flux1(
-                        model_config=ModelConfig.schnell(),
-                        quantize=cfg["quantize"],
-                        model_path=repo,
-                    )
-                else:
-                    # Official (gated) repo; quantizes on the fly. Needs HF auth.
-                    self._flux = Flux1.from_name(cfg["mflux_name"], quantize=cfg["quantize"])
-                self._active_model = model_key
-                msg = f"Loaded {model_key}"
-                print(f"[flux] {msg}")
-                if progress_callback:
-                    progress_callback(f"{model_key} ready")
-                return True, msg
-            except Exception as e:
-                self._flux = None
-                self._active_model = None
-                import traceback
-                traceback.print_exc()
-                msg = f"Failed to load {model_key}: {e}"
-                print(f"[flux] {msg}")
-                return False, msg
-
-    def unload(self):
-        """Free the resident FLUX model(s) and clear the Metal cache."""
-        with self._lock:
-            if self._flux is None and self._controlnet is None:
-                return
-            self._flux = None
-            self._controlnet = None
-            self._active_model = None
-            gc.collect()
-            try:
-                import mlx.core as mx
-                mx.clear_cache()
-            except Exception:
-                pass
-            print("[flux] Unloaded image model")
-
-    def _ensure_controlnet(self, model_key):
-        """Load the Canny ControlNet variant, swapping out the txt2img model."""
-        if self._controlnet is not None:
+    def _spawn_worker(self):
+        """Start the FLUX worker subprocess (idempotent). Caller holds _lock."""
+        if self._worker_alive():
             return
-        # Free the txt2img model + MLX LLM/VLM first (can't co-reside on 18GB).
-        self._flux = None
-        gc.collect()
-        try:
-            import mlx.core as mx
-            mx.clear_cache()
-        except Exception:
-            pass
+        import os
+        import subprocess
+        import sys
+        # Unload OUR mlx-lm/mlx-vlm first: the worker is about to wire ~13 GB of
+        # FLUX, which cannot co-reside with a 5 GB vision/text model in this
+        # process on an 18 GB machine.
         try:
             import mlx_llm
             mlx_llm.unload()
         except Exception:
             pass
-        cfg = LOCAL_MODELS[model_key]
-        import os
-        from mflux.models.flux.variants.controlnet.flux_controlnet import Flux1Controlnet
-        from mflux.models.common.config.model_config import ModelConfig
-        repo = os.environ.get("MFLUX_SCHNELL_REPO") or cfg.get("repo")
-        print(f"[flux] Loading Canny ControlNet for {model_key} (first run downloads ~3 GB) ...")
-        self._controlnet = Flux1Controlnet(
-            model_config=ModelConfig.schnell_controlnet_canny(),
-            quantize=cfg["quantize"],
-            model_path=repo,
+        free_mlx_memory(settle_below_gb=7.0)
+        env = dict(os.environ)
+        self._proc = subprocess.Popen(
+            [sys.executable, "-u", self._worker_path()],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=None,  # worker logs (stderr) flow to the Flask log
+            text=True, bufsize=1, cwd=os.path.dirname(os.path.abspath(__file__)),
+            env=env,
         )
-        self._active_model = model_key
+        print("[flux] Spawned FLUX worker subprocess (pid "
+              f"{self._proc.pid})")
+
+    def _send(self, req: dict):
+        self._proc.stdin.write(json.dumps(req) + "\n")
+        self._proc.stdin.flush()
+
+    def _read_result(self, progress_callback):
+        """Read the worker's stdout until a done/error message. Forwards progress.
+
+        Returns the parsed 'done' dict. Raises RuntimeError on worker error/death.
+        """
+        import flux_worker
+        sentinel = flux_worker.SENTINEL
+        while True:
+            line = self._proc.stdout.readline()
+            if line == "":
+                # EOF — the worker died (very likely an OS OOM kill, though the
+                # whole point of isolation is that only the worker dies now, not
+                # Flask). Surface it and reset so the next call respawns.
+                code = self._proc.poll()
+                self._proc = None
+                self._active_model = None
+                raise RuntimeError(f"FLUX worker exited unexpectedly (code {code})")
+            line = line.rstrip("\n")
+            if not line.startswith(sentinel):
+                if line.strip():
+                    print(line)  # library noise -> Flask log
+                continue
+            try:
+                msg = json.loads(line[len(sentinel):].strip())
+            except Exception:
+                continue
+            if "progress" in msg:
+                if progress_callback:
+                    p = msg["progress"]
+                    try:
+                        progress_callback(int(p["step"]), int(p["total"]))
+                    except Exception:
+                        pass
+            elif msg.get("error"):
+                raise RuntimeError(f"FLUX worker error: {msg['error']}")
+            elif msg.get("done"):
+                return msg
+
+    # --- load / unload ----------------------------------------------------
+    def load_model(self, model_key: str, progress_callback=None,
+                   download_progress_callback=None) -> tuple[bool, str]:
+        """Ensure the FLUX worker is running. Returns (success, message).
+
+        FLUX itself is loaded lazily inside the worker on the first generate (the
+        weights stay in the HF cache between runs). We just spawn the worker here
+        and unload this process's mlx-lm/mlx-vlm so the worker has the memory.
+        """
+        with self._lock:
+            if model_key not in LOCAL_MODELS:
+                return False, f"Unknown model: {model_key}. Available: {list(LOCAL_MODELS.keys())}"
+            available, dep_msg = check_dependencies()
+            if not available:
+                return False, dep_msg
+            if progress_callback:
+                progress_callback(f"Starting FLUX worker ({model_key})...")
+            try:
+                self._spawn_worker()
+                self._active_model = model_key
+                if progress_callback:
+                    progress_callback(f"{model_key} ready")
+                return True, f"FLUX worker ready ({model_key})"
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self._proc = None
+                self._active_model = None
+                return False, f"Failed to start FLUX worker: {e}"
+
+    def unload(self):
+        """Terminate the FLUX worker — the OS reclaims its ENTIRE Metal context.
+
+        This is the crux of the subprocess design: process death guarantees the
+        ~13 GB of GPU/wired FLUX memory is fully returned (no fragmentation
+        residue), so the mlx-vlm/mlx-lm models that load next during style
+        analysis get a pristine GPU heap. Called by mlx_llm._free_image_model()
+        before any LLM/VLM load, and before (re)loading FLUX.
+        """
+        with self._lock:
+            if self._proc is None:
+                return
+            proc = self._proc
+            self._proc = None
+            self._active_model = None
+            try:
+                proc.stdin.write(json.dumps({"cmd": "shutdown"}) + "\n")
+                proc.stdin.flush()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            # The worker's GPU memory is gone with the process; a light local
+            # reclaim clears any residue in THIS process's MLX allocator.
+            free_mlx_memory()
+            print("[flux] Terminated FLUX worker (GPU memory reclaimed by OS)")
 
     # --- generation -------------------------------------------------------
-    def _register_progress(self, model, progress_callback, total_steps):
-        """Attach an in-loop progress subscriber to a FLUX model, if possible."""
-        if not progress_callback or model is None:
-            return
-        cb = progress_callback
-
-        class _Progress:
-            def call_in_loop(self, t, seed, prompt, latents, config, time_steps):
-                try:
-                    cb(int(t) + 1, total_steps)
-                except Exception:
-                    pass
-
-        try:
-            model.callbacks.register(_Progress())
-        except Exception:
-            pass
-
     def generate(self, prompt: str, negative_prompt: str = "",
                  width: Optional[int] = None, height: Optional[int] = None,
                  steps: Optional[int] = None, guidance: Optional[float] = None,
@@ -307,7 +439,7 @@ class LocalImageGenerator:
                  control_image_path=None, controlnet_strength: Optional[float] = None,
                  reference_image_path=None, image_strength: Optional[float] = None,
                  progress_callback=None, **_ignored):
-        """Generate an image with FLUX. Returns a PIL.Image.
+        """Generate an image with FLUX (in the worker subprocess). Returns a PIL.Image.
 
         Two modes:
         * **txt2img** (default, fast ~4 steps): style + composition from the prompt.
@@ -318,59 +450,54 @@ class LocalImageGenerator:
         schnell ignores guidance / negative prompt (accepted but unused). Legacy
         img2img + IP-Adapter kwargs are accepted for compatibility but unused.
         """
-        import time
+        import os
+        import tempfile
+        from PIL import Image
         with self._lock:
             model_key = self._active_model or DEFAULT_LOCAL_MODEL
             cfg = LOCAL_MODELS.get(model_key, {})
             rw, rh = cfg.get("recommended_size", (1024, 1024))
             w = int(width or rw)
             h = int(height or rh)
-
-            # ---- Faithful mode: Canny ControlNet off the reference edges ----
             if control_image_path:
-                self._ensure_controlnet(model_key)
                 n_steps = int(steps or CONTROLNET_STEPS)
-                cs = float(controlnet_strength if controlnet_strength is not None
-                           else CONTROLNET_DEFAULT_STRENGTH)
-                if seed is None:
-                    # Fresh random seed every call so re-rolling the same prompt
-                    # produces a genuinely different image (the seed is recorded in
-                    # the .meta.json for that version).
-                    seed = random.randint(0, 2**31 - 1)
-                self._register_progress(self._controlnet, progress_callback, n_steps)
-                print(f"[flux] controlnet(canny, strength={cs}) {w}x{h}, steps={n_steps}: {prompt[:80]}")
-                start = time.time()
-                result = self._controlnet.generate_image(
-                    seed=int(seed), prompt=prompt,
-                    controlnet_image_path=str(control_image_path),
-                    num_inference_steps=n_steps, width=w, height=h,
-                    controlnet_strength=cs,
-                )
-                print(f"[flux] Generated (controlnet) in {time.time() - start:.1f}s")
-                return result.image
+            else:
+                n_steps = int(steps or cfg.get("default_steps", 4))
 
-            # ---- Fast mode: txt2img ----
-            if self._flux is None:
-                # A controlnet model may be resident; swap back to txt2img.
-                # (No progress_callback here — it's the step callback, not a
-                # load-message callback.)
+            if not self._worker_alive():
                 ok, msg = self.load_model(model_key)
                 if not ok:
-                    raise RuntimeError(f"No FLUX model loaded: {msg}")
-            n_steps = int(steps or cfg.get("default_steps", 4))
-            if seed is None:
-                # Fresh random seed every call (see controlnet path above) so
-                # re-rolls vary even with an unchanged prompt.
-                seed = random.randint(0, 2**31 - 1)
-            self._register_progress(self._flux, progress_callback, n_steps)
-            print(f"[flux] txt2img {w}x{h}, steps={n_steps}: {prompt[:90]}")
-            start = time.time()
-            result = self._flux.generate_image(
-                seed=int(seed), prompt=prompt,
-                num_inference_steps=n_steps, width=w, height=h,
-            )
-            print(f"[flux] Generated in {time.time() - start:.1f}s")
-            return result.image
+                    raise RuntimeError(f"FLUX worker not available: {msg}")
+
+            fd, out_path = tempfile.mkstemp(suffix=".png", prefix="flux_")
+            os.close(fd)
+            req = {
+                "cmd": "generate", "model_key": model_key, "prompt": prompt,
+                "width": w, "height": h, "steps": n_steps,
+                "seed": (int(seed) if seed is not None else None),
+                "control_image_path": (str(control_image_path) if control_image_path else None),
+                "controlnet_strength": (float(controlnet_strength)
+                                        if controlnet_strength is not None else None),
+                "out_path": out_path,
+            }
+            mode = "controlnet" if control_image_path else "txt2img"
+            print(f"[flux] -> worker {mode} {w}x{h}, steps={n_steps}: {prompt[:80]}")
+            try:
+                self._send(req)
+            except Exception as e:
+                self._proc = None
+                self._active_model = None
+                raise RuntimeError(f"FLUX worker write failed: {e}")
+            done = self._read_result(progress_callback)
+            print(f"[flux] worker done in {done.get('seconds', 0):.1f}s (seed {done.get('seed')})")
+            # Load the PNG into memory, then remove the temp file.
+            img = Image.open(out_path)
+            img.load()
+            try:
+                os.remove(out_path)
+            except Exception:
+                pass
+            return img
 
     def generate_with_reference(self, prompt: str, reference_image_path,
                                 strength: Optional[float] = None,
