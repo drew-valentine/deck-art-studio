@@ -7360,7 +7360,7 @@ header .separator {
         <div class="detail-section-block" id="collapsiblePrompt">
           <div class="detail-section-header">
             <span class="detail-section-label">Prompt <span class="section-hint" title="The scene this card depicts — it drives the NEXT generation. The deck's style is applied automatically on top, so describe only WHAT to depict. Edit or Regenerate to change the result.">(?)</span></span>
-            <button class="btn btn-ghost btn-xs" id="btnRegenPromptSingle" onclick="regeneratePromptForCard()" title="Generate a fresh scene prompt via the local LLM">Regenerate</button>
+            <button class="btn btn-ghost btn-xs" id="btnRegenPromptSingle" onclick="regeneratePromptForCard()" title="Write a brand-new random scene prompt (no steer). Doesn't render — edit it, then Render Art.">Generate Random</button>
           </div>
           <textarea id="detailPrompt" rows="6" placeholder="e.g. a faerie soaring above a moonlit forest"></textarea>
         </div>
@@ -8982,7 +8982,8 @@ function renderActionArea(card) {
           <button class="art-orient-btn" data-orient="landscape" onclick="setArtOrientation('landscape')">Landscape</button>
         </div>
         <button class="btn btn-secondary" id="btnGenerateCurrent"
-                onclick="generateCurrent(this)" style="flex:1;">Re-roll</button>
+                onclick="generateCurrent(this)" style="flex:1;"
+                title="Render the current prompt into a new image (fresh seed). Same scene, different take.">Render Art</button>
       </div>
       <div class="detail-feedback-row">
         <input type="text" id="detailFeedback" class="detail-feedback-input"
@@ -8990,7 +8991,7 @@ function renderActionArea(card) {
                title="Regenerate rewrites the prompt in this direction, then renders it. Leave blank for a fresh, undirected take.">
         <button class="btn btn-gold" id="btnRegenerateCurrent"
                 onclick="regenerateCurrent(this)"
-                title="Rewrite the prompt (steered by the text on the left) and generate new art">Regenerate</button>
+                title="Rewrite the prompt (steered by the text on the left), then render it. Blank steer = a fresh directed take.">Steer &amp; Render</button>
       </div>`;
     if (existingFeedback) document.getElementById('detailFeedback').value = existingFeedback;
   } else {
@@ -9408,7 +9409,7 @@ async function regenerateCurrent(btn) {
   } catch (e) {
     showToast('Network error: ' + e.message, 'error');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Regenerate'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Steer & Render'; }
   }
 }
 
@@ -9443,7 +9444,7 @@ async function regeneratePromptForCard() {
 
   const btn = document.getElementById('btnRegenPromptSingle');
   btn.disabled = true;
-  btn.textContent = 'Regenerating...';
+  btn.textContent = 'Generating…';
 
   const isLocal = currentMode === 'local';
   let useAi = true;
@@ -9472,7 +9473,7 @@ async function regeneratePromptForCard() {
     if (!data.success) {
       showToast(data.error || 'Failed to regenerate prompt', 'error');
       btn.disabled = false;
-      btn.textContent = 'Regenerate Prompt';
+      btn.textContent = 'Generate Random';
       return;
     }
 
@@ -9495,17 +9496,17 @@ async function regeneratePromptForCard() {
             updateDetailPanel(card);
           }
           btn.disabled = false;
-          btn.textContent = 'Regenerate Prompt';
+          btn.textContent = 'Generate Random';
           showToast('Prompt regenerated', 'success');
         } else {
-          btn.textContent = 'Regenerating...';
+          btn.textContent = 'Generating…';
         }
       } catch (_) {}
     }, 1000);
   } catch (e) {
     showToast('Network error: ' + e.message, 'error');
     btn.disabled = false;
-    btn.textContent = 'Regenerate Prompt';
+    btn.textContent = 'Generate Random';
   }
 }
 
