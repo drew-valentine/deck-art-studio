@@ -3326,6 +3326,7 @@ def regenerate_prompts_from_inspiration(deck_id):
     req_data = request.json or {}
     use_ai = req_data.get('use_ai', False)
     card_names = req_data.get('card_names')
+    steer = (req_data.get('steer') or '').strip()  # optional free-text direction
 
     # If specific card names requested, filter to just those cards
     if card_names:
@@ -3400,6 +3401,7 @@ def regenerate_prompts_from_inspiration(deck_id):
                                 backend=bcfg['llm_backend'],
                                 local_model=bcfg['ollama_model'],
                                 style_hint=_style_hint,
+                                steer=steer,
                             )
                             break
                         except Exception as e:
@@ -8984,9 +8986,11 @@ function renderActionArea(card) {
       </div>
       <div class="detail-feedback-row">
         <input type="text" id="detailFeedback" class="detail-feedback-input"
-               placeholder="What to change...">
+               placeholder="Steer a new prompt (e.g. at night, underwater, more whimsical)…"
+               title="Regenerate rewrites the prompt in this direction, then renders it. Leave blank for a fresh, undirected take.">
         <button class="btn btn-gold" id="btnRegenerateCurrent"
-                onclick="regenerateCurrent(this)">Regenerate</button>
+                onclick="regenerateCurrent(this)"
+                title="Rewrite the prompt (steered by the text on the left) and generate new art">Regenerate</button>
       </div>`;
     if (existingFeedback) document.getElementById('detailFeedback').value = existingFeedback;
   } else {
@@ -9354,42 +9358,57 @@ async function generateCurrent(btn) {
   }
 }
 
+// "Regenerate" with a steer: regenerate the PROMPT in the user's direction
+// (escaping the theme the plain roll keeps circling), then render it.
 async function regenerateCurrent(btn) {
   if (!selectedCard) return;
-  const prompt = document.getElementById('detailPrompt').value;
-  const feedbackEl = document.getElementById('detailFeedback');
-  const feedback = feedbackEl ? feedbackEl.value : '';
-  // Save the local prompt before generating (same race condition as generateCurrent)
-  const subjectEl = document.getElementById('detailSubject');
-  if (subjectEl) {
-    const deckId = document.getElementById('deckSelect').value;
-    await fetch(`/api/decks/${deckId}/card-subject`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ card_name: selectedCard, subject: subjectEl.value.trim() }),
-    }).catch(() => {});
-  }
-  // Immediately show generating state so user sees instant feedback
-  _showGeneratingState(selectedCard);
+  const deckId = document.getElementById('deckSelect').value;
+  if (!deckId) return;
+  const steerEl = document.getElementById('detailFeedback');
+  const steer = steerEl ? steerEl.value.trim() : '';
 
+  _showGeneratingState(selectedCard);
+  if (btn) { btn.disabled = true; btn.textContent = 'Steering…'; }
   try {
-    const resp = await fetch('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        card_name: selectedCard,
-        custom_prompt: prompt,
-        feedback: feedback,
-      }),
+    // 1) Regenerate the prompt, steered by the user's direction.
+    const resp = await fetch(`/api/decks/${deckId}/regenerate-prompts`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ use_ai: true, card_names: [selectedCard], steer }),
     });
-    if (!resp.ok) {
-      const data = await resp.json().catch(() => ({}));
-      showToast(data.error || 'Regeneration failed', 'error');
-    }
-    // Kick fast polling to pick up real status
+    const data = await resp.json();
+    if (!data.success) { showToast(data.error || 'Failed to regenerate prompt', 'error'); return; }
+
+    // 2) Wait for the new prompt.
+    const jobId = data.job_id;
+    await new Promise((resolve) => {
+      const poll = setInterval(async () => {
+        try {
+          const r = await fetch(`/api/regen-prompts/progress/${jobId}`);
+          if (!r.ok) return;
+          if ((await r.json()).done) { clearInterval(poll); resolve(); }
+        } catch (e) {}
+      }, 800);
+    });
+
+    // 3) Pull the steered prompt into the field, then render art from it.
+    const cards = await (await fetch('/api/cards')).json();
+    allCards = cards;
+    const card = allCards.find(c => c.name === selectedCard);
+    const newPrompt = card ? cleanScenePrompt(card.prompt)
+                           : document.getElementById('detailPrompt').value;
+    const promptEl = document.getElementById('detailPrompt');
+    if (promptEl) promptEl.value = newPrompt;
+
+    if (btn) btn.textContent = 'Generating…';
+    await fetch('/api/generate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ card_name: selectedCard, custom_prompt: newPrompt }),
+    });
     startPolling();
   } catch (e) {
     showToast('Network error: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Regenerate'; }
   }
 }
 

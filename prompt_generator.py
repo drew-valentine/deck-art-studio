@@ -421,7 +421,7 @@ def generate_prompts_for_deck(cards: list[dict], style_preamble: str = None) -> 
 # ---------------------------------------------------------------------------
 def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'openai',
                               local_model: str = 'llama3.1:8b',
-                              style_hint: str = '') -> str:
+                              style_hint: str = '', steer: str = '') -> str:
     """Use an LLM to generate a subject description tailored to the deck's style.
 
     Sends the LLM a rule-based description as a reference anchor plus
@@ -431,6 +431,10 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
 
     If style_hint is provided (e.g. "Wes Anderson Film — Minimalist, Flat"),
     the LLM will tailor its tone to match the intended aesthetic.
+
+    If `steer` is provided (free-text user direction, e.g. "at night",
+    "underwater", "more whimsical, less grand"), the scene is pushed firmly in
+    that direction — the lever for escaping a theme the regenerator keeps circling.
 
     Supports both OpenAI (cloud) and Ollama (local) backends.
     Falls back to rule-based if AI fails.
@@ -509,10 +513,20 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                     "Subtly weave these motifs into the scene so cards feel cohesive."
                 )
 
+    if steer and steer.strip():
+        system_msg += (
+            f"\n\nUSER DIRECTION (HIGHEST PRIORITY) — Re-imagine the scene to satisfy "
+            f"this request: \"{steer.strip()}\". Treat it as a strong steer: change the "
+            f"setting, action, framing, time, or mood as needed to honor it, while still "
+            f"depicting the card's subject. Make the result clearly DIFFERENT from a "
+            f"generic version — don't fall back to the usual scene."
+        )
+
     user_msg = (
         f"Card: {name}\nType: {type_line}\nRules: {oracle}\n"
         f"Direction: {guidance}\n"
-        f"Reference description: {base_desc}\n"
+        + (f"User steer (honor this above all): {steer.strip()}\n" if steer and steer.strip() else "")
+        + f"Reference description: {base_desc}\n"
         f"Rewrite this into a detailed scene description (2-3 sentences):"
     )
 
