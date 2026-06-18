@@ -124,9 +124,18 @@ def _describe_creature(name, subtypes, oracle, power, toughness, keywords, atmos
     if 'coin flip' in keywords:
         ability_flavor += ', surrounded by spinning coins and chaotic fortune'
 
+    # Defining anatomy — must survive the LLM rewrite. A Cyclops has exactly ONE
+    # eye; creatures named "...Eye of..." (e.g. Okaun/Zndrsplt) are one-eyed by
+    # flavor. Without this the model defaults to a normal two-eyed face.
+    anatomy = ''
+    sub_low = (subtypes or '').lower()
+    name_low = (name or '').lower()
+    if 'cyclops' in sub_low or re.search(r'\beye of\b', name_low) or 'one-eyed' in name_low:
+        anatomy = ' with a SINGLE large central eye (exactly one eye, cyclopean — never two eyes)'
+
     subtype_desc = f" {subtypes}" if subtypes else ''
     return (
-        f"A {size}{subtype_desc} called {name}{ability_flavor}, "
+        f"A {size}{subtype_desc} called {name}{anatomy}{ability_flavor}, "
         f"{atmosphere}."
     )
 
@@ -195,11 +204,56 @@ def _describe_artifact(name, type_line, oracle, keywords, atmosphere):
         coin_desc = ''
         if 'coin flip' in keywords or 'coin' in (oracle or '').lower():
             coin_desc = ' Spinning coins and elements of chance surround it.'
+        literal = _literal_object_from_name(name)
+        if literal:
+            # The name literally names a physical object/body part (e.g. "Krark's
+            # Thumb" -> a thumb). Depict THAT, not a generic runed amulet.
+            return (
+                f"{name} — depicted as {literal}, treated as a prized magical "
+                f"relic glowing with {atmosphere}.{coin_desc}"
+            )
         return (
             f"A powerful magical artifact — {name} — hovering and glowing "
             f"with {atmosphere}. An intricate object of arcane craftsmanship "
             f"with runes and energy emanating from its form.{coin_desc}"
         )
+
+
+# Artifact names that literally name a physical object/body part — map the head
+# noun to a concrete depiction so the art shows the actual thing, not a generic
+# glowing amulet. The trailing noun of the name is the object.
+_LITERAL_OBJECT_NOUNS = {
+    'thumb': 'a severed goblin thumb kept as a lucky talisman, leathery and ringed',
+    'hand': 'a preserved severed hand',
+    'eye': 'a single disembodied eye',
+    'skull': 'an ornate skull',
+    'heart': 'a glowing preserved heart',
+    'horn': 'a great curved horn',
+    'claw': 'a massive curved claw',
+    'fang': 'a long curved fang',
+    'tooth': 'a large tooth',
+    'crown': 'an ornate crown',
+    'ring': 'a single ornate ring',
+    'sword': 'a sword', 'blade': 'a blade', 'axe': 'an axe', 'dagger': 'a dagger',
+    'spear': 'a spear', 'shield': 'a shield', 'hammer': 'a war hammer',
+    'staff': 'a staff', 'wand': 'a wand', 'orb': 'a glowing orb',
+    'amulet': 'an amulet', 'talisman': 'a talisman', 'medallion': 'a medallion',
+    'mask': 'a mask', 'helm': 'a helm', 'gauntlet': 'a gauntlet',
+    'chalice': 'a chalice', 'goblet': 'a goblet', 'lantern': 'a lantern',
+    'mirror': 'an ornate mirror', 'bell': 'a bell', 'key': 'an ornate key',
+    'banner': 'a banner', 'scepter': 'a scepter', 'signet': 'a signet ring',
+    'coin': 'a large ornate coin', 'die': 'a die', 'idol': 'an idol',
+}
+
+
+def _literal_object_from_name(name: str):
+    """If the artifact's name ends in a concrete object/body-part noun, return a
+    short literal depiction of it (e.g. "Krark's Thumb" -> a severed thumb)."""
+    words = re.findall(r"[A-Za-z]+", (name or '').lower())
+    for w in reversed(words):  # the head noun is usually last ("...'s Thumb")
+        if w in _LITERAL_OBJECT_NOUNS:
+            return _LITERAL_OBJECT_NOUNS[w]
+    return None
 
 
 def _describe_enchantment(name, oracle, keywords, atmosphere):
@@ -448,13 +502,16 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     base_desc = generate_subject_description(card)
 
     # Type-specific guidance so the LLM knows WHAT to depict
+    # NO_CHARACTER cards must NOT get a person/face/creature as the focal point —
+    # the deck theme (e.g. sci-fi → android faces) otherwise hijacks the subject.
+    _no_character = card_type in ('artifact', 'enchantment', 'land', 'instant', 'sorcery')
     type_guidance = {
-        'artifact': 'Depict the artifact OBJECT itself — the physical item, weapon, ring, or device. NOT a landscape.',
-        'enchantment': 'Depict the magical effect or ethereal manifestation as a visible phenomenon.',
-        'instant': 'Depict the dramatic moment of the spell being cast — the action and energy.',
+        'artifact': 'Depict the artifact OBJECT itself, filling the frame. If the card NAME literally names a physical thing or body part (e.g. "Krark\'s Thumb" = a thumb, "Sol Ring" = a ring, "Sword of X" = a sword), depict THAT literal object as the relic — do NOT substitute a generic glowing disc, amulet, or runed orb. NOT a landscape, NOT a person.',
+        'enchantment': 'Depict the magical effect or ethereal manifestation as a visible phenomenon — the effect IS the subject.',
+        'instant': 'Depict the dramatic moment of the spell being cast — the action and energy itself.',
         'sorcery': 'Depict the spell being cast — the ritual, the gathering of power.',
-        'land': 'Depict the LOCATION — terrain, architecture, or natural formation.',
-        'creature': 'Depict the creature itself as the focal point.',
+        'land': 'Depict the LOCATION — terrain, architecture, or natural formation. NO central character.',
+        'creature': 'Depict the creature itself as the single focal point.',
         'planeswalker': 'Depict the planeswalker character in a dramatic pose.',
     }
     guidance = type_guidance.get(card_type, 'Depict the subject described by the card name.')
@@ -462,13 +519,27 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     system_msg = (
         "You write art descriptions for card illustrations. "
         "Given an MTG card and a reference description, rewrite it into a more "
-        "creative and evocative 2-3 sentence scene. Keep the same subject and "
-        "focal point — enhance the imagery, don't change what's being depicted. "
+        "creative and evocative 2-3 sentence scene. "
+        "THE #1 RULE: the card's own subject (from the reference description) MUST "
+        "be the single, unmistakable, dominant focal point that fills the frame. "
+        "Enhance the imagery; do NOT change WHAT is depicted and do NOT introduce a "
+        "different focal subject. Setting and atmosphere are BACKGROUND only — they "
+        "must never replace, crowd out, or upstage the card's subject. "
         "Be inventive and VARY it each time: choose a fresh setting, camera angle, "
         "distance, time of day, weather, and composition so re-rolls feel distinct "
-        "rather than repeating the same scene. "
+        "rather than repeating the same scene — but always keep the same focal subject. "
+        "PRESERVE the subject's defining anatomy stated in the reference: if it says "
+        "a SINGLE / central / one eye (a cyclops), the creature has exactly ONE eye — "
+        "write 'eye' (singular), NEVER 'eyes', and never give it two. Likewise keep "
+        "any other stated defining features. "
         "Do NOT include any style directions — just describe the subject matter."
     )
+    if _no_character:
+        system_msg += (
+            "\n\nThis card depicts an OBJECT or PLACE, not a character. Do NOT make a "
+            "person, face, head, figure, or creature the focal point. Any incidental "
+            "figures must stay small and in the background. The object/location is the star."
+        )
     if style_hint:
         # Detect dark/horror mood from the style hint
         _hint_lower = style_hint.lower()
@@ -493,10 +564,9 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             if _themes:
                 system_msg += (
                     f"\n\nTHEMATIC ELEMENTS — The deck's visual identity includes: {_themes}. "
-                    "Weave these motifs into every scene. For example, if the themes include "
-                    "'cosmic horror' and 'undead masses', a forest should have twisted trees "
-                    "with fleshy bark and skeletal roots, not just a dark forest. Make the "
-                    "thematic DNA visible in the subject matter itself."
+                    "Let these motifs color the BACKGROUND and atmosphere only — they must "
+                    "NOT become the focal point or replace the card's own subject. Keep the "
+                    "card's subject dominant and clearly readable; the themes are set dressing."
                 )
         else:
             system_msg += (
@@ -510,7 +580,8 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             if _themes:
                 system_msg += (
                     f"\n\nTHEMATIC ELEMENTS — The deck's visual identity includes: {_themes}. "
-                    "Subtly weave these motifs into the scene so cards feel cohesive."
+                    "Let these motifs appear only in the BACKGROUND and atmosphere so cards "
+                    "feel cohesive — never let them replace or upstage the card's own subject."
                 )
 
     if steer and steer.strip():
@@ -539,7 +610,9 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             ],
             model=local_model,
             max_tokens=200,
-            temperature=0.95,  # varied between re-rolls without going incoherent
+            temperature=0.8,  # varied between re-rolls; 0.95 made the 3B model
+                              # degenerate into word-salad tails ("waveform GS cave
+                              # events super intend impact"), so keep it lower.
         )
     except Exception as e:
         print(f"  [prompt_gen] AI failed for {name}: {e}, using rule-based")
