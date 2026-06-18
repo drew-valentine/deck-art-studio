@@ -101,7 +101,14 @@ _inspiration_composite_cache = {'key': None, 'image': None}
 MODEL_OPTIONS = {
     'local-flux-schnell': {
         'model': 'flux-schnell-4bit', 'quality': 'standard',
-        'size': '768x1024', 'landscape_size': '1024x768',
+        # 672x896 (3:4) NOT 768x1024: FLUX txt2img peak memory is dominated by a
+        # ~14.5 GB weights floor (4-bit transformer + resident T5/CLIP + VAE)
+        # plus resolution-scaled activations. At 768x1024 the peak hit 17.5 GB on
+        # an 18 GB machine — a 0.5 GB margin that OS-OOM-killed Flask whenever any
+        # other memory user coincided. 672x896 keeps the same 3:4 aspect (so the
+        # card-frame composite stays aligned) while dropping the peak to ~15.5 GB
+        # (2.5 GB headroom) with no visible quality loss for composited card art.
+        'size': '672x896', 'landscape_size': '896x672',
         'supports_edit': False,
         'supports_img2img': True,
         'cost_per_image': 0.00, 'backend': 'local',
@@ -259,11 +266,17 @@ def _unload_all_ollama_models():
     print("[mlx_guard] MLX LLM/VLM models unloaded from unified memory")
 
 
-def _wait_for_ollama_idle(timeout=120):
+def _wait_for_ollama_idle(timeout=900):
     """Block until all background MLX LLM/VLM work finishes.
 
     Called by the generation pipeline before loading FLUX so the text/vision
     models can be unloaded first. Force-unloads on timeout to avoid stalls.
+
+    The timeout MUST exceed a full style analysis (5 images + distillation can
+    take 3-5 min): if FLUX generation gives up waiting and starts while the
+    analysis is still running, the FLUX worker's ~13 GB co-resides with the
+    analysis's ~5 GB vision/text models and the OS OOM-kills the server. 900 s
+    leaves wide margin; the force-unload fallback still guards a wedged state.
     """
     if ollama_idle.is_set():
         return
@@ -1708,7 +1721,7 @@ def batch_generate_worker(card_names, feedback_map=None):
         if is_local:
             batch_phase = 'waiting_ollama'
             batch_phase_detail = 'Waiting for style analysis to finish...'
-            _wait_for_ollama_idle(timeout=120)
+            _wait_for_ollama_idle(timeout=900)
 
             from local_image_generator import get_generator
             gen = get_generator()
@@ -4261,9 +4274,11 @@ def generate_single():
                 _cancel_single.discard(card_name)
                 return
 
-            # Gate: ensure Ollama is idle before local SDXL generation
+            # Gate: ensure all LLM/VLM (style analysis) work is done before FLUX
+            # generation, so the FLUX worker doesn't co-reside with the analysis
+            # models and OOM the server.
             if model_cfg.get('backend') == 'local':
-                _wait_for_ollama_idle(timeout=120)
+                _wait_for_ollama_idle(timeout=900)
 
             # Check for cancel after Ollama wait
             if card_name in _cancel_single:
@@ -8503,7 +8518,7 @@ function startPolling() {
         document.getElementById('styleProgressStep').textContent = '';
         if (styleBtn) styleBtn.disabled = false;
         loadDeckSettings();
-        showToast('Style updated! Re-generate prompts to apply the new style.', 'success', {persistent: true});
+        showToast('Style updated! Re-generate prompts to apply the new style.', 'success', {duration: 8000});
       }
     }
 
@@ -11262,10 +11277,13 @@ function showToast(message, type = 'info', opts = {}) {
   `;
   container.appendChild(toast);
 
-  // Auto-dismiss
+  // Auto-dismiss. `persistent` keeps it until explicitly updated/dismissed
+  // (used for in-progress toasts); everything else auto-clears so toasts don't
+  // pile up. `opts.duration` overrides the per-type default.
   const persistent = opts.persistent || false;
   if (!persistent) {
-    const delay = type === 'error' ? 6000 : type === 'warning' ? 4000 : 3000;
+    const delay = opts.duration != null ? opts.duration
+                : type === 'error' ? 6000 : type === 'warning' ? 4000 : 3000;
     _toastTimers[id] = setTimeout(() => dismissToast(id), delay);
   }
   return id;
@@ -11310,10 +11328,12 @@ function updateToast(id, message, type, opts = {}) {
     existingProgress.remove();
   }
 
-  // Reset auto-dismiss
+  // Reset auto-dismiss (e.g. a persistent progress toast finishing as a
+  // non-persistent success/error so it now clears on its own).
   if (_toastTimers[id]) clearTimeout(_toastTimers[id]);
   if (!opts.persistent) {
-    const delay = type === 'error' ? 6000 : type === 'warning' ? 4000 : 3000;
+    const delay = opts.duration != null ? opts.duration
+                : type === 'error' ? 6000 : type === 'warning' ? 4000 : 3000;
     _toastTimers[id] = setTimeout(() => dismissToast(id), delay);
   }
 }
