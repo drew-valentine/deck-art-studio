@@ -35,6 +35,7 @@ def generate_subject_description(card: dict) -> str:
     card_type = card.get('card_type', 'other')
     type_line = card.get('type_line', '')
     oracle = card.get('oracle_text', '')
+    flavor = card.get('flavor_text', '')
     colors = card.get('color_identity', card.get('colors', []))
     power = card.get('power')
     toughness = card.get('toughness')
@@ -63,7 +64,7 @@ def generate_subject_description(card: dict) -> str:
     elif card_type == 'artifact':
         return _describe_artifact(name, type_line, oracle, keywords, atmosphere)
     elif card_type == 'enchantment':
-        return _describe_enchantment(name, oracle, keywords, atmosphere)
+        return _describe_enchantment(name, oracle, keywords, atmosphere, flavor)
     elif card_type == 'instant':
         return _describe_spell(name, oracle, keywords, atmosphere, 'instant')
     elif card_type == 'sorcery':
@@ -256,16 +257,24 @@ def _literal_object_from_name(name: str):
     return None
 
 
-def _describe_enchantment(name, oracle, keywords, atmosphere):
-    """Generate description for an enchantment card."""
+def _describe_enchantment(name, oracle, keywords, atmosphere, flavor=''):
+    """Generate description for an enchantment card.
+
+    Enchantments have no physical object, so the OLD anchor defaulted to
+    "swirling abstract magical energy / flowing shapes" — which made every
+    enchantment render as a generic glowing vortex. Instead, anchor on the
+    card's actual STORY (flavor + rules) so the art depicts a concrete scene
+    (the warriors, ritual, place, or event the enchantment represents).
+    """
     coin_desc = ''
     if 'coin flip' in keywords or 'coin' in (oracle or '').lower():
-        coin_desc = ' Spinning coins and symbols of fate weave through the magic.'
+        coin_desc = ' Elements of chance and spinning coins feature in the scene.'
+    story = (flavor or oracle or '').strip()
+    story_line = f" The scene is drawn from its story: {story}" if story else ''
     return (
-        f"A manifestation of pure magical energy — {name} — swirling "
-        f"patterns of {atmosphere} forming an ethereal enchantment that "
-        f"warps reality around it. Abstract magical forces take visible "
-        f"form in brilliant colors and flowing shapes.{coin_desc}"
+        f"A concrete illustrated scene representing the enchantment {name} — "
+        f"depict the people, creatures, place, or event it embodies (not abstract "
+        f"energy), set in an atmosphere of {atmosphere}.{story_line}{coin_desc}"
     )
 
 
@@ -496,6 +505,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     name = card.get('name', 'Unknown')
     type_line = card.get('type_line', '')
     oracle = card.get('oracle_text', '')
+    flavor = card.get('flavor_text', '')
     card_type = card.get('card_type', 'other')
 
     # Rule-based description as anchor — ensures correct subject identity
@@ -507,7 +517,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     _no_character = card_type in ('artifact', 'enchantment', 'land', 'instant', 'sorcery')
     type_guidance = {
         'artifact': 'Depict the artifact OBJECT itself, filling the frame. If the card NAME literally names a physical thing or body part (e.g. "Krark\'s Thumb" = a thumb, "Sol Ring" = a ring, "Sword of X" = a sword), depict THAT literal object as the relic — do NOT substitute a generic glowing disc, amulet, or runed orb. NOT a landscape, NOT a person.',
-        'enchantment': 'Depict the magical effect or ethereal manifestation as a visible phenomenon — the effect IS the subject.',
+        'enchantment': 'Depict the SCENE the enchantment represents — the people, creatures, place, ritual, or event drawn from its flavor and rules text (e.g. an army of warriors growing stronger under a hopeful dawn, a blessing settling over a battlefield). Do NOT default to abstract swirling energy, a glowing aura, or a magical vortex — give it concrete subject matter.',
         'instant': 'Depict the dramatic moment of the spell being cast — the action and energy itself.',
         'sorcery': 'Depict the spell being cast — the ritual, the gathering of power.',
         'land': 'Depict the LOCATION — terrain, architecture, or natural formation. NO central character.',
@@ -532,6 +542,12 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         "a SINGLE / central / one eye (a cyclops), the creature has exactly ONE eye — "
         "write 'eye' (singular), NEVER 'eyes', and never give it two. Likewise keep "
         "any other stated defining features. "
+        "ANCHOR THE SCENE IN THE CARD'S OWN STORY: draw concrete subjects, "
+        "characters, places, and events from the card's flavor text and rules. "
+        "AVOID generic abstract filler — do NOT default to 'swirling magical "
+        "energy', a 'luminescent/ethereal aura', a 'glowing vortex', or 'flowing "
+        "shapes'. Depict real, recognizable subject matter (people, creatures, "
+        "settings, objects, action), even for spells and enchantments. "
         "Do NOT include any style directions — just describe the subject matter."
     )
     if _no_character:
@@ -595,10 +611,12 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
 
     user_msg = (
         f"Card: {name}\nType: {type_line}\nRules: {oracle}\n"
-        f"Direction: {guidance}\n"
+        + (f"Flavor text (use this as the THEMATIC ANCHOR for the scene): {flavor}\n" if flavor else "")
+        + f"Direction: {guidance}\n"
         + (f"User steer (honor this above all): {steer.strip()}\n" if steer and steer.strip() else "")
         + f"Reference description: {base_desc}\n"
-        f"Rewrite this into a detailed scene description (2-3 sentences):"
+        f"Ground the scene in this card's flavor and rules — concrete subjects, not "
+        f"abstract energy. Rewrite into a detailed scene description (2-3 sentences):"
     )
 
     try:
