@@ -74,8 +74,8 @@ decks/<deck-slug>/
 - `generation_lock` — threading.Lock protecting `generation_status` dict. **Always** use `with generation_lock:` for status updates.
 - `generation_status` — dict of `{card_name: {status, message, has_raw_art, has_composite}}`
 - `is_generating` — bool flag for batch generation; checked by workers for cancellation
-- `active_model_key` — current model selection (e.g. `'local-sdxl-turbo'`)
-- `use_scryfall_ref` — whether to use per-card Scryfall art as img2img reference
+- `active_model_key` — current model selection (e.g. `'local-flux-schnell'`)
+- `use_scryfall_ref` — composition mode toggle: False = fast txt2img (default), True = faithful Canny ControlNet off the Scryfall art
 - `cards_db`, `prompts_map` — in-memory card/prompt data for the active deck
 
 ### Security
@@ -109,9 +109,9 @@ batch_generate_worker()                    # ThreadPoolExecutor, 1 worker for lo
 
 - **Card names with apostrophes**: Never use inline `onclick` with template literal card names (e.g. `onclick="fn('${card.name}')"`). Apostrophes in names like "Assassin's Trophy" break the JS string. Always use `addEventListener` with closures. Also use `escapeHtml()` when inserting card names via innerHTML.
 - **Port 5001**: Default port is 5001. macOS AirPlay Receiver binds port 5000 — avoid using it.
-- **API key guard**: `/api/generate` and `/api/generate-batch` check `active_model_key` backend before requiring an OpenAI API key. Don't add blanket `if not openai_client` guards — local mode doesn't need a key.
-- **SDXL Turbo on MPS**: Must use float32 (not float16) — float16 produces solid black images on Apple Silicon.
-- **Stale Flask server**: After editing `deck_studio.py`, you must restart Flask to pick up changes. Kill with `lsof -ti:<port> | xargs kill -9` then restart.
+- **No cloud / no API key**: The pipeline is MLX-native local-only. There is no OpenAI backend — don't add `openai_client`/API-key guards. `/api/generate` just needs the FLUX worker (auto-loaded on demand).
+- **18 GB memory rule**: FLUX (~13 GB) and the mlx-lm/mlx-vlm models (~5 GB) can't co-reside. They run in separate subprocesses (`flux_worker.py` / `mlx_worker.py`) and are mutually evicted; all heavy work is serialized under `gpu_coord.GPU_LOCK`. Don't load two heavy models in-process.
+- **Stale Flask server**: After editing `deck_studio.py`, you must restart Flask to pick up changes. Kill with `lsof -ti:<port> | xargs kill -9` then restart. (Worker subprocesses re-spawn on demand, so edits to `flux_worker.py`/`mlx_worker.py` apply on the next generation.)
 - **Prompt merging**: When regenerating prompts for a subset of cards, `art_prompts.json` must be merged (not overwritten) to preserve other cards' prompts.
 - **Firefox popup lifecycle**: Firefox closes extension popups when file picker dialogs open. File import must use a dedicated tab page (import.html), not the popup.
 
@@ -121,9 +121,9 @@ batch_generate_worker()                    # ThreadPoolExecutor, 1 worker for lo
 
 1. **Restart the server** (changes to .py files require restart)
 2. **Open the actual browser UI** via Playwright MCP — this is what the user sees
-3. **Switch to a local SDXL model** (e.g. SDXL Lightning) — cloud models can't be tested without API keys
+3. **Confirm the FLUX model is selected** (`local-flux-schnell` is the only model) — it auto-loads on first generate
 4. **Navigate to the affected card/feature** and trigger the exact action that was changed
-5. **For generation changes**: trigger a local generation, check the CLIP prompt in server logs, **and view the generated image** to verify the subject matches the prompt
+5. **For generation changes**: trigger a generation, check the FLUX prompt in server logs, **and view the generated image** to verify the subject matches the prompt
 6. **Take a screenshot** and verify the result matches expectations
 7. **If it doesn't work, keep iterating** — do NOT report success to the user
 8. **Only commit/merge/release when you've visually confirmed** the fix in the actual browser
