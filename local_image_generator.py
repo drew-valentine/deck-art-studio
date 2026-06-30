@@ -33,65 +33,31 @@ import gc
 import json
 import random
 import threading
+import time
 from typing import Optional
 
+from gpu_coord import GPU_LOCK, InactivityWatchdog
 
-def _phys_footprint_gb():
-    """This process's current physical memory footprint in GB, or None.
+# Worker is killed if it produces no output for this long (seconds). FLUX streams
+# a progress line per step, so the only silent window is the pre-first-step model
+# load (~10-30s cached); 300s catches a true hang without false-killing real work.
+WORKER_READ_TIMEOUT = 300
+# The first load may DOWNLOAD weights (~6-9 GB), which is silent on stdout — allow
+# much longer before declaring the eager load hung.
+WORKER_LOAD_TIMEOUT = 1800
 
-    Uses macOS `footprint`, which (unlike `ps` RSS) counts MLX's Metal/unified
-    memory. Reads `phys_footprint:` (current), NOT `phys_footprint_peak:`.
+
+def free_mlx_memory():
+    """Release this process's freed MLX/Metal buffers back to the OS.
+
+    Now that the heavy models live in worker SUBPROCESSES, this only clears the
+    Flask process's own (tiny) MLX allocator cache — the real reclaim happens
+    when a worker process is killed and the OS tears down its Metal context. The
+    old footprint-`settle` loop here measured the Flask process, which no longer
+    holds the heavy models, so it was a no-op that gave false OOM protection and
+    has been removed (callers now kill the worker synchronously and pause briefly
+    in _spawn_worker instead). Lazy MLX import keeps this importable on non-Mac CI.
     """
-    import os
-    import subprocess
-    try:
-        out = subprocess.run(["footprint", str(os.getpid())],
-                             capture_output=True, text=True, timeout=5).stdout
-        for line in out.splitlines():
-            s = line.strip().lower()
-            if s.startswith("phys_footprint:"):
-                # The unit VARIES by magnitude: "13 GB" / "645 MB" / "9632 KB".
-                # Must handle all of them — treating KB as MB (the earlier bug)
-                # under-reported by 1000x and made the settle a silent no-op.
-                parts = line.split(":", 1)[1].strip().split()
-                num = float(parts[0])
-                unit = (parts[1].upper() if len(parts) > 1 else "B")
-                factor = {"B": 1 / 1024**3, "KB": 1 / 1024**2,
-                          "MB": 1 / 1024, "GB": 1.0, "TB": 1024.0}.get(unit, 1 / 1024)
-                return num * factor
-    except Exception:
-        pass
-    return None
-
-
-def free_mlx_memory(settle_below_gb=None, timeout=8.0):
-    """Aggressively return freed MLX/Metal buffers to the OS.
-
-    A plain ``del model; gc.collect(); mx.clear_cache()`` is NOT enough on an
-    18 GB machine: when we evict one heavy model to load the next, the old
-    model's Metal buffers can linger in the allocator's cache pool while the
-    new model starts allocating — a transient ~2x peak that OOM-kills the
-    process. To make the eviction actually release before the next load:
-
-      1. ``mx.synchronize()`` — wait for in-flight GPU work so the arrays are
-         no longer referenced by a pending command buffer.
-      2. two ``gc.collect()`` passes — the mflux/mlx-vlm models hold reference
-         cycles (model <-> submodules), so a single pass may not reclaim them.
-      3. ``mx.clear_cache()`` — hand the now-unreferenced buffers back.
-
-    ``settle_below_gb``: after evicting a LARGE model (FLUX, ~13 GB), macOS
-    reclaims its GPU/wired pages ASYNCHRONOUSLY. ``mx.clear_cache()`` returns
-    the buffers to MLX but the process footprint can stay pinned at ~13 GB for
-    a few seconds. If the next big model (the 5.3 GB vision model) is wired on
-    top of that un-reclaimed footprint, the process exceeds the ~13 GB GPU
-    working-set limit and the OS hard-kills it (this was the "analyze-style
-    crashes almost every time" bug — a reclaim-timing RACE, which is why it
-    only crashed sometimes). When set, we BLOCK until the measured footprint
-    drops below this threshold (re-nudging the allocator each loop), making the
-    reclaim deterministic instead of timing-dependent. Lazy MLX import keeps
-    this importable on non-Mac CI.
-    """
-    import time
     gc.collect()
     gc.collect()
     try:
@@ -100,38 +66,6 @@ def free_mlx_memory(settle_below_gb=None, timeout=8.0):
         mx.clear_cache()
     except Exception:
         pass
-
-    if settle_below_gb is None:
-        return
-
-    start_foot = _phys_footprint_gb()
-    deadline = time.time() + timeout
-    waited = False
-    while time.time() < deadline:
-        foot = _phys_footprint_gb()
-        if foot is None:
-            time.sleep(1.0)  # can't measure — give the OS a fixed beat instead
-            break
-        if foot <= settle_below_gb:
-            if waited:
-                print(f"[mlx-mem] settle ok: footprint={foot:.1f} GB "
-                      f"(was {start_foot:.1f}, target <{settle_below_gb})")
-            return
-        # Still holding the old model's footprint — nudge the allocator and wait
-        # for the OS to reclaim before we let the next big model load.
-        waited = True
-        gc.collect()
-        try:
-            import mlx.core as mx
-            mx.clear_cache()
-        except Exception:
-            pass
-        time.sleep(0.4)
-    foot = _phys_footprint_gb()
-    print(f"[mlx-mem] settle TIMEOUT: footprint={foot:.1f} GB still above "
-          f"{settle_below_gb} GB after {timeout}s — proceeding (OOM risk)"
-          if foot is not None else
-          "[mlx-mem] settle done (footprint unmeasured)")
 
 
 def mlx_mem_str(tag: str = "") -> str:
@@ -308,10 +242,17 @@ class LocalImageGenerator:
         # process on an 18 GB machine.
         try:
             import mlx_llm
-            mlx_llm.unload()
+            mlx_llm.unload()  # synchronous: proc.wait() inside, so it's dead on return
         except Exception:
             pass
-        free_mlx_memory(settle_below_gb=7.0)
+        # The evicted MLX worker is now a dead process; the OS reclaims its
+        # ~5 GB. (The old free_mlx_memory(settle_below_gb=7.0) here measured THIS
+        # Flask process's footprint, but the heavy models live in subprocesses
+        # now, so it was a no-op giving false OOM protection — removed.) Clear our
+        # own tiny MLX cache and give the kernel a beat to finish reclaiming the
+        # killed worker's GPU pages before the new worker wires ~13 GB.
+        free_mlx_memory()
+        time.sleep(0.5)
         env = dict(os.environ)
         self._proc = subprocess.Popen(
             [sys.executable, "-u", self._worker_path()],
@@ -327,73 +268,90 @@ class LocalImageGenerator:
         self._proc.stdin.write(json.dumps(req) + "\n")
         self._proc.stdin.flush()
 
-    def _read_result(self, progress_callback):
-        """Read the worker's stdout until a done/error message. Forwards progress.
+    def _read_result(self, progress_callback, timeout=WORKER_READ_TIMEOUT):
+        """Read the worker's stdout until a terminal message. Forwards progress.
 
-        Returns the parsed 'done' dict. Raises RuntimeError on worker error/death.
+        Returns the parsed terminal dict ('done' for a generation, 'loaded' for an
+        eager load). Raises RuntimeError on worker error/death. An inactivity
+        watchdog kills the worker if it goes silent past `timeout` so a hung
+        inference can't hold GPU_LOCK forever.
         """
         import flux_worker
         sentinel = flux_worker.SENTINEL
-        while True:
-            line = self._proc.stdout.readline()
-            if line == "":
-                # EOF — the worker died (very likely an OS OOM kill, though the
-                # whole point of isolation is that only the worker dies now, not
-                # Flask). Surface it and reset so the next call respawns.
-                code = self._proc.poll()
-                self._proc = None
-                self._active_model = None
-                raise RuntimeError(f"FLUX worker exited unexpectedly (code {code})")
-            line = line.rstrip("\n")
-            if not line.startswith(sentinel):
-                if line.strip():
-                    print(line)  # library noise -> Flask log
-                continue
-            try:
-                msg = json.loads(line[len(sentinel):].strip())
-            except Exception:
-                continue
-            if "progress" in msg:
-                if progress_callback:
-                    p = msg["progress"]
-                    try:
-                        progress_callback(int(p["step"]), int(p["total"]))
-                    except Exception:
-                        pass
-            elif msg.get("error"):
-                raise RuntimeError(f"FLUX worker error: {msg['error']}")
-            elif msg.get("done"):
-                return msg
+        watchdog = InactivityWatchdog(self._proc, timeout)
+        try:
+            while True:
+                line = self._proc.stdout.readline()
+                watchdog.kick()
+                if line == "":
+                    # EOF — the worker died (OS OOM kill, or our watchdog killed a
+                    # hung worker). Surface it and reset so the next call respawns.
+                    code = self._proc.poll()
+                    self._proc = None
+                    self._active_model = None
+                    if watchdog.fired:
+                        raise RuntimeError(
+                            f"FLUX worker timed out (no output for {timeout}s) and was killed")
+                    raise RuntimeError(f"FLUX worker exited unexpectedly (code {code})")
+                line = line.rstrip("\n")
+                if not line.startswith(sentinel):
+                    if line.strip():
+                        print(line)  # library noise -> Flask log
+                    continue
+                try:
+                    msg = json.loads(line[len(sentinel):].strip())
+                except Exception:
+                    continue
+                if "progress" in msg:
+                    if progress_callback:
+                        p = msg["progress"]
+                        try:
+                            progress_callback(int(p["step"]), int(p["total"]))
+                        except Exception:
+                            pass
+                elif msg.get("error"):
+                    raise RuntimeError(f"FLUX worker error: {msg['error']}")
+                elif msg.get("done") or msg.get("loaded"):
+                    return msg
+        finally:
+            watchdog.stop()
 
     # --- load / unload ----------------------------------------------------
     def load_model(self, model_key: str, progress_callback=None,
                    download_progress_callback=None) -> tuple[bool, str]:
-        """Ensure the FLUX worker is running. Returns (success, message).
+        """Spawn the FLUX worker AND eagerly load the weights. Returns (ok, message).
 
-        FLUX itself is loaded lazily inside the worker on the first generate (the
-        weights stay in the HF cache between runs). We just spawn the worker here
-        and unload this process's mlx-lm/mlx-vlm so the worker has the memory.
+        We send an explicit 'load' command and wait for the worker to confirm the
+        weights loaded, so a genuinely broken/gated repo fails fast here with one
+        clear message — instead of every card in a batch failing later at first
+        generate with a confusing 'worker exited unexpectedly'. Weights stay in
+        the HF cache between runs; the worker reuses them for subsequent generates.
         """
-        with self._lock:
+        with GPU_LOCK, self._lock:
             if model_key not in LOCAL_MODELS:
                 return False, f"Unknown model: {model_key}. Available: {list(LOCAL_MODELS.keys())}"
             available, dep_msg = check_dependencies()
             if not available:
                 return False, dep_msg
             if progress_callback:
-                progress_callback(f"Starting FLUX worker ({model_key})...")
+                progress_callback(f"Loading FLUX ({model_key}) — first run downloads weights...")
             try:
                 self._spawn_worker()
+                self._send({"cmd": "load", "model_key": model_key})
+                # Long timeout: the first load may download ~6-9 GB.
+                self._read_result(None, timeout=WORKER_LOAD_TIMEOUT)
                 self._active_model = model_key
                 if progress_callback:
                     progress_callback(f"{model_key} ready")
                 return True, f"FLUX worker ready ({model_key})"
             except Exception as e:
-                import traceback
-                traceback.print_exc()
-                self._proc = None
+                # Tear the worker down so we don't leave a half-loaded process.
+                try:
+                    self.unload()  # reentrant: we already hold GPU_LOCK + self._lock
+                except Exception:
+                    pass
                 self._active_model = None
-                return False, f"Failed to start FLUX worker: {e}"
+                return False, f"Image model failed to load: {e}"
 
     def unload(self):
         """Terminate the FLUX worker — the OS reclaims its ENTIRE Metal context.
@@ -404,7 +362,7 @@ class LocalImageGenerator:
         analysis get a pristine GPU heap. Called by mlx_llm._free_image_model()
         before any LLM/VLM load, and before (re)loading FLUX.
         """
-        with self._lock:
+        with GPU_LOCK, self._lock:
             if self._proc is None:
                 return
             proc = self._proc
@@ -453,7 +411,7 @@ class LocalImageGenerator:
         import os
         import tempfile
         from PIL import Image
-        with self._lock:
+        with GPU_LOCK, self._lock:
             model_key = self._active_model or DEFAULT_LOCAL_MODEL
             cfg = LOCAL_MODELS.get(model_key, {})
             rw, rh = cfg.get("recommended_size", (1024, 1024))
@@ -488,7 +446,10 @@ class LocalImageGenerator:
                 self._proc = None
                 self._active_model = None
                 raise RuntimeError(f"FLUX worker write failed: {e}")
-            done = self._read_result(progress_callback)
+            # ControlNet's first use downloads the ~3 GB Canny adapter inside the
+            # worker (silent on stdout), so allow the longer load timeout there.
+            read_timeout = WORKER_LOAD_TIMEOUT if control_image_path else WORKER_READ_TIMEOUT
+            done = self._read_result(progress_callback, timeout=read_timeout)
             print(f"[flux] worker done in {done.get('seconds', 0):.1f}s (seed {done.get('seed')})")
             # Load the PNG into memory, then remove the temp file.
             img = Image.open(out_path)

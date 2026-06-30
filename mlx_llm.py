@@ -23,6 +23,17 @@ Design notes
 
 import threading
 
+from gpu_coord import GPU_LOCK, InactivityWatchdog
+
+# A chat/vision call is killed if its worker is silent this long (seconds). This
+# is the PRIMARY recovery from a wedged analysis worker: on kill, _request raises,
+# the analysis thread's finally clears ollama_idle, and FLUX generation unblocks —
+# so a wedge recovers in ~this long, well under the 900s _wait_for_ollama_idle
+# backstop (which now only covers genuinely long, still-progressing analysis).
+# 600s leaves headroom for a one-time ~4-5 GB first-run model download (silent on
+# stdout) while bounding a true hang far better than the old infinite wait.
+WORKER_REQUEST_TIMEOUT = 600
+
 # --- ollama model name -> MLX (HuggingFace) repo id ------------------------
 # Callers still pass the historical ollama names; map them to MLX 4-bit repos.
 _TEXT_MODEL_MAP = {
@@ -81,7 +92,7 @@ def unload():
     is running.
     """
     global _proc
-    with _lock:
+    with GPU_LOCK, _lock:
         if _proc is None:
             return
         proc = _proc
@@ -156,7 +167,11 @@ def _request(req: dict) -> str:
     import json as _json
     import mlx_worker
     sentinel = mlx_worker.SENTINEL
-    with _lock:
+    # GPU_LOCK (outermost, shared with the FLUX path) serializes all heavy GPU
+    # work and gives a single lock order so the cross-module eviction
+    # (_ensure_worker -> _free_image_model -> image generator unload) can't
+    # AB-BA-deadlock with a concurrent FLUX generate.
+    with GPU_LOCK, _lock:
         _ensure_worker()
         try:
             _proc.stdin.write(_json.dumps(req) + "\n")
@@ -164,24 +179,34 @@ def _request(req: dict) -> str:
         except Exception as e:
             _proc = None
             raise RuntimeError(f"MLX worker write failed: {e}")
-        while True:
-            line = _proc.stdout.readline()
-            if line == "":
-                code = _proc.poll()
-                _proc = None
-                raise RuntimeError(f"MLX worker exited unexpectedly (code {code})")
-            line = line.rstrip("\n")
-            if not line.startswith(sentinel):
-                if line.strip():
-                    print(line)  # library noise -> Flask log
-                continue
-            try:
-                msg = _json.loads(line[len(sentinel):].strip())
-            except Exception:
-                continue
-            if msg.get("error"):
-                raise RuntimeError(f"MLX worker error: {msg['error']}")
-            return (msg.get("text") or "").strip()
+        watchdog = InactivityWatchdog(_proc, WORKER_REQUEST_TIMEOUT)
+        try:
+            while True:
+                line = _proc.stdout.readline()
+                watchdog.kick()
+                if line == "":
+                    code = _proc.poll()
+                    timed_out = watchdog.fired
+                    _proc = None
+                    if timed_out:
+                        raise RuntimeError(
+                            f"MLX worker timed out (no output for "
+                            f"{WORKER_REQUEST_TIMEOUT}s) and was killed")
+                    raise RuntimeError(f"MLX worker exited unexpectedly (code {code})")
+                line = line.rstrip("\n")
+                if not line.startswith(sentinel):
+                    if line.strip():
+                        print(line)  # library noise -> Flask log
+                    continue
+                try:
+                    msg = _json.loads(line[len(sentinel):].strip())
+                except Exception:
+                    continue
+                if msg.get("error"):
+                    raise RuntimeError(f"MLX worker error: {msg['error']}")
+                return (msg.get("text") or "").strip()
+        finally:
+            watchdog.stop()
 
 
 def chat(messages: list[dict], model: str | None = None,

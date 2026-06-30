@@ -197,6 +197,17 @@ def main():
         if cmd == "shutdown":
             _log("shutdown requested")
             break
+        if cmd == "load":
+            # Eagerly load the txt2img weights so the parent can fail fast on a
+            # broken/gated repo instead of discovering it per-card at generate.
+            try:
+                engine._ensure_txt2img(req.get("model_key") or "flux-schnell-4bit")
+                _emit({"loaded": True})
+            except Exception as e:
+                import traceback
+                traceback.print_exc(file=sys.stderr)
+                _emit({"error": str(e)})
+            continue
         if cmd != "generate":
             _emit({"error": f"unknown cmd: {cmd}"})
             continue
