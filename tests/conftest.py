@@ -12,7 +12,7 @@ import deck_studio
 _GLOBALS_TO_SAVE = [
     'cards_db', 'prompts_map', 'generation_status', 'is_generating',
     'active_deck_id', 'active_deck_meta', 'active_model_key',
-    'use_scryfall_ref', 'batch_phase', 'batch_phase_detail',
+    'batch_phase', 'batch_phase_detail',
     'batch_deck_id', 'openai_client', 'ref_image_b64',
 ]
 

@@ -26,7 +26,6 @@ A self-hosted web app for generating custom AI art for Magic: The Gathering prox
 - **Style transfer from any inspiration** — Upload 1–10 reference images; a vision model reads them and writes FLUX-ready style descriptors that drive every card. Works for any aesthetic, named (e.g. "Studio Ghibli") or not.
 - **Subject-faithful prompts** — Type-aware prompt generation keeps each card's actual subject as the focal point: artifacts depict the object (a card named "Krark's Thumb" is a *thumb*, not a generic amulet), lands depict a place, a Cyclops has *one* eye — with the deck's theme as background, not a hijacked subject.
 - **Flavor-grounded scenes** — Prompts are anchored in each card's flavor and rules text, so they depict real subject matter instead of defaulting to generic "swirling magical energy."
-- **Two composition modes** — *Fast* (txt2img, ~70 s/card, strongest style) or *Faithful* (Canny ControlNet, ~6 min/card, keeps each card's original composition).
 - **Crash-safe memory model** — FLUX and the language/vision models each run in their own subprocess and are mutually evicted, so the heavy models never co-reside and exhaust the 18 GB budget (see [Architecture](#architecture--memory-model)).
 - **Multi-deck management** — Import, rename, delete, and switch between multiple decks.
 - **Scryfall integration** — Auto-fetches card data, art crops, oracle and flavor text during import.
@@ -97,10 +96,7 @@ A prompt describes the **scene** each card depicts. The deck's style is applied 
 ### Step 4: Generate Art
 
 1. Select the cards you want art for (or **"Select All"**).
-2. Choose a composition mode with the **⚡ Fast / Faithful** toggle above the card grid:
-   - **⚡ Fast** (default) — txt2img, ~70 s/card. FLUX composes the scene from the prompt; strongest style transfer.
-   - **Faithful** — Canny ControlNet, ~6 min/card. Keeps each card's original Scryfall composition while the prompt owns the style.
-3. Click **"Art"** to start generation. Progress updates appear on each card tile as it renders.
+2. Click **"Art"** to start generation (~70 s/card on an M3 Pro). Progress updates appear on each card tile as it renders.
 
 > **Tip:** Click **"Flavor"** in the action toolbar to generate themed flavor text for selected cards — it's rendered onto each card frame alongside the rules text. You can also edit flavor text per-card in the detail panel.
 
@@ -183,15 +179,12 @@ flowchart TD
 flowchart TD
     SCENE["Per-card scene prompt"]
     STYLE["flux_style_prompt\n(front-loaded — FLUX weights early tokens)"]
-    MODE{"Composition mode"}
-    FAST["⚡ Fast — txt2img\n~4 steps · ~70 s\nFLUX composes from the prompt"]
-    FAITH["Faithful — Canny ControlNet\n~14 steps · ~6 min\nlocks composition to Scryfall edges"]
+    FLUX["FLUX.1-schnell txt2img\n~4 steps · ~70 s\nFLUX composes the scene from the prompt"]
     OUT["Raw art — 672×896 (3:4)"]
 
-    SCENE --> MODE
-    STYLE --> MODE
-    MODE -->|default| FAST --> OUT
-    MODE -->|toggle| FAITH --> OUT
+    SCENE --> FLUX
+    STYLE --> FLUX
+    FLUX --> OUT
 ```
 
 **Phase 3 — Card compositing & output:**
@@ -223,7 +216,6 @@ flowchart LR
 | **Front-loaded style** | FLUX's T5 encoder weights early tokens most heavily, so the style descriptors go first; a style buried after a long scene comes through weakly or not at all. |
 | **Subject-lock prompts** | The card's own subject must dominate the frame. Object/place cards get no stray character, literal names depict the literal thing (Krark's Thumb → a thumb), and a Cyclops / "Eye of …" creature gets exactly one eye — the deck theme stays in the background. |
 | **Flavor-grounded scenes** | Prompts anchor on the card's flavor and rules text, so they depict concrete subject matter instead of generic abstract "swirling magical energy." |
-| **Two composition modes** | Fast txt2img gives the strongest style transfer; Canny ControlNet (Faithful) preserves each card's original composition when that matters more than restyling. |
 
 ## EDH Play Browser Extension
 
@@ -324,7 +316,7 @@ fetch_scryfall_art.py       — Downloads card art crops from Scryfall
 fetch_flavor_text.py        — Fetches oracle/flavor text from Scryfall
 fetch_mtg_fonts.py          — Downloads MTG card fonts (Beleren, MPlantin)
 build_pips_from_mana.py     — Renders SVG mana symbols to PNG pip images
-build_reference_collage.py  — Builds Scryfall art reference collages (Faithful mode)
+build_reference_collage.py  — Builds Scryfall art reference collages (legacy helper)
 color_transfer.py           — Color palette transfer between images (requires numpy)
 mana-master/                — SVG mana symbols (Andrew Gioia's Mana font)
 static/                     — Favicon and touch icon assets
@@ -344,7 +336,7 @@ These are created automatically and excluded from git:
 
 - `decks/` — Per-deck data (card databases, prompts, generated art, versions)
 - `shared/` — Shared caches (Scryfall art, fonts, pip renders)
-- `ref_collages/` — Generated Scryfall reference collages (Faithful mode)
+- `ref_collages/` — Generated Scryfall reference collages (legacy)
 
 Model weights are cached by Hugging Face under `~/.cache/huggingface/` and shared across all decks.
 

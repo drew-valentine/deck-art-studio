@@ -171,15 +171,3 @@ class TestApiSavePrompt:
     def test_save_prompt_missing_name(self, client):
         resp = client.post('/api/save-prompt', json={'prompt': 'test'})
         assert resp.status_code == 400
-
-
-class TestApiScryfallRef:
-    def test_get_current(self, client):
-        resp = client.get('/api/scryfall-ref')
-        assert resp.status_code == 200
-        assert 'enabled' in resp.get_json()
-
-    def test_toggle(self, client):
-        resp = client.post('/api/scryfall-ref', json={'enabled': False})
-        assert resp.status_code == 200
-        assert deck_studio.use_scryfall_ref is False

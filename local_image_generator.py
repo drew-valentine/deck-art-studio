@@ -9,17 +9,16 @@ Hyper-SD) + IP-Adapter pipeline.
 Why the API looks the way it does
 ---------------------------------
 `deck_studio.py` drives this module through a stable surface — `get_generator()`,
-`LocalImageGenerator.{load_model, unload, generate, generate_with_reference,
-get_status, is_loaded, active_model}`, `LOCAL_MODELS`, `check_dependencies()` —
-so those names are preserved even though the engine underneath changed entirely.
+`LocalImageGenerator.{load_model, unload, generate, get_status, is_loaded,
+active_model}`, `LOCAL_MODELS`, `check_dependencies()` — so those names are
+preserved even though the engine underneath changed entirely.
 
 FLUX vs. SDXL, the important differences
 ----------------------------------------
 * **Prompts:** FLUX uses a T5 text encoder with a large (~512) token budget and
   follows natural-language prompts far better than SDXL's 77-token CLIP. The old
   aggressive prompt truncation and the IP-Adapter cross-attention style transfer
-  are gone — style now rides in the text (the distilled `style_tags`), optionally
-  reinforced by img2img off the Scryfall crop.
+  are gone — style rides entirely in the text prompt (the distilled `style_tags`).
 * **Memory (18 GB):** the FLUX transformer cannot be co-resident with the
   mlx-lm/mlx-vlm models. `load_model()` unloads them (via mlx_llm) before loading
   FLUX. All MLX imports are lazy so this module imports on non-Mac CI.
@@ -129,10 +128,8 @@ LOCAL_MODELS = {
         # OOM-kills Flask on an 18 GB machine. deck_studio overrides via 'size',
         # but keep this fallback safe too. See MODEL_OPTIONS note in deck_studio.py.
         "recommended_size": (672, 896),
-        "supports_img2img": True,
-        "default_strength": 0.45,   # img2img: lower = freer, higher = closer to ref
         "memory_gb": 12,
-        "description": "FLUX.1 schnell (4-bit). High quality, ~40-70s on M3 Pro. img2img + txt2img.",
+        "description": "FLUX.1 schnell (4-bit). High quality txt2img, ~40-70s on M3 Pro.",
     },
     # NB: no 8-bit variant — there's no non-gated 8-bit mflux mirror (the official
     # repo is gated), and 8-bit won't fit alongside everything on 18 GB. It only
@@ -141,22 +138,13 @@ LOCAL_MODELS = {
 
 DEFAULT_LOCAL_MODEL = "flux-schnell-4bit"
 
-# Faithful-composition mode: Canny ControlNet locks each card's composition from
-# the Scryfall art's edges while the prompt owns the style. The dev-trained Canny
-# adapter needs more than schnell's 4 steps to render fully — 14 is the sweet spot
-# (under-renders below ~10; diminishing returns above). Non-gated weights
-# (InstantX/FLUX.1-dev-Controlnet-Canny + the schnell base mirror).
-CONTROLNET_STEPS = 14
-CONTROLNET_DEFAULT_STRENGTH = 0.45
 
 # Historical constant some call sites still import; no IP-Adapter under FLUX.
 IP_ADAPTER_STYLE_SCALE_REDUCED = 0.0
 
 
 class LocalImageGenerator:
-    """Owns ONE resident FLUX model — either the txt2img variant (fast, default)
-    or the Canny ControlNet variant (faithful composition). They can't co-reside
-    on 18 GB, so requesting the other swaps it in."""
+    """Drives the FLUX.1-schnell txt2img worker subprocess (see flux_worker.py)."""
 
     def __init__(self):
         # FLUX runs in a SUBPROCESS (flux_worker.py), not in this process — see
@@ -215,7 +203,6 @@ class LocalImageGenerator:
                     "description": info["description"],
                     "memory_gb": info["memory_gb"],
                     "cached": models_cached.get(key, False),
-                    "supports_img2img": info["supports_img2img"],
                     "recommended_size": f"{info['recommended_size'][0]}x{info['recommended_size'][1]}",
                 }
                 for key, info in LOCAL_MODELS.items()
@@ -394,19 +381,11 @@ class LocalImageGenerator:
                  width: Optional[int] = None, height: Optional[int] = None,
                  steps: Optional[int] = None, guidance: Optional[float] = None,
                  seed: Optional[int] = None,
-                 control_image_path=None, controlnet_strength: Optional[float] = None,
-                 reference_image_path=None, image_strength: Optional[float] = None,
                  progress_callback=None, **_ignored):
-        """Generate an image with FLUX (in the worker subprocess). Returns a PIL.Image.
-
-        Two modes:
-        * **txt2img** (default, fast ~4 steps): style + composition from the prompt.
-        * **Canny ControlNet** (when `control_image_path` is given): locks the
-          composition to the reference image's edges while the prompt owns the
-          style. Renders at CONTROLNET_STEPS (~14) so it's slower but faithful.
+        """Generate an image with FLUX txt2img (in the worker subprocess). Returns a PIL.Image.
 
         schnell ignores guidance / negative prompt (accepted but unused). Legacy
-        img2img + IP-Adapter kwargs are accepted for compatibility but unused.
+        kwargs are accepted via **_ignored for call-site compatibility.
         """
         import os
         import tempfile
@@ -417,10 +396,7 @@ class LocalImageGenerator:
             rw, rh = cfg.get("recommended_size", (1024, 1024))
             w = int(width or rw)
             h = int(height or rh)
-            if control_image_path:
-                n_steps = int(steps or CONTROLNET_STEPS)
-            else:
-                n_steps = int(steps or cfg.get("default_steps", 4))
+            n_steps = int(steps or cfg.get("default_steps", 4))
 
             if not self._worker_alive():
                 ok, msg = self.load_model(model_key)
@@ -433,23 +409,16 @@ class LocalImageGenerator:
                 "cmd": "generate", "model_key": model_key, "prompt": prompt,
                 "width": w, "height": h, "steps": n_steps,
                 "seed": (int(seed) if seed is not None else None),
-                "control_image_path": (str(control_image_path) if control_image_path else None),
-                "controlnet_strength": (float(controlnet_strength)
-                                        if controlnet_strength is not None else None),
                 "out_path": out_path,
             }
-            mode = "controlnet" if control_image_path else "txt2img"
-            print(f"[flux] -> worker {mode} {w}x{h}, steps={n_steps}: {prompt[:80]}")
+            print(f"[flux] -> worker txt2img {w}x{h}, steps={n_steps}: {prompt[:80]}")
             try:
                 self._send(req)
             except Exception as e:
                 self._proc = None
                 self._active_model = None
                 raise RuntimeError(f"FLUX worker write failed: {e}")
-            # ControlNet's first use downloads the ~3 GB Canny adapter inside the
-            # worker (silent on stdout), so allow the longer load timeout there.
-            read_timeout = WORKER_LOAD_TIMEOUT if control_image_path else WORKER_READ_TIMEOUT
-            done = self._read_result(progress_callback, timeout=read_timeout)
+            done = self._read_result(progress_callback, timeout=WORKER_READ_TIMEOUT)
             print(f"[flux] worker done in {done.get('seconds', 0):.1f}s (seed {done.get('seed')})")
             # Load the PNG into memory, then remove the temp file.
             img = Image.open(out_path)
@@ -459,26 +428,6 @@ class LocalImageGenerator:
             except Exception:
                 pass
             return img
-
-    def generate_with_reference(self, prompt: str, reference_image_path,
-                                strength: Optional[float] = None,
-                                negative_prompt: str = "",
-                                width: Optional[int] = None, height: Optional[int] = None,
-                                steps: Optional[int] = None, guidance: Optional[float] = None,
-                                seed: Optional[int] = None,
-                                progress_callback=None, **_ignored):
-        """img2img convenience wrapper around generate()."""
-        from pathlib import Path
-        if reference_image_path and not Path(reference_image_path).exists():
-            print(f"[flux] Reference not found: {reference_image_path}, using txt2img")
-            reference_image_path = None
-        return self.generate(
-            prompt=prompt,
-            width=width, height=height, steps=steps, seed=seed,
-            reference_image_path=reference_image_path,
-            image_strength=strength,
-            progress_callback=progress_callback,
-        )
 
     def encode_style_image(self, pil_image, cache_key=None):
         """No-op under FLUX (IP-Adapter removed). Kept for call-site compatibility."""

@@ -17,8 +17,7 @@ Protocol (newline-delimited JSON over stdin/stdout)
 ---------------------------------------------------
 Parent -> worker (stdin):
   {"cmd":"generate", "model_key":..., "prompt":..., "width":w, "height":h,
-   "steps":n, "seed":s|null, "control_image_path":path|null,
-   "controlnet_strength":cs|null, "out_path":"/tmp/....png"}
+   "steps":n, "seed":s|null, "out_path":"/tmp/....png"}
   {"cmd":"shutdown"}
 
 Worker -> parent (stdout) — protocol lines are prefixed with SENTINEL so they
@@ -52,14 +51,11 @@ def _log(msg):
 
 
 class _Engine:
-    """Holds ONE resident FLUX variant (txt2img or Canny ControlNet) and swaps
-    between them on demand. Only one is ever resident, mirroring the in-process
-    single-resident rule — but here the parent guarantees no mlx-lm/mlx-vlm model
-    is loaded in ITS process while we hold FLUX."""
+    """Holds the resident FLUX.1-schnell txt2img model. The parent guarantees no
+    mlx-lm/mlx-vlm model is loaded in ITS process while we hold FLUX."""
 
     def __init__(self):
         self._flux = None
-        self._controlnet = None
         self._model_key = None
 
     def _model_config(self, model_key):
@@ -72,7 +68,6 @@ class _Engine:
     def _ensure_txt2img(self, model_key):
         if self._flux is not None and self._model_key == model_key:
             return
-        self._controlnet = None  # can't co-reside
         self._free()
         from mflux.models.flux.variants.txt2img.flux import Flux1
         from mflux.models.common.config.model_config import ModelConfig
@@ -82,21 +77,6 @@ class _Engine:
                            quantize=cfg["quantize"], model_path=cfg["repo"])
         self._model_key = model_key
         _log("FLUX txt2img ready")
-
-    def _ensure_controlnet(self, model_key):
-        if self._controlnet is not None and self._model_key == model_key:
-            return
-        self._flux = None  # can't co-reside
-        self._free()
-        from mflux.models.flux.variants.controlnet.flux_controlnet import Flux1Controlnet
-        from mflux.models.common.config.model_config import ModelConfig
-        cfg = self._model_config(model_key)
-        _log(f"loading FLUX Canny ControlNet ({model_key}) ...")
-        self._controlnet = Flux1Controlnet(
-            model_config=ModelConfig.schnell_controlnet_canny(),
-            quantize=cfg["quantize"], model_path=cfg["repo"])
-        self._model_key = model_key
-        _log("FLUX ControlNet ready")
 
     def _free(self):
         import gc
@@ -131,25 +111,14 @@ class _Engine:
             seed = random.randint(0, 2**31 - 1)
         seed = int(seed)
         out_path = req["out_path"]
-        control = req.get("control_image_path")
 
         start = time.time()
-        if control:
-            self._ensure_controlnet(model_key)
-            n_steps = int(req.get("steps") or 14)
-            cs = float(req.get("controlnet_strength") if req.get("controlnet_strength") is not None else 0.45)
-            self._register_progress(self._controlnet, n_steps)
-            _log(f"controlnet {w}x{h} steps={n_steps}: {prompt[:80]}")
-            result = self._controlnet.generate_image(
-                seed=seed, prompt=prompt, controlnet_image_path=str(control),
-                num_inference_steps=n_steps, width=w, height=h, controlnet_strength=cs)
-        else:
-            self._ensure_txt2img(model_key)
-            n_steps = int(req.get("steps") or 4)
-            self._register_progress(self._flux, n_steps)
-            _log(f"txt2img {w}x{h} steps={n_steps}: {prompt[:80]}")
-            result = self._flux.generate_image(
-                seed=seed, prompt=prompt, num_inference_steps=n_steps, width=w, height=h)
+        self._ensure_txt2img(model_key)
+        n_steps = int(req.get("steps") or 4)
+        self._register_progress(self._flux, n_steps)
+        _log(f"txt2img {w}x{h} steps={n_steps}: {prompt[:80]}")
+        result = self._flux.generate_image(
+            seed=seed, prompt=prompt, num_inference_steps=n_steps, width=w, height=h)
 
         result.image.save(out_path)
         secs = time.time() - start

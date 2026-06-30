@@ -110,9 +110,8 @@ MODEL_OPTIONS = {
         # (2.5 GB headroom) with no visible quality loss for composited card art.
         'size': '672x896', 'landscape_size': '896x672',
         'supports_edit': False,
-        'supports_img2img': True,
         'cost_per_image': 0.00, 'backend': 'local',
-        'label': 'FLUX.1 schnell (4-bit) | txt2img + ControlNet',
+        'label': 'FLUX.1 schnell (4-bit)',
         'description': 'High quality, ~40-70s on M3 Pro. Recommended.',
     },
     # NB: no 8-bit option — it has no non-gated mirror (needs an HF login) and is
@@ -122,10 +121,6 @@ DEFAULT_MODEL_KEY = 'local-flux-schnell'
 
 # Active model selection (mutable at runtime via API)
 active_model_key = DEFAULT_MODEL_KEY
-
-# Composition mode toggle. False (default) = fast txt2img; True = faithful Canny
-# ControlNet off the Scryfall art (locks composition, ~14 steps, slower).
-use_scryfall_ref = False
 
 
 # ---------------------------------------------------------------------------
@@ -1001,7 +996,7 @@ def _generate_openai(card_name, model_cfg, full_prompt, status_dict=None, size_o
         ref_image_path = active_inspiration_path
     used_scryfall_ref = False
 
-    if supports_edit and use_scryfall_ref:
+    if supports_edit:  # cloud-only edit path (vestigial — no cloud model active)
         with generation_lock:
             _status[card_name]['message'] = 'Fetching Scryfall art for reference...'
 
@@ -1303,14 +1298,13 @@ def _build_negative_fallback(style_tokens: dict, deck_meta: dict) -> str:
     return ', '.join(neg_parts)
 
 
-def _generate_local(card_name, model_cfg, full_prompt, ref_path_override=None, status_dict=None, size_override=None):
+def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_override=None):
     """Generate an image with the local FLUX model (mflux). Returns a PIL Image.
 
     Style always rides in the text prompt (the style source name + distilled
     clip_directives.style_tags + the distilled card subject) — FLUX's strong T5
-    prompt adherence replaces SDXL's IP-Adapter. Composition has two modes,
-    selected by the use_scryfall_ref toggle: fast txt2img (FLUX composes from the
-    prompt) or faithful Canny ControlNet off the Scryfall art's edges (slower).
+    prompt adherence carries the aesthetic. Always txt2img: FLUX composes the
+    scene from the prompt.
     """
     _status = status_dict if status_dict is not None else generation_status
     from local_image_generator import get_generator
@@ -1404,27 +1398,12 @@ def _generate_local(card_name, model_cfg, full_prompt, ref_path_override=None, s
                 s['total_steps'] = total
                 s['message'] = f'Step {step}/{total}...'
 
-    # --- Mode: fast txt2img (default) vs faithful Canny ControlNet (toggle) ---
-    # The "Style reference" toggle (use_scryfall_ref) decides the mode:
-    #   * OFF  -> fast txt2img (~4 steps): FLUX composes from the prompt; strongest
-    #             style, no init image. Best for arting a whole deck quickly.
-    #   * ON   -> Canny ControlNet (~14 steps): locks this card's composition to the
-    #             Scryfall art's EDGES while the prompt owns the style. Slower but
-    #             keeps the original layout. We pass the raw Scryfall crop; mflux
-    #             runs Canny on it internally.
-    # NB: do NOT use img2img off the Scryfall crop — img2img preserves the crop's
-    # colours/rendering (the very style we're replacing). ControlNet keeps only the
-    # geometry, so the prompt's style fully takes over.
-    control_path = ref_path_override if (ref_path_override and model_cfg.get('supports_img2img')) else None
-
     print(f"[local_img] FLUX prompt ({len(flux_prompt.split())} words): {flux_prompt}")
     with generation_lock:
-        _status[card_name]['message'] = ('Generating (faithful composition, ~slower)...'
-                                         if control_path else 'Generating from text prompt...')
+        _status[card_name]['message'] = 'Generating from text prompt...'
     return gen.generate(
         prompt=flux_prompt,
         width=w, height=h,
-        control_image_path=control_path,
         progress_callback=on_step,
     )
 
@@ -1489,7 +1468,7 @@ def _archive_art(card_name, raw_art_dir=None, composite_dir=None, versions_dir=N
     return version_info
 
 
-def generate_art_for_card(card_name, custom_prompt=None, feedback=None, ref_path_override=None,
+def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                           status_dict=None, raw_art_dir=None, composite_dir=None,
                           versions_dir=None, cards_db_snapshot=None):
     """Generate art for a single card using the active model config.
@@ -1583,15 +1562,9 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None, ref_path
                 'has_composite': comp_path.exists(),
             }
 
-        # ── Fetch Scryfall ref for local img2img (if not pre-fetched by caller) ──
-        if backend == 'local' and ref_path_override is None \
-                and use_scryfall_ref and model_cfg.get('supports_img2img'):
-            ref_path_override = fetch_card_art(card_name)
-
         # ── Generate the image ──
         if backend == 'local':
             result_image = _generate_local(card_name, model_cfg, full_prompt,
-                                           ref_path_override=ref_path_override,
                                            status_dict=_status,
                                            size_override=actual_size)
         else:
@@ -1656,37 +1629,6 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None, ref_path
 PARALLEL_WORKERS = 2  # concurrent image generation threads (conservative for rate limits)
 
 
-def _prefetch_scryfall_refs(card_names):
-    """Pre-fetch Scryfall art for all cards in parallel. Returns {name: Path|None}."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    global batch_phase_detail
-
-    refs = {}
-    total = len(card_names)
-    fetched_count = 0
-    print(f"[batch] Pre-fetching Scryfall art for {total} cards...")
-
-    def fetch_one(name):
-        nonlocal fetched_count
-        path = fetch_card_art(name)
-        fetched_count += 1
-        batch_phase_detail = f'Downloading reference art ({fetched_count}/{total})...'
-        return name, path
-
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = [pool.submit(fetch_one, name) for name in card_names]
-        for future in as_completed(futures):
-            try:
-                name, path = future.result()
-                if path and path.exists():
-                    refs[name] = path
-            except Exception as e:
-                print(f"  [prefetch] Error: {e}")
-
-    print(f"[batch] Pre-fetched {len(refs)}/{total} references")
-    return refs
-
-
 def batch_generate_worker(card_names, feedback_map=None):
     """Background worker for batch generation — runs up to PARALLEL_WORKERS at once.
 
@@ -1743,13 +1685,6 @@ def batch_generate_worker(card_names, feedback_map=None):
                             }
                     return  # finally block resets is_generating / batch_phase
 
-        # Pre-fetch Scryfall art in parallel before generation starts (local only)
-        prefetched_refs = {}
-        if is_local and use_scryfall_ref and model_cfg.get('supports_img2img'):
-            batch_phase = 'prefetching'
-            batch_phase_detail = f'Downloading reference art (0/{len(card_names)})...'
-            prefetched_refs = _prefetch_scryfall_refs(card_names)
-
         # Transition to generating phase
         batch_phase = 'generating'
         batch_phase_detail = ''
@@ -1770,9 +1705,8 @@ def batch_generate_worker(card_names, feedback_map=None):
             if not is_generating:
                 return
             feedback = feedback_map.get(name)
-            ref = prefetched_refs.get(name)
             generate_art_for_card(
-                name, feedback=feedback, ref_path_override=ref,
+                name, feedback=feedback,
                 status_dict=_batch_generation_status,
                 raw_art_dir=_raw_art_dir,
                 composite_dir=_composite_dir,
@@ -4429,18 +4363,6 @@ def get_status():
     })
 
 
-@app.route('/api/scryfall-ref', methods=['GET', 'POST'])
-def scryfall_ref_toggle():
-    """Get or set whether to use Scryfall original art as additional reference."""
-    global use_scryfall_ref
-    if request.method == 'POST':
-        data = request.json
-        use_scryfall_ref = bool(data.get('enabled', True))
-        return jsonify({'enabled': use_scryfall_ref})
-    return jsonify({'enabled': use_scryfall_ref})
-
-
-
 @app.route('/api/model-config')
 def get_model_config():
     """Return available models, pricing, and the active selection."""
@@ -4454,7 +4376,6 @@ def get_model_config():
             'label': v['label'],
             'description': v['description'],
             'cost_per_image': v['cost_per_image'],
-            'supports_ref_image': v.get('supports_edit', False) or v.get('supports_img2img', False),
             'estimated_remaining': round(v['cost_per_image'] * remaining, 2),
             'estimated_total': round(v['cost_per_image'] * len(cards_db), 2),
             'is_local': v.get('backend') == 'local',
@@ -4468,7 +4389,6 @@ def get_model_config():
 
     return jsonify({
         'active': active_model_key,
-        'use_scryfall_ref': use_scryfall_ref,
         'remaining_cards': remaining,
         'total_cards': len(cards_db),
         'options': options,
@@ -6037,10 +5957,6 @@ header .separator {
   white-space: nowrap;
   font-weight: 500;
 }
-.cost-estimate .no-ref-warn {
-  color: var(--error);
-  font-size: 0.9em;
-}
 .cost-estimate.cost-free {
   background: rgba(76,175,80,0.15);
   color: var(--success);
@@ -7079,23 +6995,6 @@ header .separator {
   text-decoration-style: dotted; text-underline-offset: 2px;
 }
 .model-hub-change-key:hover { color: var(--text-dim); }
-/* --- Model Hub: Generation Options --- */
-.model-hub-gen-options {
-  margin-top: 16px; padding: 14px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-}
-.model-hub-gen-options h4 {
-  font-size: 0.75em; color: var(--text-dim);
-  letter-spacing: -0.01em; margin-bottom: 8px; font-weight: 600;
-}
-.model-hub-gen-options .ref-toggle {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 0.82em; color: var(--text-dim); cursor: pointer;
-}
-.model-hub-gen-options .ref-toggle input { accent-color: var(--gold); }
-.model-hub-gen-hint {
-  font-size: 0.72em; color: var(--text-muted); margin-top: 4px;
-}
 </style>
 </head>
 <body>
@@ -7263,8 +7162,6 @@ header .separator {
           title="Regenerate art prompts for selected cards">Prompts (0)</button>
   <button class="btn btn-secondary btn-sm" id="btnGenFlavor" onclick="generateFlavorText()" disabled
           title="Generate themed flavor text for selected cards">Flavor (0)</button>
-  <button class="btn btn-ghost btn-xs" id="btnCompMode" data-faithful="false" onclick="toggleCompMode()"
-          title="Composition mode. Fast: txt2img (~70s/card) — FLUX composes from the prompt, strongest style. Faithful: Canny ControlNet (~6 min/card) — keeps each card's original composition.">⚡ Fast</button>
   <button class="btn btn-gold btn-sm" id="btnGenArt" onclick="generateArt()" disabled
           title="Generate artwork for selected cards">Art (0)</button>
   <button class="btn btn-secondary btn-sm" id="btnRenderFrames" onclick="renderFrames()" disabled
@@ -7715,7 +7612,6 @@ async function init() {
 
   // Load mode handles: backend state, model config, dropdown, ref toggle, cost
   await loadMode();
-  initCompMode();  // sync the action-bar composition-mode toggle
 
   renderGrid();  // also calls syncPinnedCards()
   updateFilterIndicator();  // restore indicator if browser autofilled filters
@@ -8318,57 +8214,8 @@ function updateCostEstimate() {
   const remaining = modelConfig.remaining_cards;
   let html = `~$${opt.estimated_remaining.toFixed(2)} for ${remaining} cards`;
   html += ` \u00b7 $${opt.cost_per_image}/ea`;
-  if (!opt.supports_ref_image) {
-    html += ' <span class="no-ref-warn">\u26a0 no ref image</span>';
-  }
   el.innerHTML = html;
 }
-
-// updateRefToggle is now handled inside setMode()
-
-async function toggleScryfallRef(checkbox) {
-  const enabled = checkbox ? checkbox.checked : document.getElementById('hubRefToggle')?.checked;
-  await fetch('/api/scryfall-ref', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({enabled}),
-  });
-  setCompModeUI(enabled);  // keep the action-bar toggle in sync
-}
-
-// Composition mode toggle (action bar): Fast txt2img <-> Faithful ControlNet.
-function setCompModeUI(faithful) {
-  const btn = document.getElementById('btnCompMode');
-  if (btn) {
-    btn.dataset.faithful = faithful ? 'true' : 'false';
-    btn.textContent = faithful ? '🔒 Faithful' : '⚡ Fast';
-    btn.classList.toggle('btn-gold', faithful);
-    btn.classList.toggle('btn-ghost', !faithful);
-  }
-  const hub = document.getElementById('hubRefToggle');
-  if (hub) hub.checked = faithful;
-}
-
-async function toggleCompMode() {
-  const btn = document.getElementById('btnCompMode');
-  const faithful = !(btn && btn.dataset.faithful === 'true');
-  await fetch('/api/scryfall-ref', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({enabled: faithful}),
-  });
-  setCompModeUI(faithful);
-  showToast(faithful ? 'Faithful mode: keeps composition (ControlNet, ~6 min/card)'
-                     : 'Fast mode: txt2img (~70s/card)', 'success');
-}
-
-async function initCompMode() {
-  try {
-    const r = await (await fetch('/api/scryfall-ref')).json();
-    setCompModeUI(!!r.enabled);
-  } catch (e) { /* default Fast */ }
-}
-
 
 function getActiveCostPerImage() {
   if (!modelConfig) return 0.06;
@@ -11542,7 +11389,6 @@ async function openModelHub() {
 
       // Capabilities
       const caps = [];
-      if (m.supports_ref_image || m.supports_img2img) caps.push('ControlNet');
       const size = m.size || '';
       const memMatch = m.label?.match(/(\\d+GB)/);
       const mem = memMatch ? memMatch[1] + ' VRAM' : '';
@@ -11584,22 +11430,6 @@ async function openModelHub() {
     </div>`;
 
     html += '</div>';
-
-    // Generation Options — ref toggle
-    const isLocal = modelConfig && modelConfig.options[modelConfig.active]?.is_local;
-    const refLabel = 'Lock composition (ControlNet, slower)';
-    const refHint = "ON: keep each card's original composition via Canny ControlNet "
-      + "(~14 steps, ~6 min/card). OFF: fast txt2img (~4 steps, ~70s) — FLUX composes "
-      + "from the prompt, strongest style.";
-    const refChecked = modelConfig?.use_scryfall_ref !== false ? 'checked' : '';
-    html += `<div class="model-hub-gen-options">
-      <h4>Generation Options</h4>
-      <label class="ref-toggle">
-        <input type="checkbox" id="hubRefToggle" ${refChecked} onchange="toggleScryfallRef(this)">
-        <span>${refLabel}</span>
-      </label>
-      <div class="model-hub-gen-hint">${escapeHtml(refHint)}</div>
-    </div>`;
 
     body.innerHTML = html;
   } catch(e) {

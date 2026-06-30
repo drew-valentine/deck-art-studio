@@ -75,7 +75,6 @@ decks/<deck-slug>/
 - `generation_status` — dict of `{card_name: {status, message, has_raw_art, has_composite}}`
 - `is_generating` — bool flag for batch generation; checked by workers for cancellation
 - `active_model_key` — current model selection (e.g. `'local-flux-schnell'`)
-- `use_scryfall_ref` — composition mode toggle: False = fast txt2img (default), True = faithful Canny ControlNet off the Scryfall art
 - `cards_db`, `prompts_map` — in-memory card/prompt data for the active deck
 
 ### Security
