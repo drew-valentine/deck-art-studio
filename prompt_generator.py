@@ -269,7 +269,12 @@ def _describe_enchantment(name, oracle, keywords, atmosphere, flavor=''):
     coin_desc = ''
     if 'coin flip' in keywords or 'coin' in (oracle or '').lower():
         coin_desc = ' Elements of chance and spinning coins feature in the scene.'
-    story = (flavor or oracle or '').strip()
+    # Use ONLY flavor text (clean prose) as the story anchor — NOT raw oracle,
+    # which is rules syntax with mana symbols ('{T}', '{2}', reminder text). This
+    # string is the fallback returned to FLUX verbatim when the prompt LLM is
+    # unavailable, so any rules text here would be baked into the art as garbled
+    # symbols. Strip stray '{...}' tokens defensively.
+    story = re.sub(r'\{[^}]*\}', '', flavor or '').strip()
     story_line = f" The scene is drawn from its story: {story}" if story else ''
     return (
         f"A concrete illustrated scene representing the enchantment {name} — "
