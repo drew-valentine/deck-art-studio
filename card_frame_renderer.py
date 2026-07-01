@@ -1773,6 +1773,42 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
 
     svg.append(_svg_filters(theme))
 
+    # ── Two-color gradient chrome (multi-type lands & gold cards) ──
+    # Blend/split the frame background + title/type/PT boxes between the two
+    # colors, left→right — the goal's "left/right color gradients". Honors the
+    # frame_gradient setting: 'off'/False disables, 'split' = hard center seam,
+    # anything else = smooth blend. Skipped when the user overrode bg/field
+    # colors or on showcase (Godzilla) frames.
+    grad_theme = theme
+    _grad_set = fs.get('frame_gradient', 'auto')
+    _gcols = card.colors or card.color_identity or []
+    _co = fs.get('color_overrides', {}) or {}
+    if (_grad_set not in ('off', False) and len(_gcols) == 2
+            and not showcase and 'field' not in _co and 'bg' not in _co):
+        g1, g2 = sorted(_gcols, key=lambda c: 'WUBRG'.index(c)
+                        if c in 'WUBRG' else 99)
+        if g1 in COLOR_THEMES and g2 in COLOR_THEMES:
+            _hard = (_grad_set == 'split')
+
+            def _grad_def(gid, c1, c2):
+                if _hard:
+                    stops = (f'<stop offset="50%" stop-color="{c1}"/>'
+                             f'<stop offset="50%" stop-color="{c2}"/>')
+                else:
+                    stops = (f'<stop offset="0%" stop-color="{c1}"/>'
+                             f'<stop offset="100%" stop-color="{c2}"/>')
+                return (f'<linearGradient id="{gid}" x1="0" y1="0" x2="1" y2="0">'
+                        f'{stops}</linearGradient>')
+
+            svg.append(
+                '<defs>'
+                + _grad_def('fdBgGrad', COLOR_THEMES[g1]['bg'], COLOR_THEMES[g2]['bg'])
+                + _grad_def('fdFieldGrad', COLOR_THEMES[g1]['field'], COLOR_THEMES[g2]['field'])
+                + '</defs>')
+            field = 'url(#fdFieldGrad)'  # field only ever fills boxes → gradient them all
+            grad_theme = dict(theme)
+            grad_theme['bg'] = 'url(#fdBgGrad)'
+
     # Add nyx starfield pattern definition if needed
     if render.get('frame_pattern') == 'nyx':
         svg.append(f'<defs>{_render_nyx_defs()}</defs>')
@@ -1783,12 +1819,12 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
 
     # ── Layer: Frame background ──
     if _layer_visible(layers, 'frame'):
-        svg.append(_render_frame_bg_layer(theme, _layer_opacity(layers, 'frame'),
+        svg.append(_render_frame_bg_layer(grad_theme, _layer_opacity(layers, 'frame'),
                                           type_y, render))
 
     # ── Inner border around art window (retro style) ──
     if render.get('inner_border') and _layer_visible(layers, 'frame'):
-        svg.append(_render_inner_border_layer(theme, _layer_opacity(layers, 'frame'),
+        svg.append(_render_inner_border_layer(grad_theme, _layer_opacity(layers, 'frame'),
                                               type_y, render))
 
 
