@@ -337,33 +337,13 @@ FRAME_STYLES = {
         'type_y': 860, 'show_oracle': False, 'show_flavor': False,
     },
     'godzilla': {
-        'label': 'Godzilla',
-        'description': 'Cinematic showcase — full-bleed art, huge title over a dark banner, '
-                       'original name beneath. Larger-than-life monster treatment.',
-        'mode': 'svg',
-        'render': {
-            'border_width': 22,
-            'border_color': '#0a0a0a',
-            'border_radius': 30,
-            'art_margin': 0,          # full-bleed art
-            'pinline_width': 0,
-            'frame_pattern': 'none',
-            'field_shape': 'simple',
-            'field_stroke': False,
-            'bevel': False,
-            'showcase': True,         # triggers dark theme + two-line title
-            'pt_shape': 'pentagon',
-        },
-        'layers': {
-            'border':    {'visible': True,  'opacity': 1.0},
-            'frame':     {'visible': False, 'opacity': 0},
-            'title_bar': {'visible': True,  'opacity': 0.62},
-            'pinlines':  {'visible': False, 'opacity': 0},
-            'type_bar':  {'visible': True,  'opacity': 0.58},
-            'text_box':  {'visible': True,  'opacity': 0.60},
-            'pt_box':    {'visible': True,  'opacity': 0.85},
-            'info_bar':  {'visible': False, 'opacity': 0},
-        },
+        'label': 'Godzilla / Showcase',
+        'description': 'Ikoria borderless showcase — full-bleed art, gold-trimmed title with a '
+                       'big display name over the original name, light rules box. Built from the '
+                       'authentic Ikoria frame assets.',
+        'mode': 'image',
+        'frame_set': 'iko',
+        'layout': 'iko',
     },
     'clean': {
         'label': 'Clean',
@@ -2673,6 +2653,104 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
     return '\n'.join(svg)
 
 
+# Ikoria showcase layout — pixel coords in the 750x1050 output space (measured
+# from the vendored iko frame PNGs).
+IKO_LAYOUT = {
+    'title_y0': 43, 'title_y1': 117,
+    'type_y0': 726, 'type_y1': 803,
+    'rules_y0': 812, 'rules_y1': 1030,
+    'x_margin': 58, 'x_right': 694,
+}
+
+
+def _create_iko_text_svg(card: CardData, fs: dict) -> str:
+    """Text overlay for the Ikoria showcase (Godzilla) frame.
+
+    Two-line title (big display name over the real name) in white on the dark
+    gold-trimmed title bar; white type line; dark rules text on the light box;
+    gold P/T. Rendered in 750x1050 pixel space to match the measured frame.
+    """
+    L = IKO_LAYOUT
+    W, H = CARD_WIDTH, CARD_HEIGHT
+    mana_pips = parse_mana_cost(card.mana_cost)
+    white = '#f6f1e6'
+    dark = '#1a1712'
+
+    svg = ['<?xml version="1.0" encoding="UTF-8"?>',
+           f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
+           f'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">']
+    if _FONT_FACE_CSS:
+        svg.append(f'<style type="text/css">\n{_FONT_FACE_CSS}\n</style>')
+
+    tx = L['x_margin']
+    esc_name = card.name.replace('&', '&amp;').replace('<', '&lt;')
+    big = card.showcase_name or card.name
+    big_esc = big.replace('&', '&amp;').replace('<', '&lt;')
+    has_sub = bool(card.showcase_name) and card.showcase_name.strip() != card.name.strip()
+    pip_w = len(mana_pips) * (MANA_PIP_SIZE + MANA_PIP_GAP) + 14 if mana_pips else 0
+    avail = (L['x_right'] - tx) - pip_w
+
+    def fit_font(text, base_font, ratio=0.58):
+        est = len(text) * base_font * ratio
+        if est > avail and avail > 0:
+            return max(22, int(base_font * avail / est))
+        return base_font
+
+    # ── Title: big display name (+ optional small original name) ──
+    if has_sub:
+        bf = fit_font(big, 40)
+        svg.append(f'<text x="{tx}" y="{L["title_y0"] + 36}" font-family="{NAME_FONT_FAMILY}" '
+                   f'font-size="{bf}" font-weight="bold" fill="{white}" '
+                   f'stroke="rgba(0,0,0,0.5)" stroke-width="0.6">{big_esc}</text>')
+        svg.append(f'<text x="{tx + 2}" y="{L["title_y1"] - 15}" font-family="{TYPE_FONT_FAMILY}" '
+                   f'font-size="20" font-style="italic" fill="{white}" opacity="0.9">{esc_name}</text>')
+    else:
+        bf = fit_font(big, 44)
+        cy = (L['title_y0'] + L['title_y1']) / 2 + bf * 0.35
+        svg.append(f'<text x="{tx}" y="{cy}" font-family="{NAME_FONT_FAMILY}" '
+                   f'font-size="{bf}" font-weight="bold" fill="{white}" '
+                   f'stroke="rgba(0,0,0,0.5)" stroke-width="0.6">{big_esc}</text>')
+
+    # ── Mana pips (right-aligned in the title bar) ──
+    if mana_pips:
+        pcy = (L['title_y0'] + L['title_y1']) / 2
+        px = L['x_right']
+        for pip in reversed(mana_pips):
+            pxx = px - MANA_PIP_SIZE
+            svg.append(f'<circle cx="{pxx + MANA_PIP_SIZE/2 + 0.5}" cy="{pcy + 1}" '
+                       f'r="{MANA_PIP_SIZE/2}" fill="rgba(0,0,0,0.3)"/>')
+            svg.append(_pip_image_tag(pip, pxx, pcy - MANA_PIP_SIZE/2, MANA_PIP_SIZE))
+            px -= (MANA_PIP_SIZE + MANA_PIP_GAP)
+
+    # ── Type line (white on the dark type bar), fit to width ──
+    esc_type = card.type_line.replace('&', '&amp;').replace('<', '&lt;')
+    type_w_avail = L['x_right'] - tx
+    type_font = 31
+    type_est = len(card.type_line) * type_font * 0.50
+    if type_est > type_w_avail and type_w_avail > 0:
+        type_font = max(19, int(type_font * type_w_avail / type_est))
+    tcy = (L['type_y0'] + L['type_y1']) / 2 + type_font * 0.35
+    svg.append(f'<text x="{tx}" y="{tcy}" font-family="{TYPE_FONT_FAMILY}" '
+               f'font-size="{type_font}" font-weight="bold" fill="{white}">{esc_type}</text>')
+
+    # ── Rules text (dark on the light box) ──
+    rules_lines, _ = render_rules_text_svg(
+        card.oracle_text or '', tx, L['rules_y0'] + 32,
+        L['x_right'] - tx, L['rules_y1'] - L['rules_y0'] - 16,
+        27, 11, text_color=dark)
+    svg.extend(rules_lines)
+
+    # ── P/T (gold, bottom-right) ──
+    if card.power is not None and card.toughness is not None:
+        svg.append(f'<text x="{L["x_right"] - 4}" y="{L["rules_y1"] + 8}" text-anchor="end" '
+                   f'font-family="{PT_FONT_FAMILY}" font-size="40" font-weight="bold" '
+                   f'fill="#f4e4a8" stroke="rgba(0,0,0,0.6)" stroke-width="0.8">'
+                   f'{card.power}/{card.toughness}</text>')
+
+    svg.append('</svg>')
+    return '\n'.join(svg)
+
+
 def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Image.Image:
     """Frame PNG + P/T box (gradient-aware), WITHOUT text.
 
@@ -2709,6 +2787,14 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         frame_img = frame_img.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
 
     result = frame_img.copy()
+
+    # Some frame sets (iko showcase) layer a 'colored/' overlay on top of the
+    # base black+gold frame — e.g. the light rules box. No-op for m15.
+    colored = _load_frame_image(frame_set, f'colored/{color_key}')
+    if colored is not None:
+        if colored.size != (CARD_WIDTH, CARD_HEIGHT):
+            colored = colored.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+        result = Image.alpha_composite(result, colored)
 
     # Composite P/T box overlay for creatures
     has_pt = card.power is not None and card.toughness is not None
@@ -2755,8 +2841,11 @@ def _render_image_frame(card_dict: dict, card: CardData, fs: dict) -> Image.Imag
     """
     result = _compose_image_frame_base(card_dict, card, fs)
 
-    # Render text-only SVG and composite on top
-    text_svg = _create_text_only_svg(card, fs)
+    # Render text-only SVG and composite on top (iko showcase uses its own layout)
+    if fs.get('layout') == 'iko' or fs.get('frame_set') == 'iko':
+        text_svg = _create_iko_text_svg(card, fs)
+    else:
+        text_svg = _create_text_only_svg(card, fs)
     text_png_data = cairosvg.svg2png(
         bytestring=text_svg.encode('utf-8'),
         output_width=CARD_WIDTH,
@@ -2808,6 +2897,10 @@ def render_text_overlay(card_dict: dict, frame_settings: dict) -> bytes:
     card = _build_card_data(card_dict, fs)
 
     if fs.get('mode') == 'image':
+        if fs.get('layout') == 'iko' or fs.get('frame_set') == 'iko':
+            text_svg = _create_iko_text_svg(card, fs)
+            return cairosvg.svg2png(bytestring=text_svg.encode('utf-8'),
+                                    output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
         # Compute dynamic PT center if not already set
         if '_pt_center_x_svg' not in fs and card.power is not None:
             pt_base = CARD_WIDTH / 750.0
