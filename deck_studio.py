@@ -7446,6 +7446,13 @@ header .separator {
                 <label class="frame-text-label">Showcase Name</label>
                 <input type="text" class="frame-text-input" id="frameOverrideShowcase" placeholder="e.g. GODZILLA, KING OF THE MONSTERS" title="Big title for the Godzilla/showcase frame; the card's real name renders small beneath it.">
               </div>
+              <div class="frame-text-row" id="frameOrnateRow" style="display:none;">
+                <label class="frame-text-label">Ornate Nameplate</label>
+                <label class="frame-auto-toggle" title="Use the ornate gold banner nameplate (as on the real Godzilla cards). Off = plain gold bar.">
+                  <input type="checkbox" id="frameOrnateNameplate" checked onchange="scheduleFramePreview()">
+                  <span>Gold banner ends</span>
+                </label>
+              </div>
               <div class="frame-text-row">
                 <label class="frame-text-label">Card Name</label>
                 <input type="text" class="frame-text-input" id="frameOverrideName" placeholder="">
@@ -9981,9 +9988,11 @@ function selectFrameStyle(key) {
     if (colorSection) colorSection.style.display = '';
   }
 
-  // Showcase-name field: only meaningful for the Godzilla/showcase style.
+  // Showcase-name field + ornate nameplate toggle: only for the Godzilla style.
   const showcaseRow = document.getElementById('frameShowcaseRow');
   if (showcaseRow) showcaseRow.style.display = (key === 'godzilla') ? '' : 'none';
+  const ornateRow = document.getElementById('frameOrnateRow');
+  if (ornateRow) ornateRow.style.display = (key === 'godzilla') ? '' : 'none';
 
   // Reload frame layer on canvas
   loadFrameLayerForCanvas();
@@ -10028,6 +10037,8 @@ function populateFrameFromSettings(settings) {
   }
 
   setFrameGradient(settings.frame_gradient || 'auto');
+  const ornateEl = document.getElementById('frameOrnateNameplate');
+  if (ornateEl) ornateEl.checked = settings.ornate_nameplate !== false;  // default on
 }
 
 function wireFrameInputs() {
@@ -10376,6 +10387,8 @@ function gatherFrameSettings() {
     style: _activeFrameStyle,
     frame_gradient: _frameGradient,
   };
+  const ornateEl = document.getElementById('frameOrnateNameplate');
+  if (ornateEl) settings.ornate_nameplate = ornateEl.checked;
 
   const style = _frameStyles[_activeFrameStyle];
   if (style && style.mode !== 'image') {
