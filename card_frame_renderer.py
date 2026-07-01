@@ -2911,7 +2911,9 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     if frame_set == 'iko':
         import numpy as np
         accent = result.getpixel((54, 850))[:3]
-        bx0, by0, bx1, by1, rad = 47, 806, 703, 1022, 22
+        # by0 raised to meet the type bar bottom so there's no transparent art gap
+        # (seam) between the type bar and the cream rules box.
+        bx0, by0, bx1, by1, rad = 47, 792, 703, 1022, 22
         SS = 4
         big = Image.new('RGBA', (CARD_WIDTH * SS, CARD_HEIGHT * SS), (0, 0, 0, 0))
         bd = ImageDraw.Draw(big)
