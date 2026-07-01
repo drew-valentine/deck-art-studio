@@ -2678,9 +2678,9 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
 IKO_LAYOUT = {  # measured from the cardconjurer iko asset's real boxes
     'title_y0': 43, 'title_y1': 117,
     'type_y0': 726, 'type_y1': 803,
-    'rules_y0': 820, 'rules_y1': 1006,   # tall rules box (tint extended over black bar)
-    'x_margin': 64, 'x_right': 690,
-    'pt_y': 1038,
+    'rules_y0': 818, 'rules_y1': 998,   # tall cream box drawn over the rules area
+    'x_margin': 62, 'x_right': 690,
+    'pt_y': 1012,
 }
 
 
@@ -2768,12 +2768,11 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
             rbox_w, rbox_h, r_font, r_line, text_color=dark)
         svg.extend(rules_lines)
 
-    # ── P/T (white, bottom-right of the rules box) ──
+    # ── P/T (gold, centered in the gold plate drawn by the frame compositor) ──
     if card.power is not None and card.toughness is not None:
-        svg.append(f'<text x="{L["x_right"]}" y="{L.get("pt_y", 1040)}" text-anchor="end" '
-                   f'font-family="{PT_FONT_FAMILY}" font-size="40" font-weight="bold" '
-                   f'fill="{white}" stroke="rgba(0,0,0,0.5)" stroke-width="0.7">'
-                   f'{card.power}/{card.toughness}</text>')
+        svg.append(f'<text x="651" y="1022" text-anchor="middle" '
+                   f'font-family="{PT_FONT_FAMILY}" font-size="34" font-weight="bold" '
+                   f'fill="#f4e4a8">{card.power}/{card.toughness}</text>')
 
     svg.append('</svg>')
     return '\n'.join(svg)
@@ -2875,16 +2874,10 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     color_key = _determine_color_key(card_dict)
     frame_set = fs.get('frame_set', 'm15')
 
-    # The real Godzilla cards use the GOLD frame on every colour (confirmed on
-    # mono-red Zilortha); it's also the only cardconjurer iko tint light enough for
-    # readable dark rules text (blue/black tints are too dark). So iko -> gold.
-    if frame_set == 'iko':
-        color_key = 'm'
-
     # Two-color cards/lands: build a left->right gradient frame from the two
     # single-color frames (the goal's "left/right color gradients"), instead of
     # the flat gold 'm' frame. Returns 'gradient'|'split'|None.
-    grad_mode = _gradient_mode(card_dict, fs) if frame_set != 'iko' else None
+    grad_mode = _gradient_mode(card_dict, fs)
     two_keys = _two_color_keys(card_dict) if grad_mode else None
 
     # Load main frame PNG (750×1050, RGBA — transparent art window)
@@ -2910,31 +2903,37 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
 
     result = frame_img.copy()
 
-    # Ikoria showcase (Godzilla): composite cardconjurer's OWN layered assets as
-    # designed — the base color frame + the per-color 'colored/' overlay (the
-    # tinted title/type/rules boxes). No hand-drawing; text is added afterward by
-    # _create_iko_text_svg, positioned to the asset's real boxes.
+    # Ikoria showcase (Godzilla): a tall CREAM rules box drawn over the frame's
+    # rules area (the asset's own box is short with a dead black bar below), plus
+    # a gold P/T plate. Supersampled 4x for smooth edges; border sampled from the
+    # frame's own accent colour (blue for U, gold for M, ...). This is the version
+    # the user approved ("much much better").
     if frame_set == 'iko':
-        colored = _load_frame_image('iko', f'colored/{color_key}')
-        if colored is not None:
-            if colored.size != (CARD_WIDTH, CARD_HEIGHT):
-                colored = colored.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
-            result = Image.alpha_composite(result, colored)
-        # The iko/short box tint stops at ~y955 with a dead black bar below it, so
-        # the rules area is cramped. Extend the box's OWN tint colour down over
-        # that black bar (inside the frame's tall box outline) to give a large,
-        # coherent rules area — same asset colour, no invented styling.
         import numpy as np
-        arr = np.array(result)
-        rr, gg, bb, aa = (arr[..., 0].astype(int), arr[..., 1].astype(int),
-                          arr[..., 2].astype(int), arr[..., 3])
-        tint = result.getpixel((375, 900))  # the box interior tint colour
-        band = np.zeros((CARD_HEIGHT, CARD_WIDTH), bool)
-        band[952:1044, :] = True
-        black_bar = band & (aa > 120) & (np.maximum(np.maximum(rr, gg), bb) < 45)
-        for c in range(3):
-            arr[..., c] = np.where(black_bar, tint[c], arr[..., c])
-        result = Image.fromarray(arr, 'RGBA')
+        accent = result.getpixel((54, 850))[:3]
+        bx0, by0, bx1, by1, rad = 47, 806, 703, 1022, 22
+        SS = 4
+        big = Image.new('RGBA', (CARD_WIDTH * SS, CARD_HEIGHT * SS), (0, 0, 0, 0))
+        bd = ImageDraw.Draw(big)
+        R = [bx0 * SS, by0 * SS, bx1 * SS, by1 * SS]
+        # clear the frame's own short box + border under our box so it doesn't
+        # bleed through the cream as a faint line (only art shows faintly)
+        clear = Image.new('L', (CARD_WIDTH * SS, CARD_HEIGHT * SS), 0)
+        ImageDraw.Draw(clear).rounded_rectangle(
+            [(bx0 + 5) * SS, (by0 + 5) * SS, (bx1 - 5) * SS, (by1 - 5) * SS],
+            radius=rad * SS, fill=255)
+        cmask = np.array(clear.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)) > 128
+        rarr = np.array(result)
+        rarr[..., 3] = np.where(cmask, 0, rarr[..., 3])
+        result = Image.fromarray(rarr, 'RGBA')
+        bd.rounded_rectangle(R, radius=rad * SS, fill=(245, 239, 225, 236))
+        bd.rounded_rectangle(R, radius=rad * SS, outline=(20, 18, 14, 255), width=7 * SS)
+        bd.rounded_rectangle(R, radius=rad * SS, outline=tuple(accent) + (255,), width=4 * SS)
+        if card.power is not None and card.toughness is not None:
+            pr = [596 * SS, 986 * SS, 706 * SS, 1034 * SS]
+            bd.rounded_rectangle(pr, radius=10 * SS, fill=(30, 24, 16, 240),
+                                 outline=(201, 164, 96, 255), width=4 * SS)
+        result = Image.alpha_composite(result, big.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS))
 
     if frame_set == 'abu':
         # ABU colored frames tint the text box per color (green = dark brown wood),
