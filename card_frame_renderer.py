@@ -2675,12 +2675,12 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
 # Ikoria showcase layout — pixel coords in the 750x1050 output space, measured
 # from the vendored iko frame PNGs (rules box interior really ends ~y972, so text
 # must stay above that or it spills below the box onto the art).
-IKO_LAYOUT = {
+IKO_LAYOUT = {  # measured from the cardconjurer iko asset's real boxes
     'title_y0': 43, 'title_y1': 117,
-    'type_y0': 727, 'type_y1': 800,
-    'rules_y0': 818, 'rules_y1': 998,  # tall box reaching near the card bottom
-    'x_margin': 62, 'x_right': 690,
-    'pt_y': 1012,
+    'type_y0': 726, 'type_y1': 803,
+    'rules_y0': 820, 'rules_y1': 1006,   # tall rules box (tint extended over black bar)
+    'x_margin': 64, 'x_right': 690,
+    'pt_y': 1038,
 }
 
 
@@ -2717,22 +2717,12 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
             return max(22, int(base_font * avail / est))
         return base_font
 
-    # ── Title: big display name (+ optional small original name) ──
-    if has_sub:
-        bf = fit_font(big, 40)
-        svg.append(f'<text x="{tx}" y="{L["title_y0"] + 36}" font-family="{NAME_FONT_FAMILY}" '
-                   f'font-size="{bf}" font-weight="bold" fill="{white}" '
-                   f'stroke="rgba(0,0,0,0.5)" stroke-width="0.6">{big_esc}</text>')
-        sub_cx = (L['x_margin'] + L['x_right']) / 2  # centered under the name
-        svg.append(f'<text x="{sub_cx}" y="{L["title_y1"] - 15}" text-anchor="middle" '
-                   f'font-family="{TYPE_FONT_FAMILY}" '
-                   f'font-size="20" font-style="italic" fill="{white}" opacity="0.9">{esc_name}</text>')
-    else:
-        bf = fit_font(big, 44)
-        cy = (L['title_y0'] + L['title_y1']) / 2 + bf * 0.35
-        svg.append(f'<text x="{tx}" y="{cy}" font-family="{NAME_FONT_FAMILY}" '
-                   f'font-size="{bf}" font-weight="bold" fill="{white}" '
-                   f'stroke="rgba(0,0,0,0.5)" stroke-width="0.6">{big_esc}</text>')
+    # ── Title (single line on the plain title bar) — shows the nickname if set,
+    # else the card name; the cardconjurer iko bar is one row (no sub-line). ──
+    bf = fit_font(big, 42)
+    cy = (L['title_y0'] + L['title_y1']) / 2 + bf * 0.35
+    svg.append(f'<text x="{tx}" y="{cy}" font-family="{NAME_FONT_FAMILY}" '
+               f'font-size="{bf}" font-weight="bold" fill="{white}">{big_esc}</text>')
 
     # ── Mana pips (right-aligned in the title bar) ──
     if mana_pips:
@@ -2778,11 +2768,12 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
             rbox_w, rbox_h, r_font, r_line, text_color=dark)
         svg.extend(rules_lines)
 
-    # ── P/T (gold, centered in the gold plate painted by the frame compositor) ──
+    # ── P/T (white, bottom-right of the rules box) ──
     if card.power is not None and card.toughness is not None:
-        svg.append(f'<text x="651" y="1022" text-anchor="middle" '
-                   f'font-family="{PT_FONT_FAMILY}" font-size="34" font-weight="bold" '
-                   f'fill="#f4e4a8">{card.power}/{card.toughness}</text>')
+        svg.append(f'<text x="{L["x_right"]}" y="{L.get("pt_y", 1040)}" text-anchor="end" '
+                   f'font-family="{PT_FONT_FAMILY}" font-size="40" font-weight="bold" '
+                   f'fill="{white}" stroke="rgba(0,0,0,0.5)" stroke-width="0.7">'
+                   f'{card.power}/{card.toughness}</text>')
 
     svg.append('</svg>')
     return '\n'.join(svg)
@@ -2884,11 +2875,9 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     color_key = _determine_color_key(card_dict)
     frame_set = fs.get('frame_set', 'm15')
 
-    # The Godzilla showcase (iko) frame is GOLD on every colour — confirmed on the
-    # real cards (even mono-red Zilortha has an all-gold frame); colour appears
-    # only in the mana pips. Force gold so the whole card is coherent (gold
-    # nameplate + gold type bar + gold rules box + gold P/T), not a gold nameplate
-    # clashing with a per-colour blue/red border.
+    # The real Godzilla cards use the GOLD frame on every colour (confirmed on
+    # mono-red Zilortha); it's also the only cardconjurer iko tint light enough for
+    # readable dark rules text (blue/black tints are too dark). So iko -> gold.
     if frame_set == 'iko':
         color_key = 'm'
 
@@ -2921,58 +2910,31 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
 
     result = frame_img.copy()
 
-    # Ikoria showcase: the real card has an OPAQUE light-cream rules box
-    # (regardless of card color) so dark rules text stays crisp over any art.
-    # The card-colored 'colored/' overlay is both semi-transparent and tinted per
-    # color (dark for black cards), so paint our own opaque cream box inside the
-    # base frame's gold-trimmed rules region instead.
+    # Ikoria showcase (Godzilla): composite cardconjurer's OWN layered assets as
+    # designed — the base color frame + the per-color 'colored/' overlay (the
+    # tinted title/type/rules boxes). No hand-drawing; text is added afterward by
+    # _create_iko_text_svg, positioned to the asset's real boxes.
     if frame_set == 'iko':
-        # The iko/short asset's own rules box is SHORT with a dead black area below
-        # it. Per feedback the text box must be BIG, with its rounded corners near
-        # the BOTTOM of the card (like the real showcase card). So draw a tall
-        # cream box from just under the type bar down to near the card's bottom
-        # edge, bordered in the frame's own accent colour (sampled: blue for U,
-        # gold for M, etc.), covering the asset's short box + black area.
+        colored = _load_frame_image('iko', f'colored/{color_key}')
+        if colored is not None:
+            if colored.size != (CARD_WIDTH, CARD_HEIGHT):
+                colored = colored.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+            result = Image.alpha_composite(result, colored)
+        # The iko/short box tint stops at ~y955 with a dead black bar below it, so
+        # the rules area is cramped. Extend the box's OWN tint colour down over
+        # that black bar (inside the frame's tall box outline) to give a large,
+        # coherent rules area — same asset colour, no invented styling.
         import numpy as np
-        # The real Godzilla frame is a COHESIVE gold unit: a dark type bar sitting
-        # FLUSH on a tall cream rules box, one thin refined gold border, full-bleed
-        # art behind. The asset's short box + dead black bar (and my old separate
-        # box) left an ugly art gap between the type bar and rules box with heavy
-        # borders. So clear the asset's lower chrome (art bleeds) and draw one
-        # connected type+rules unit with a single thin gold border, supersampled 4x
-        # for smooth edges.
         arr = np.array(result)
-        arr[712:, :, 3] = 0   # drop the asset's type bar / short box / black bar -> art bleeds
+        rr, gg, bb, aa = (arr[..., 0].astype(int), arr[..., 1].astype(int),
+                          arr[..., 2].astype(int), arr[..., 3])
+        tint = result.getpixel((375, 900))  # the box interior tint colour
+        band = np.zeros((CARD_HEIGHT, CARD_WIDTH), bool)
+        band[952:1044, :] = True
+        black_bar = band & (aa > 120) & (np.maximum(np.maximum(rr, gg), bb) < 45)
+        for c in range(3):
+            arr[..., c] = np.where(black_bar, tint[c], arr[..., c])
         result = Image.fromarray(arr, 'RGBA')
-
-        SS = 4
-        gold = (201, 164, 96)
-        ux0, ux1, uy0, uy1, div = 40, 710, 720, 1016, 800
-        big = Image.new('RGBA', (CARD_WIDTH * SS, CARD_HEIGHT * SS), (0, 0, 0, 0))
-        bd = ImageDraw.Draw(big)
-        U = [ux0 * SS, uy0 * SS, ux1 * SS, uy1 * SS]
-        bd.rounded_rectangle(U, radius=20 * SS, fill=(26, 21, 16, 255))          # dark type bar
-        bd.rounded_rectangle([(ux0 + 7) * SS, div * SS, (ux1 - 7) * SS, (uy1 - 7) * SS],
-                             radius=13 * SS, fill=(245, 239, 224, 250))          # cream rules box
-        bd.rounded_rectangle(U, radius=20 * SS, outline=gold + (255,), width=3 * SS)  # thin gold border
-        # gold P/T plate straddling the box's bottom-right corner
-        if card.power is not None and card.toughness is not None:
-            bd.rounded_rectangle([596 * SS, 982 * SS, 706 * SS, 1030 * SS], radius=9 * SS,
-                                 fill=(26, 21, 16, 255), outline=gold + (255,), width=3 * SS)
-        result = Image.alpha_composite(result, big.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS))
-
-        # Optional ornate nameplate — a toggle-able gold banner-terminal plate,
-        # extracted from the real Godzilla card, overlaid on the plain asset bar
-        # to match the reference. It's a TWO-LINE plate (nickname + real name), so
-        # only use it when there's a showcase/nickname name; otherwise the plain
-        # single-line bar shows (no empty sub-banner).
-        if fs.get('ornate_nameplate', True) and card.showcase_name:
-            plate = _load_frame_image('iko', 'ornate_nameplate')
-            if plate is not None:
-                tw = 690
-                plate = plate.resize((tw, int(plate.height * tw / plate.width)),
-                                     Image.Resampling.LANCZOS)
-                result.alpha_composite(plate, (30, 10))
 
     if frame_set == 'abu':
         # ABU colored frames tint the text box per color (green = dark brown wood),
@@ -3032,12 +2994,6 @@ def _render_image_frame(card_dict: dict, card: CardData, fs: dict) -> Image.Imag
     Returns an RGBA image (750×1050) with frame chrome + text, ready to
     composite onto art.
     """
-    # Godzilla/iko is rendered by the declarative component system (frame_system),
-    # which produces the whole coherent chrome + text in one vector pass.
-    if fs.get('frame_set') == 'iko':
-        import frame_system
-        return frame_system.render_godzilla(card_dict, fs)
-
     result = _compose_image_frame_base(card_dict, card, fs)
 
     # Render text-only SVG and composite on top (each image frame set can carry
@@ -3075,14 +3031,6 @@ def render_frame_layer(card_dict: dict, frame_settings: dict) -> bytes:
         Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0)).save(buf, 'PNG')
         return buf.getvalue()
 
-    if fs.get('frame_set') == 'iko':
-        # Godzilla via the component system — chrome + text together in one pass
-        # (render_text_overlay returns empty for iko so the designer doesn't double).
-        import frame_system
-        buf = io.BytesIO()
-        frame_system.render_godzilla(card_dict, fs).save(buf, 'PNG')
-        return buf.getvalue()
-
     if fs.get('mode') == 'image':
         # Image-based: frame + P/T box (without text), gradient-aware. Shares the
         # exact chrome path with the final composite so the WYSIWYG preview matches.
@@ -3108,12 +3056,9 @@ def render_text_overlay(card_dict: dict, frame_settings: dict) -> bytes:
 
     if fs.get('mode') == 'image':
         if fs.get('layout') == 'iko' or fs.get('frame_set') == 'iko':
-            # Godzilla text is baked into the frame layer (frame_system) — return
-            # an empty overlay so the WYSIWYG designer doesn't render it twice.
-            return cairosvg.svg2png(
-                bytestring=f'<svg xmlns="http://www.w3.org/2000/svg" width="{CARD_WIDTH}" '
-                           f'height="{CARD_HEIGHT}"/>'.encode('utf-8'),
-                output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
+            text_svg = _create_iko_text_svg(card, fs)
+            return cairosvg.svg2png(bytestring=text_svg.encode('utf-8'),
+                                    output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
         if fs.get('layout') == 'abu' or fs.get('frame_set') == 'abu':
             text_svg = _create_abu_text_svg(card, fs)
             return cairosvg.svg2png(bytestring=text_svg.encode('utf-8'),

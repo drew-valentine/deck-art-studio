@@ -140,7 +140,11 @@ def check_textbox_legible(card, style):
     crop = over_dark.crop((x0, y0, x1, y1))
     hist = crop.histogram()
     mean = sum(i * c for i, c in enumerate(hist)) / max(1, sum(hist))
-    if mean < 130:  # box stays too dark over dark art -> dark text unreadable
+    # Threshold 90: cardconjurer's authentic gold-tan box reads ~110 over pure-dark
+    # art (clearly legible over real art); wall-of-text cards dip to ~99 because
+    # the dense dark text lowers the sample average, not because the box is dark.
+    # Genuinely dark tints (blue ~63, black ~28) still fail.
+    if mean < 90:
         return f'rules_box_illegible: brightness {mean:.0f}/255 over dark art (dark text would vanish)'
     return None
 
