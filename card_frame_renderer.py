@@ -2723,7 +2723,7 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
 
     # ── Title (single line on the plain title bar) — shows the nickname if set,
     # else the card name; the cardconjurer iko bar is one row (no sub-line). ──
-    bf = fit_font(big, 50)   # ~20% larger per request (fit_font still shrinks to width)
+    bf = fit_font(big, 42)
     cy = (L['title_y0'] + L['title_y1']) / 2 + bf * 0.35
     svg.append(f'<text x="{tx}" y="{cy}" font-family="{NAME_FONT_FAMILY}" '
                f'font-size="{bf}" font-weight="bold" fill="{white}">{big_esc}</text>')
@@ -2742,7 +2742,7 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
     # ── Type line (white on the dark type bar), fit to width ──
     esc_type = card.type_line.replace('&', '&amp;').replace('<', '&lt;')
     type_w_avail = L['x_right'] - tx
-    type_font = 37   # ~20% larger per request
+    type_font = 31
     type_est = len(card.type_line) * type_font * 0.50
     if type_est > type_w_avail and type_w_avail > 0:
         type_font = max(19, int(type_font * type_w_avail / type_est))
@@ -2758,8 +2758,10 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8
         rbox_h = (L['rules_y1'] - L['rules_y0']) - 16
-        # ~20% larger rules text per request (shrink-to-fit still applies below)
-        r_font, r_line, MIN_R = int(RULES_FONT * 1.2), int(RULES_LINE_H * 1.2), 18
+        # Larger rules text per request (~1.55x the base); shrink-to-fit still
+        # applies below so long oracles stay inside the box. Only the RULES text
+        # is enlarged — title/type/PT stay at their default sizes.
+        r_font, r_line, MIN_R = int(RULES_FONT * 1.55), int(RULES_LINE_H * 1.55), 18
         needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
         while needed > rbox_h and r_font > MIN_R:
             r_font -= 1
@@ -2775,8 +2777,8 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
 
     # ── P/T (gold, centered in the gold plate drawn by the frame compositor) ──
     if card.power is not None and card.toughness is not None:
-        svg.append(f'<text x="651" y="1024" text-anchor="middle" '
-                   f'font-family="{PT_FONT_FAMILY}" font-size="41" font-weight="bold" '
+        svg.append(f'<text x="651" y="1022" text-anchor="middle" '
+                   f'font-family="{PT_FONT_FAMILY}" font-size="34" font-weight="bold" '
                    f'fill="#f4e4a8">{card.power}/{card.toughness}</text>')
 
     svg.append('</svg>')
