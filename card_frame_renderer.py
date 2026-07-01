@@ -345,14 +345,6 @@ FRAME_STYLES = {
         'frame_set': 'iko',
         'layout': 'iko',
     },
-    'oldschool': {
-        'label': 'Retro (1993)',
-        'description': 'The original Alpha/Beta/Unlimited beige border — inset art window, '
-                       'textured text box, black serif text. Built from the authentic ABU assets.',
-        'mode': 'image',
-        'frame_set': 'abu',
-        'layout': 'abu',
-    },
     'clean': {
         'label': 'Clean',
         'description': 'Raw art, no frame at all',
