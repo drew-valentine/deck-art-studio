@@ -2773,13 +2773,11 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
             rbox_w, rbox_h, r_font, r_line, text_color=dark)
         svg.extend(rules_lines)
 
-    # ── P/T (gold, on the bottom margin below the rules box) ──
+    # ── P/T (gold, centered in the gold plate painted by the frame compositor) ──
     if card.power is not None and card.toughness is not None:
-        svg.append(f'<text x="{L["x_right"] - 4}" y="{L.get("pt_y", L["rules_y1"] + 44)}" '
-                   f'text-anchor="end" '
-                   f'font-family="{PT_FONT_FAMILY}" font-size="40" font-weight="bold" '
-                   f'fill="#f4e4a8" stroke="rgba(0,0,0,0.6)" stroke-width="0.8">'
-                   f'{card.power}/{card.toughness}</text>')
+        svg.append(f'<text x="652" y="1026" text-anchor="middle" '
+                   f'font-family="{PT_FONT_FAMILY}" font-size="34" font-weight="bold" '
+                   f'fill="#f4e4a8">{card.power}/{card.toughness}</text>')
 
     svg.append('</svg>')
     return '\n'.join(svg)
@@ -2940,6 +2938,24 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
             out[..., c] = np.where(interior, cream[c] * op + out[..., c] * (1 - op), out[..., c])
         out[..., 3] = np.where(interior, np.maximum(a, int(255 * op)), a)
         result = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), 'RGBA')
+
+        # The iko/short asset caps the card with an opaque BLACK bottom bar below
+        # the rules box; the real showcase card is full-bleed art to the bottom
+        # edge. Remove that black bar so the art shows through, then draw a gold
+        # P/T box over the bleeding art (bottom-right), like the real card.
+        arr2 = np.array(result)
+        rr, gg, bb, aa = (arr2[..., 0].astype(int), arr2[..., 1].astype(int),
+                          arr2[..., 2].astype(int), arr2[..., 3])
+        below = np.zeros((CARD_HEIGHT, CARD_WIDTH), bool)
+        below[L['rules_y1'] + 6:, :] = True   # below the rules-box gold border
+        black_bar = below & (aa > 0) & (np.maximum(np.maximum(rr, gg), bb) < 55)
+        arr2[..., 3] = np.where(black_bar, 0, aa)
+        result = Image.fromarray(arr2, 'RGBA')
+        # gold P/T plate, bottom-right, over the now-bleeding art
+        if card.power is not None and card.toughness is not None:
+            cd = ImageDraw.Draw(result)
+            cd.rounded_rectangle([598, 988, 706, 1038], radius=10,
+                                 fill=(30, 24, 16, 235), outline=(201, 164, 96, 255), width=4)
 
     if frame_set == 'abu':
         # ABU colored frames tint the text box per color (green = dark brown wood),
