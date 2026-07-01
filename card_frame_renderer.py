@@ -2758,13 +2758,13 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8
         rbox_h = (L['rules_y1'] - L['rules_y0']) - 16
-        # Larger rules text per request, but CAPPED so short-oracle cards don't
-        # balloon (Brokkos was 44pt). Cap 34pt; shrink-to-fit still applies below
-        # for long oracles. Only the RULES text is enlarged — title/type/PT stay
-        # at their default sizes.
-        r_font = min(int(RULES_FONT * 1.55), 34)
+        # Consistent, readable rules size across cards: a fixed 22pt target so
+        # short-oracle cards don't balloon to a different size than text-heavy
+        # ones (which are box-limited to ~20pt and read fine). Shrink-to-fit still
+        # applies below for very long oracles. Only the RULES text is affected.
+        r_font = 22
         r_line = int(RULES_LINE_H * r_font / RULES_FONT)
-        MIN_R = 18
+        MIN_R = 16
         needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
         while needed > rbox_h and r_font > MIN_R:
             r_font -= 1
