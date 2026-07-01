@@ -1934,8 +1934,8 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
     elif show_oracle and rules_max_h > 0:
         # Auto-shrink font if oracle text overflows the textbox
         oracle = card.oracle_text or ""
-        r_font = RULES_FONT
-        r_line_h = RULES_LINE_H
+        r_font = int(fs.get('rules_font_size') or RULES_FONT)
+        r_line_h = int(RULES_LINE_H * r_font / RULES_FONT)
         MIN_RULES_FONT = 16  # floor to keep text readable
 
         needed_h = _measure_rules_text(oracle, rules_inner_w, r_font, r_line_h)
@@ -2519,8 +2519,8 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
         )
     elif show_oracle and rules_max_h > 0:
         oracle = card.oracle_text or ""
-        r_font = RULES_FONT
-        r_line_h = RULES_LINE_H
+        r_font = int(fs.get('rules_font_size') or RULES_FONT)
+        r_line_h = int(RULES_LINE_H * r_font / RULES_FONT)
         MIN_RULES_FONT = 16
 
         needed_h = _measure_rules_text(oracle, rules_inner_w, r_font, r_line_h)

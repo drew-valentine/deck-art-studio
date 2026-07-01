@@ -7461,7 +7461,8 @@ header .separator {
               <div class="frame-text-row" id="frameRulesSizeRow" style="display:none;">
                 <label class="frame-text-label">Rules Text Size</label>
                 <input type="range" class="frame-layer-slider" id="frameRulesSize" min="16" max="40" step="1" value="30"
-                       oninput="scheduleFramePreview()" title="Rules text point size (long oracles still shrink to fit).">
+                       oninput="document.getElementById('frameRulesSizeVal').textContent=this.value+'pt'; scheduleFramePreview()" title="Rules text point size (long oracles still shrink to fit).">
+                <span id="frameRulesSizeVal" class="frame-layer-val" style="width:auto;">30pt</span>
               </div>
               <div class="frame-text-row">
                 <label class="frame-text-label">Card Name</label>
@@ -10005,8 +10006,9 @@ function selectFrameStyle(key) {
   if (ornateRow) ornateRow.style.display = (key === 'godzilla') ? '' : 'none';
   const boxOpRow = document.getElementById('frameBoxOpacityRow');
   if (boxOpRow) boxOpRow.style.display = (key === 'godzilla') ? '' : 'none';
+  // Rules Text Size applies to every frame style (they all have rules text).
   const rulesSizeRow = document.getElementById('frameRulesSizeRow');
-  if (rulesSizeRow) rulesSizeRow.style.display = (key === 'godzilla') ? '' : 'none';
+  if (rulesSizeRow) rulesSizeRow.style.display = style.no_frame ? 'none' : '';
 
   // Reload frame layer on canvas
   loadFrameLayerForCanvas();
@@ -10056,7 +10058,11 @@ function populateFrameFromSettings(settings) {
   const boxOpEl = document.getElementById('frameBoxOpacity');
   if (boxOpEl) boxOpEl.value = Math.round((settings.box_opacity != null ? settings.box_opacity : 0.93) * 100);
   const rulesSzEl = document.getElementById('frameRulesSize');
-  if (rulesSzEl) rulesSzEl.value = settings.rules_font_size != null ? settings.rules_font_size : 30;
+  if (rulesSzEl) {
+    rulesSzEl.value = settings.rules_font_size != null ? settings.rules_font_size : 30;
+    const rulesSzVal = document.getElementById('frameRulesSizeVal');
+    if (rulesSzVal) rulesSzVal.textContent = rulesSzEl.value + 'pt';
+  }
 }
 
 function wireFrameInputs() {
