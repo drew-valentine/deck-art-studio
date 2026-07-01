@@ -2915,17 +2915,23 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     # base frame's gold-trimmed rules region instead.
     if frame_set == 'iko':
         import numpy as np
-        # Clean cream rules box, drawn as a rounded rectangle at the frame's REAL
-        # box bounds (measured x50-700, y808-972). The previous dark-pixel mask
-        # bled full-width into the side margins at the bottom of the box (the
-        # frame's dark lower region spans the whole card there), producing ugly
-        # translucent blobs in the corners. A rounded rect avoids that entirely.
-        # Mostly opaque (alpha 216) so text is crisp and busy art only faintly
-        # shows through — matching the reference's solid parchment box.
-        box = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
-        ImageDraw.Draw(box).rounded_rectangle(
-            [50, 808, 700, 972], radius=16, fill=(244, 238, 224, 216))
-        result = Image.alpha_composite(result, box)
+        # Fill the frame's OWN rules-box interior EXACTLY: flood-fill from the box
+        # centre, bounded by the bright border, so the cream matches the border's
+        # real shape precisely. A separate rounded rectangle never lined up with
+        # the border (mismatched corners), and dark-pixel detection bled into the
+        # side margins — flooding the interior avoids both. Mostly opaque so text
+        # is crisp and busy art only faintly shows through.
+        cx, cy = 375, 880
+        if result.getpixel((cx, cy))[3] > 40 and max(result.getpixel((cx, cy))[:3]) < 90:
+            probe = result.convert('RGB').copy()
+            ImageDraw.floodfill(probe, (cx, cy), (255, 0, 255), thresh=60)
+            box_mask = (np.array(probe) == [255, 0, 255]).all(axis=2)
+            arr = np.array(result)
+            cream = (244, 238, 224)
+            for c in range(3):
+                arr[..., c] = np.where(box_mask, cream[c], arr[..., c])
+            arr[..., 3] = np.where(box_mask, np.maximum(arr[..., 3], 216), arr[..., 3])
+            result = Image.fromarray(arr, 'RGBA')
 
         # The iko/short asset caps the card with an opaque BLACK bottom bar below
         # the rules box; the real showcase card is full-bleed art to the bottom
