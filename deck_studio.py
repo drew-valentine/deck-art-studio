@@ -7460,7 +7460,7 @@ header .separator {
               </div>
               <div class="frame-text-row" id="frameRulesSizeRow" style="display:none;">
                 <label class="frame-text-label">Rules Text Size</label>
-                <input type="range" class="frame-layer-slider" id="frameRulesSize" min="16" max="40" step="1" value="30"
+                <input type="range" class="frame-layer-slider" id="frameRulesSize" min="16" max="60" step="1" value="30"
                        oninput="document.getElementById('frameRulesSizeVal').textContent=this.value+'pt'; scheduleFramePreview()" title="Rules text point size (long oracles still shrink to fit).">
                 <span id="frameRulesSizeVal" class="frame-layer-val" style="width:auto;">30pt</span>
               </div>
