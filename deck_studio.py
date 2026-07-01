@@ -5836,6 +5836,17 @@ button:active, .btn:active { transform: scale(0.97); }
 }
 .frame-auto-toggle input { accent-color: var(--gold); }
 .frame-quick-swatches { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+/* Two-color frame (gradient/split/gold) segmented control */
+.fd-gradient-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.fd-gradient-label { font-size: 0.78em; color: var(--text-dim); white-space: nowrap; }
+.fd-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.fd-seg-btn {
+  background: var(--surface); color: var(--text-dim); border: none;
+  padding: 4px 9px; font-size: 0.74em; cursor: pointer; border-right: 1px solid var(--border);
+}
+.fd-seg-btn:last-child { border-right: none; }
+.fd-seg-btn:hover { color: var(--text); }
+.fd-seg-btn.active { background: var(--gold); color: #1a1a1a; font-weight: 600; }
 .frame-swatch {
   width: 32px; height: 32px; border-radius: 50%; cursor: pointer;
   border: 2px solid transparent; transition: all var(--transition);
@@ -7383,6 +7394,16 @@ header .separator {
                 <input type="checkbox" id="frameAutoColors" checked onchange="toggleFrameAutoColors()">
                 <span>Auto (from card colors)</span>
               </label>
+              <!-- Two-color (multi-type land / gold) frame mode -->
+              <div class="fd-gradient-row" id="fdGradientRow">
+                <span class="fd-gradient-label">Two-color frame</span>
+                <div class="fd-seg" id="fdGradientSeg">
+                  <button type="button" data-grad="auto" class="fd-seg-btn active" onclick="setFrameGradient('auto')" title="Smooth gradient for 2-color cards (default)">Auto</button>
+                  <button type="button" data-grad="gradient" class="fd-seg-btn" onclick="setFrameGradient('gradient')" title="Force a smooth left→right color blend">Blend</button>
+                  <button type="button" data-grad="split" class="fd-seg-btn" onclick="setFrameGradient('split')" title="Hard left/right color split down the middle">Split</button>
+                  <button type="button" data-grad="off" class="fd-seg-btn" onclick="setFrameGradient('off')" title="Flat gold multicolor frame (no gradient)">Gold</button>
+                </div>
+              </div>
               <div id="frameQuickSwatches" class="frame-quick-swatches" style="display:none;"></div>
               <div id="frameColorInputs" class="frame-color-inputs" style="display:none;">
                 <div class="frame-color-row">
@@ -9997,6 +10018,8 @@ function populateFrameFromSettings(settings) {
   if (settings.color_overrides && Object.keys(settings.color_overrides).length) {
     setColorInputs(settings.color_overrides);
   }
+
+  setFrameGradient(settings.frame_gradient || 'auto');
 }
 
 function wireFrameInputs() {
@@ -10332,9 +10355,18 @@ function populateTextOverrides(card) {
   if (textOvr.toughness && toughEl) toughEl.value = textOvr.toughness;
 }
 
+let _frameGradient = 'auto';
+function setFrameGradient(mode) {
+  _frameGradient = mode;
+  document.querySelectorAll('#fdGradientSeg .fd-seg-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.grad === mode));
+  scheduleFramePreview();
+}
+
 function gatherFrameSettings() {
   const settings = {
     style: _activeFrameStyle,
+    frame_gradient: _frameGradient,
   };
 
   const style = _frameStyles[_activeFrameStyle];

@@ -470,6 +470,10 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None) -> dict:
         'show_oracle': style.get('show_oracle', True),
         'show_flavor': style.get('show_flavor', True),
         'type_y': style.get('type_y', 545),
+        # Two-color gradient frame mode (card > deck > 'auto'): 'auto'/True (smooth
+        # blend for 2-color cards), 'gradient', 'split', or 'off'/False (flat gold).
+        'frame_gradient': card_overrides.get(
+            'frame_gradient', deck_settings.get('frame_gradient', 'auto')),
     }
 
     # Color overrides: deck, then card on top
@@ -2263,6 +2267,74 @@ def _load_frame_image(frame_set: str, component: str) -> Optional[Image.Image]:
     return None
 
 
+# --- Two-color gradient frames (multi-type lands & gold cards) --------------
+_WUBRG = ['W', 'U', 'B', 'R', 'G']
+_COLOR_TO_KEY = {'W': 'w', 'U': 'u', 'B': 'b', 'R': 'r', 'G': 'g'}
+
+
+def _two_color_keys(card_dict: dict) -> Optional[tuple]:
+    """If the card is exactly two colors, return the (left, right) frame keys in
+    WUBRG order (e.g. a W/U card -> ('w', 'u')); else None."""
+    colors = card_dict.get('color_identity', []) or card_dict.get('colors', [])
+    ordered = [c for c in _WUBRG if c in colors]
+    if len(ordered) == 2:
+        return _COLOR_TO_KEY[ordered[0]], _COLOR_TO_KEY[ordered[1]]
+    return None
+
+
+def _gradient_mode(card_dict: dict, fs: dict) -> Optional[str]:
+    """Decide whether/how to render a two-color gradient frame.
+
+    Returns 'gradient' (smooth left->right blend), 'split' (hard vertical seam),
+    or None (fall back to the flat gold 'm' frame). Controlled by the frame
+    setting `frame_gradient`: 'auto'/True (default) -> smooth for any 2-color
+    card, 'gradient'/'split' -> forced, 'off'/False -> disabled.
+    """
+    setting = fs.get('frame_gradient', 'auto')
+    if setting in (None, False, 'off'):
+        return None
+    if _two_color_keys(card_dict) is None:
+        return None
+    if setting in ('gradient', 'split'):
+        return setting
+    return 'gradient'  # 'auto' / True
+
+
+def _horizontal_blend_mask(w: int, h: int, band_frac: float) -> Image.Image:
+    """L-mode mask: 0 on the left (first image) ramping to 255 on the right
+    (second image), with a smooth transition band `band_frac` of the width
+    centered on the midline. Small band_frac ≈ a hard split."""
+    band = max(1, int(round(w * band_frac)))
+    start = w // 2 - band // 2
+    row = Image.new('L', (w, 1))
+    px = row.load()
+    for x in range(w):
+        if x <= start:
+            v = 0
+        elif x >= start + band:
+            v = 255
+        else:
+            v = int(round((x - start) / band * 255))
+        px[x, 0] = v
+    return row.resize((w, h))
+
+
+def _gradient_frame_image(frame_set: str, key1: str, key2: str,
+                          subdir: str = '', blend: str = 'gradient') -> Optional[Image.Image]:
+    """Composite two single-color frame PNGs into one left(key1)->right(key2)
+    frame. `subdir` targets a sub-component set (e.g. 'pt/' for the P/T box)."""
+    img1 = _load_frame_image(frame_set, f'{subdir}{key1}')
+    img2 = _load_frame_image(frame_set, f'{subdir}{key2}')
+    if img1 is None or img2 is None:
+        return None
+    if img2.size != img1.size:
+        img2 = img2.resize(img1.size, Image.Resampling.LANCZOS)
+    band_frac = 0.44 if blend == 'gradient' else 0.015
+    mask = _horizontal_blend_mask(img1.width, img1.height, band_frac)
+    # mask=255 -> img2 (right), mask=0 -> img1 (left)
+    return Image.composite(img2, img1, mask)
+
+
 
 def _create_text_only_svg(card: CardData, fs: dict) -> str:
     """Create SVG with ONLY text elements — no backgrounds, borders, or fills.
@@ -2521,17 +2593,30 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
     return '\n'.join(svg)
 
 
-def _render_image_frame(card_dict: dict, card: CardData, fs: dict) -> Image.Image:
-    """Render frame using pre-rendered PNG assets + text-only SVG overlay.
+def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Image.Image:
+    """Frame PNG + P/T box (gradient-aware), WITHOUT text.
 
-    Returns an RGBA image (750×1050) with frame chrome + text, ready to
-    composite onto art.
+    Shared by both the final composite (`_render_image_frame`) and the WYSIWYG
+    designer's frame layer (`render_frame_layer`), so both paths render identical
+    chrome — including two-color gradients. (CLAUDE.md warns these were separate
+    code paths that drifted; this helper keeps them in lockstep.)
     """
     color_key = _determine_color_key(card_dict)
     frame_set = fs.get('frame_set', 'm15')
 
+    # Two-color cards/lands: build a left->right gradient frame from the two
+    # single-color frames (the goal's "left/right color gradients"), instead of
+    # the flat gold 'm' frame. Returns 'gradient'|'split'|None.
+    grad_mode = _gradient_mode(card_dict, fs)
+    two_keys = _two_color_keys(card_dict) if grad_mode else None
+
     # Load main frame PNG (750×1050, RGBA — transparent art window)
-    frame_img = _load_frame_image(frame_set, color_key)
+    frame_img = None
+    if two_keys:
+        frame_img = _gradient_frame_image(frame_set, two_keys[0], two_keys[1],
+                                          blend=grad_mode)
+    if frame_img is None:
+        frame_img = _load_frame_image(frame_set, color_key)
     if frame_img is None:
         # Fallback to colorless if specific color not found
         frame_img = _load_frame_image(frame_set, 'c')
@@ -2548,7 +2633,12 @@ def _render_image_frame(card_dict: dict, card: CardData, fs: dict) -> Image.Imag
     # Composite P/T box overlay for creatures
     has_pt = card.power is not None and card.toughness is not None
     if has_pt:
-        pt_img = _load_frame_image(frame_set, f'pt/{color_key}')
+        pt_img = None
+        if two_keys:
+            pt_img = _gradient_frame_image(frame_set, two_keys[0], two_keys[1],
+                                           subdir='pt/', blend=grad_mode)
+        if pt_img is None:
+            pt_img = _load_frame_image(frame_set, f'pt/{color_key}')
         if pt_img is None:
             pt_img = _load_frame_image(frame_set, 'pt/c')  # fallback to colorless
         if pt_img is not None:
@@ -2573,6 +2663,17 @@ def _render_image_frame(card_dict: dict, card: CardData, fs: dict) -> Image.Imag
             _icy = pt_y + pt_h * 0.48
             fs['_pt_center_x_svg'] = _icx * VB_W / CARD_WIDTH
             fs['_pt_center_y_svg'] = _icy * VB_H / CARD_HEIGHT
+
+    return result
+
+
+def _render_image_frame(card_dict: dict, card: CardData, fs: dict) -> Image.Image:
+    """Render frame using pre-rendered PNG assets + text-only SVG overlay.
+
+    Returns an RGBA image (750×1050) with frame chrome + text, ready to
+    composite onto art.
+    """
+    result = _compose_image_frame_base(card_dict, card, fs)
 
     # Render text-only SVG and composite on top
     text_svg = _create_text_only_svg(card, fs)
@@ -2604,40 +2705,9 @@ def render_frame_layer(card_dict: dict, frame_settings: dict) -> bytes:
         return buf.getvalue()
 
     if fs.get('mode') == 'image':
-        # Image-based: frame + crown + P/T box (without text)
-        color_key = _determine_color_key(card_dict)
-        frame_set = fs.get('frame_set', 'm15')
-        frame_img = _load_frame_image(frame_set, color_key)
-        if frame_img is None:
-            frame_img = _load_frame_image(frame_set, 'c')
-        if frame_img is None:
-            buf = io.BytesIO()
-            Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0)).save(buf, 'PNG')
-            return buf.getvalue()
-        if frame_img.size != (CARD_WIDTH, CARD_HEIGHT):
-            frame_img = frame_img.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
-
-        result = frame_img.copy()
-
-        # P/T box for creatures
-        has_pt = card.power is not None and card.toughness is not None
-        if has_pt:
-            pt_img = _load_frame_image(frame_set, f'pt/{color_key}')
-            if pt_img is None:
-                pt_img = _load_frame_image(frame_set, 'pt/c')
-            if pt_img is not None:
-                pt_base = CARD_WIDTH / 750.0
-                pt_box_scale = 0.42
-                pt_w = int(pt_img.width * pt_base * pt_box_scale)
-                pt_h = int(pt_img.height * pt_base * pt_box_scale)
-                pt_resized = pt_img.resize((pt_w, pt_h), Image.Resampling.LANCZOS)
-                textbox_bottom_px = int(M15_LAYOUT['rules_bottom'] * CARD_HEIGHT / VB_H)
-                pt_x = CARD_WIDTH - pt_w - int(32 * pt_base)
-                pt_y = textbox_bottom_px - pt_h // 2
-                pt_layer = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
-                pt_layer.paste(pt_resized, (pt_x, pt_y))
-                result = Image.alpha_composite(result, pt_layer)
-
+        # Image-based: frame + P/T box (without text), gradient-aware. Shares the
+        # exact chrome path with the final composite so the WYSIWYG preview matches.
+        result = _compose_image_frame_base(card_dict, card, fs)
         buf = io.BytesIO()
         result.save(buf, 'PNG')
         return buf.getvalue()
