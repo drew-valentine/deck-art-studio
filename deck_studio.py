@@ -7453,6 +7453,11 @@ header .separator {
                   <span>Gold banner ends</span>
                 </label>
               </div>
+              <div class="frame-text-row" id="frameBoxOpacityRow" style="display:none;">
+                <label class="frame-text-label">Box Transparency</label>
+                <input type="range" class="frame-layer-slider" id="frameBoxOpacity" min="30" max="100" step="1" value="93"
+                       oninput="scheduleFramePreview()" title="Rules-box opacity — lower lets more art show through.">
+              </div>
               <div class="frame-text-row">
                 <label class="frame-text-label">Card Name</label>
                 <input type="text" class="frame-text-input" id="frameOverrideName" placeholder="">
@@ -9993,6 +9998,8 @@ function selectFrameStyle(key) {
   if (showcaseRow) showcaseRow.style.display = (key === 'godzilla') ? '' : 'none';
   const ornateRow = document.getElementById('frameOrnateRow');
   if (ornateRow) ornateRow.style.display = (key === 'godzilla') ? '' : 'none';
+  const boxOpRow = document.getElementById('frameBoxOpacityRow');
+  if (boxOpRow) boxOpRow.style.display = (key === 'godzilla') ? '' : 'none';
 
   // Reload frame layer on canvas
   loadFrameLayerForCanvas();
@@ -10039,6 +10046,8 @@ function populateFrameFromSettings(settings) {
   setFrameGradient(settings.frame_gradient || 'auto');
   const ornateEl = document.getElementById('frameOrnateNameplate');
   if (ornateEl) ornateEl.checked = settings.ornate_nameplate !== false;  // default on
+  const boxOpEl = document.getElementById('frameBoxOpacity');
+  if (boxOpEl) boxOpEl.value = Math.round((settings.box_opacity != null ? settings.box_opacity : 0.93) * 100);
 }
 
 function wireFrameInputs() {
@@ -10389,6 +10398,8 @@ function gatherFrameSettings() {
   };
   const ornateEl = document.getElementById('frameOrnateNameplate');
   if (ornateEl) settings.ornate_nameplate = ornateEl.checked;
+  const boxOpEl = document.getElementById('frameBoxOpacity');
+  if (boxOpEl) settings.box_opacity = parseInt(boxOpEl.value) / 100;
 
   const style = _frameStyles[_activeFrameStyle];
   if (style && style.mode !== 'image') {

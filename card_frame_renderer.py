@@ -499,6 +499,9 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None) -> dict:
         # Godzilla/iko ornate nameplate toggle (card > deck > default on).
         'ornate_nameplate': card_overrides.get(
             'ornate_nameplate', deck_settings.get('ornate_nameplate', True)),
+        # Godzilla/iko rules-box opacity 0..1 (transparency); card > deck.
+        'box_opacity': card_overrides.get(
+            'box_opacity', deck_settings.get('box_opacity', None)),
     }
 
     # Color overrides: deck, then card on top
@@ -2695,7 +2698,8 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
     W, H = CARD_WIDTH, CARD_HEIGHT
     mana_pips = parse_mana_cost(card.mana_cost)
     white = '#f6f1e6'
-    dark = '#1a1712'
+    # rules text colour honors the designer's Text override, else the dark default
+    dark = (fs.get('color_overrides', {}) or {}).get('text') or '#1a1712'
 
     svg = ['<?xml version="1.0" encoding="UTF-8"?>',
            f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
@@ -2911,6 +2915,26 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     if frame_set == 'iko':
         import numpy as np
         accent = result.getpixel((54, 850))[:3]
+        # Honor the frame designer's settings, falling back to the approved
+        # defaults when nothing is set: Colors > Textbox (box fill), Colors >
+        # Border (box border), and the text-box layer opacity (transparency).
+        co = fs.get('color_overrides', {}) or {}
+
+        def _rgb(hexstr, default):
+            if not hexstr:
+                return default
+            h = hexstr.lstrip('#')
+            try:
+                return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+            except (ValueError, IndexError):
+                return default
+
+        box_fill = _rgb(co.get('textbox'), (245, 239, 225))
+        box_border = _rgb(co.get('border'), tuple(accent))
+        # box transparency: 'box_opacity' 0..1 (default ~0.93 = the approved look)
+        bop = fs.get('box_opacity')
+        box_alpha = int(round(max(0.0, min(1.0, bop)) * 255)) if bop is not None else 236
+
         # by0 raised to meet the type bar bottom so there's no transparent art gap
         # (seam) between the type bar and the cream rules box.
         bx0, by0, bx1, by1, rad = 47, 792, 703, 1022, 22
@@ -2919,7 +2943,7 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         bd = ImageDraw.Draw(big)
         R = [bx0 * SS, by0 * SS, bx1 * SS, by1 * SS]
         # clear the frame's own short box + border under our box so it doesn't
-        # bleed through the cream as a faint line (only art shows faintly)
+        # bleed through as a faint line (only art shows faintly)
         clear = Image.new('L', (CARD_WIDTH * SS, CARD_HEIGHT * SS), 0)
         ImageDraw.Draw(clear).rounded_rectangle(
             [(bx0 + 5) * SS, (by0 + 5) * SS, (bx1 - 5) * SS, (by1 - 5) * SS],
@@ -2928,13 +2952,13 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         rarr = np.array(result)
         rarr[..., 3] = np.where(cmask, 0, rarr[..., 3])
         result = Image.fromarray(rarr, 'RGBA')
-        bd.rounded_rectangle(R, radius=rad * SS, fill=(245, 239, 225, 236))
+        bd.rounded_rectangle(R, radius=rad * SS, fill=box_fill + (box_alpha,))
         bd.rounded_rectangle(R, radius=rad * SS, outline=(20, 18, 14, 255), width=7 * SS)
-        bd.rounded_rectangle(R, radius=rad * SS, outline=tuple(accent) + (255,), width=4 * SS)
+        bd.rounded_rectangle(R, radius=rad * SS, outline=box_border + (255,), width=4 * SS)
         if card.power is not None and card.toughness is not None:
             pr = [596 * SS, 986 * SS, 706 * SS, 1034 * SS]
             bd.rounded_rectangle(pr, radius=10 * SS, fill=(30, 24, 16, 240),
-                                 outline=(201, 164, 96, 255), width=4 * SS)
+                                 outline=box_border + (255,), width=4 * SS)
         result = Image.alpha_composite(result, big.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS))
 
     if frame_set == 'abu':
