@@ -502,6 +502,9 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None) -> dict:
         # Godzilla/iko rules-box opacity 0..1 (transparency); card > deck.
         'box_opacity': card_overrides.get(
             'box_opacity', deck_settings.get('box_opacity', None)),
+        # Godzilla/iko rules text size in px (user-tunable); card > deck.
+        'rules_font_size': card_overrides.get(
+            'rules_font_size', deck_settings.get('rules_font_size', None)),
     }
 
     # Color overrides: deck, then card on top
@@ -2758,11 +2761,10 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8
         rbox_h = (L['rules_y1'] - L['rules_y0']) - 16
-        # Consistent, readable rules size across cards: a fixed 26pt target so
-        # short-oracle cards don't balloon to a different size than text-heavy
-        # ones. Shrink-to-fit still applies below for very long oracles. Only the
-        # RULES text is affected.
-        r_font = 26
+        # Rules text size: user-tunable via the frame editor ('rules_font_size',
+        # default 30pt), consistent across cards. Shrink-to-fit still applies below
+        # for very long oracles. Only the RULES text is affected.
+        r_font = int(fs.get('rules_font_size') or 30)
         r_line = int(RULES_LINE_H * r_font / RULES_FONT)
         MIN_R = 16
         needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)

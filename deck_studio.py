@@ -7458,6 +7458,11 @@ header .separator {
                 <input type="range" class="frame-layer-slider" id="frameBoxOpacity" min="30" max="100" step="1" value="93"
                        oninput="scheduleFramePreview()" title="Rules-box opacity — lower lets more art show through.">
               </div>
+              <div class="frame-text-row" id="frameRulesSizeRow" style="display:none;">
+                <label class="frame-text-label">Rules Text Size</label>
+                <input type="range" class="frame-layer-slider" id="frameRulesSize" min="16" max="40" step="1" value="30"
+                       oninput="scheduleFramePreview()" title="Rules text point size (long oracles still shrink to fit).">
+              </div>
               <div class="frame-text-row">
                 <label class="frame-text-label">Card Name</label>
                 <input type="text" class="frame-text-input" id="frameOverrideName" placeholder="">
@@ -10000,6 +10005,8 @@ function selectFrameStyle(key) {
   if (ornateRow) ornateRow.style.display = (key === 'godzilla') ? '' : 'none';
   const boxOpRow = document.getElementById('frameBoxOpacityRow');
   if (boxOpRow) boxOpRow.style.display = (key === 'godzilla') ? '' : 'none';
+  const rulesSizeRow = document.getElementById('frameRulesSizeRow');
+  if (rulesSizeRow) rulesSizeRow.style.display = (key === 'godzilla') ? '' : 'none';
 
   // Reload frame layer on canvas
   loadFrameLayerForCanvas();
@@ -10048,6 +10055,8 @@ function populateFrameFromSettings(settings) {
   if (ornateEl) ornateEl.checked = settings.ornate_nameplate !== false;  // default on
   const boxOpEl = document.getElementById('frameBoxOpacity');
   if (boxOpEl) boxOpEl.value = Math.round((settings.box_opacity != null ? settings.box_opacity : 0.93) * 100);
+  const rulesSzEl = document.getElementById('frameRulesSize');
+  if (rulesSzEl) rulesSzEl.value = settings.rules_font_size != null ? settings.rules_font_size : 30;
 }
 
 function wireFrameInputs() {
@@ -10400,6 +10409,8 @@ function gatherFrameSettings() {
   if (ornateEl) settings.ornate_nameplate = ornateEl.checked;
   const boxOpEl = document.getElementById('frameBoxOpacity');
   if (boxOpEl) settings.box_opacity = parseInt(boxOpEl.value) / 100;
+  const rulesSzEl = document.getElementById('frameRulesSize');
+  if (rulesSzEl) settings.rules_font_size = parseInt(rulesSzEl.value);
 
   const style = _frameStyles[_activeFrameStyle];
   if (style && style.mode !== 'image') {
