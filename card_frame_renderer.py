@@ -336,6 +336,35 @@ FRAME_STYLES = {
         },
         'type_y': 860, 'show_oracle': False, 'show_flavor': False,
     },
+    'godzilla': {
+        'label': 'Godzilla',
+        'description': 'Cinematic showcase — full-bleed art, huge title over a dark banner, '
+                       'original name beneath. Larger-than-life monster treatment.',
+        'mode': 'svg',
+        'render': {
+            'border_width': 22,
+            'border_color': '#0a0a0a',
+            'border_radius': 30,
+            'art_margin': 0,          # full-bleed art
+            'pinline_width': 0,
+            'frame_pattern': 'none',
+            'field_shape': 'simple',
+            'field_stroke': False,
+            'bevel': False,
+            'showcase': True,         # triggers dark theme + two-line title
+            'pt_shape': 'pentagon',
+        },
+        'layers': {
+            'border':    {'visible': True,  'opacity': 1.0},
+            'frame':     {'visible': False, 'opacity': 0},
+            'title_bar': {'visible': True,  'opacity': 0.62},
+            'pinlines':  {'visible': False, 'opacity': 0},
+            'type_bar':  {'visible': True,  'opacity': 0.58},
+            'text_box':  {'visible': True,  'opacity': 0.60},
+            'pt_box':    {'visible': True,  'opacity': 0.85},
+            'info_bar':  {'visible': False, 'opacity': 0},
+        },
+    },
     'clean': {
         'label': 'Clean',
         'description': 'Raw art, no frame at all',
@@ -465,7 +494,12 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None) -> dict:
         'render': render,
         'use_card_colors': deck_settings.get('use_card_colors', True),
         'color_overrides': {},
-        'text_overrides': card_overrides.get('text_overrides', {}),
+        # Merge text overrides: saved per-card first, then the passed (live) settings
+        # on top — so the WYSIWYG preview reflects what's being typed right now,
+        # while final renders (deck settings carry no per-card text) use the saved
+        # card overrides.
+        'text_overrides': {**card_overrides.get('text_overrides', {}),
+                           **deck_settings.get('text_overrides', {})},
         'no_frame': style.get('no_frame', False),
         'show_oracle': style.get('show_oracle', True),
         'show_flavor': style.get('show_flavor', True),
@@ -621,6 +655,10 @@ class CardData:
     flavor_text: Optional[str] = None
     is_commander: bool = False
     card_type: str = "creature"
+    # Showcase/Godzilla frame: a big alternate display name; the real `name`
+    # renders small beneath it (e.g. "GODZILLA, KING OF THE MONSTERS" over
+    # "Zilortha, Strength Incarnate").
+    showcase_name: Optional[str] = None
 
     def __post_init__(self):
         if self.colors is None:
@@ -1688,6 +1726,15 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
     border_color = theme['border']
     text_color = theme['text']
 
+    # Showcase (Godzilla) frames: dark cinematic banners with light text over
+    # full-bleed art, regardless of the card's colors. The card's own border
+    # color is kept as a thin accent.
+    showcase = render.get('showcase', False)
+    if showcase and not fs.get('color_overrides'):
+        field = '#141210'
+        textbox = '#17130d'
+        text_color = '#f5efe2'
+
     # Render params
     fr = render.get('field_radius', FIELD_R)
     field_path_fn = _simple_field_path if render.get('field_shape') == 'simple' else _field_path
@@ -1768,17 +1815,49 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
     pips_right = fx + fw - 12
     pips_total_w = len(mana_pips) * (MANA_PIP_SIZE + MANA_PIP_GAP) + 12 if mana_pips else 0
     name_avail_w = fw - 32 - pips_total_w
-    name_est_w = len(card.name) * NAME_FONT * 0.62
-    actual_name_font = NAME_FONT
-    if name_est_w > name_avail_w and name_avail_w > 0:
-        actual_name_font = max(22, int(NAME_FONT * name_avail_w / name_est_w))
-    name_text_y = name_y + NAME_H / 2 + actual_name_font * 0.35
-    svg.append(
-        f'<text x="{name_text_x}" y="{name_text_y}" font-family="{NAME_FONT_FAMILY}" '
-        f'font-size="{actual_name_font}" font-weight="bold" fill="{text_color}" '
-        f'stroke="rgba(255,255,255,0.4)" stroke-width="0.3">'
-        f'{escaped_name}</text>'
-    )
+
+    if showcase:
+        # Two-line showcase title: a BIG display name over the real card name.
+        # If no explicit showcase_name, the card's own name becomes the big title.
+        big_name = (card.showcase_name or card.name)
+        big_esc = big_name.replace('&', '&amp;').replace('<', '&lt;')
+        has_sub = bool(card.showcase_name) and card.showcase_name.strip() != card.name.strip()
+        big_font = int(NAME_FONT * 1.28)
+        big_est_w = len(big_name) * big_font * 0.60
+        if big_est_w > name_avail_w and name_avail_w > 0:
+            big_font = max(24, int(big_font * name_avail_w / big_est_w))
+        if has_sub:
+            big_y = name_y + NAME_H * 0.42 + big_font * 0.35
+            svg.append(
+                f'<text x="{name_text_x}" y="{big_y}" font-family="{NAME_FONT_FAMILY}" '
+                f'font-size="{big_font}" font-weight="bold" fill="{text_color}" '
+                f'letter-spacing="0.5" stroke="rgba(0,0,0,0.45)" stroke-width="0.6">'
+                f'{big_esc}</text>')
+            sub_font = max(15, int(NAME_FONT * 0.5))
+            sub_y = name_y + NAME_H * 0.82 + sub_font * 0.35
+            svg.append(
+                f'<text x="{name_text_x + 2}" y="{sub_y}" font-family="{TYPE_FONT_FAMILY}" '
+                f'font-size="{sub_font}" font-style="italic" fill="{text_color}" '
+                f'opacity="0.82">{escaped_name}</text>')
+        else:
+            big_y = name_y + NAME_H / 2 + big_font * 0.35
+            svg.append(
+                f'<text x="{name_text_x}" y="{big_y}" font-family="{NAME_FONT_FAMILY}" '
+                f'font-size="{big_font}" font-weight="bold" fill="{text_color}" '
+                f'letter-spacing="0.5" stroke="rgba(0,0,0,0.45)" stroke-width="0.6">'
+                f'{big_esc}</text>')
+    else:
+        name_est_w = len(card.name) * NAME_FONT * 0.62
+        actual_name_font = NAME_FONT
+        if name_est_w > name_avail_w and name_avail_w > 0:
+            actual_name_font = max(22, int(NAME_FONT * name_avail_w / name_est_w))
+        name_text_y = name_y + NAME_H / 2 + actual_name_font * 0.35
+        svg.append(
+            f'<text x="{name_text_x}" y="{name_text_y}" font-family="{NAME_FONT_FAMILY}" '
+            f'font-size="{actual_name_font}" font-weight="bold" fill="{text_color}" '
+            f'stroke="rgba(255,255,255,0.4)" stroke-width="0.3">'
+            f'{escaped_name}</text>'
+        )
 
     # Mana pips (right-aligned in name bar, always full opacity)
     if mana_pips:
@@ -2192,6 +2271,7 @@ def _build_card_data(card_dict: dict, frame_settings: dict = None) -> CardData:
         flavor_text=card_dict.get('flavor_text'),
         is_commander=card_dict.get('is_commander', False),
         card_type=card_dict.get('card_type', 'creature'),
+        showcase_name=text_ovr.get('showcase_name') or card_dict.get('showcase_name'),
     )
 
 

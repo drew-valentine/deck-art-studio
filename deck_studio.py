@@ -7442,6 +7442,10 @@ header .separator {
               <span class="fd-section-arrow" id="fdTextContentArrow">&#9656;</span>
             </div>
             <div class="fd-section-body" id="fdTextContent" style="display:none;">
+              <div class="frame-text-row" id="frameShowcaseRow" style="display:none;">
+                <label class="frame-text-label">Showcase Name</label>
+                <input type="text" class="frame-text-input" id="frameOverrideShowcase" placeholder="e.g. GODZILLA, KING OF THE MONSTERS" title="Big title for the Godzilla/showcase frame; the card's real name renders small beneath it.">
+              </div>
               <div class="frame-text-row">
                 <label class="frame-text-label">Card Name</label>
                 <input type="text" class="frame-text-input" id="frameOverrideName" placeholder="">
@@ -9977,6 +9981,10 @@ function selectFrameStyle(key) {
     if (colorSection) colorSection.style.display = '';
   }
 
+  // Showcase-name field: only meaningful for the Godzilla/showcase style.
+  const showcaseRow = document.getElementById('frameShowcaseRow');
+  if (showcaseRow) showcaseRow.style.display = (key === 'godzilla') ? '' : 'none';
+
   // Reload frame layer on canvas
   loadFrameLayerForCanvas();
 }
@@ -10049,7 +10057,7 @@ function wireFrameInputs() {
     }
   }
   // Text override inputs → debounced preview
-  ['frameOverrideName','frameOverrideMana','frameOverrideType',
+  ['frameOverrideShowcase','frameOverrideName','frameOverrideMana','frameOverrideType',
    'frameOverrideOracle','frameOverridePower','frameOverrideToughness'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', () => scheduleFramePreview());
@@ -10403,12 +10411,14 @@ function gatherFrameSettings() {
     const oracleVal = document.getElementById('frameOverrideOracle')?.value?.trim();
     const powerVal = document.getElementById('frameOverridePower')?.value?.trim();
     const toughVal = document.getElementById('frameOverrideToughness')?.value?.trim();
+    const showcaseVal = document.getElementById('frameOverrideShowcase')?.value?.trim();
     if (nameVal) textOvr.name = nameVal;
     if (manaVal) textOvr.mana_cost = manaVal;
     if (typeVal) textOvr.type_line = typeVal;
     if (oracleVal) textOvr.oracle_text = oracleVal;
     if (powerVal) textOvr.power = powerVal;
     if (toughVal) textOvr.toughness = toughVal;
+    if (showcaseVal) textOvr.showcase_name = showcaseVal;
     if (Object.keys(textOvr).length) settings.text_overrides = textOvr;
   }
 
