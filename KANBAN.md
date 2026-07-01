@@ -60,6 +60,21 @@
 
 ## In Progress
 
+- [ ] MLX-Native Pipeline (Mac-only) | Priority: P1 | Created: 2026-06-15 | Owner: drew-valentine
+  - Replace the entire generation pipeline with MLX-native components — Mac-only, pure-local, removing the OpenAI cloud backend
+  - Targets an M3 Pro / 18GB MacBook Pro; full plan at /Users/drew/.claude/plans/elegant-foraging-finch.md
+  - Branch: `feat/mlx-native-pipeline`
+  - Status: Implementation + validation COMPLETE. All 6 stages done and validated. MERGE/TAG PENDING — awaiting user go-ahead to commit (nothing committed yet).
+  - Staged work items:
+    - [x] Stage 0: Branch + dependencies (mflux, mlx-lm, mlx-vlm) + requirements-mac.txt — DONE
+    - [x] Stage 1: Migrate LLM (prompt generation) to mlx-lm and Vision (style analysis) to mlx-vlm; remove Ollama lifecycle machinery — DONE (validated end-to-end: chat, vision, JSON distillation)
+    - [x] Stage 2: Replace SDXL/diffusers image generation with FLUX.1-schnell (4-bit) via mflux (txt2img) — DONE (validated: image generated and viewed)
+    - [x] Stage 3: Rebuild style-matching on FLUX (img2img off Scryfall refs + distilled text-based style tags) + single-resident 18GB memory manager — DONE (validated end-to-end through the app: Kykar card generated + composited)
+    - [x] Stage 4: Remove OpenAI cloud backend entirely + prune torch/diffusers/openai/ollama deps + frontend UI cleanup — DONE (MODEL_OPTIONS FLUX-only, requirements/CI cleaned, welcome modal + model hub + prompt labels de-clouded)
+      - Optional follow-up purge: a few inert dead cloud functions remain (`_generate_openai`, api-key routes, `setApiKeyFromHub`)
+    - [x] Stage 5: Tests + full Playwright/local-FLUX validation — DONE (tests 185/185 pass, full Playwright + local-FLUX validation done)
+    - [ ] Merge to main + semantic version tag — PENDING (awaiting user go-ahead to commit)
+
 ## In Review
 
 ## Done

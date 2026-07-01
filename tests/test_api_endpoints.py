@@ -121,10 +121,19 @@ class TestApiSecurity:
 # ===========================================================================
 class TestApiModelSwitch:
     def test_switch_model(self, client):
-        resp = client.post('/api/model-config',
-                           json={'model_key': 'dall-e-3-standard'})
-        assert resp.status_code == 200
-        assert deck_studio.active_model_key == 'dall-e-3-standard'
+        # Save/restore the persisted config — the endpoint writes backend_config.json,
+        # and we must not poison the real active_model_key from a test run.
+        import backend_config
+        original = backend_config.load_config()
+        orig_active = deck_studio.active_model_key
+        try:
+            resp = client.post('/api/model-config',
+                               json={'model_key': 'local-flux-schnell'})
+            assert resp.status_code == 200
+            assert deck_studio.active_model_key == 'local-flux-schnell'
+        finally:
+            backend_config.save_config(original)
+            deck_studio.active_model_key = orig_active
 
     def test_invalid_model_rejected(self, client):
         resp = client.post('/api/model-config',
@@ -162,15 +171,3 @@ class TestApiSavePrompt:
     def test_save_prompt_missing_name(self, client):
         resp = client.post('/api/save-prompt', json={'prompt': 'test'})
         assert resp.status_code == 400
-
-
-class TestApiScryfallRef:
-    def test_get_current(self, client):
-        resp = client.get('/api/scryfall-ref')
-        assert resp.status_code == 200
-        assert 'enabled' in resp.get_json()
-
-    def test_toggle(self, client):
-        resp = client.post('/api/scryfall-ref', json={'enabled': False})
-        assert resp.status_code == 200
-        assert deck_studio.use_scryfall_ref is False

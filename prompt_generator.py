@@ -35,6 +35,7 @@ def generate_subject_description(card: dict) -> str:
     card_type = card.get('card_type', 'other')
     type_line = card.get('type_line', '')
     oracle = card.get('oracle_text', '')
+    flavor = card.get('flavor_text', '')
     colors = card.get('color_identity', card.get('colors', []))
     power = card.get('power')
     toughness = card.get('toughness')
@@ -63,7 +64,7 @@ def generate_subject_description(card: dict) -> str:
     elif card_type == 'artifact':
         return _describe_artifact(name, type_line, oracle, keywords, atmosphere)
     elif card_type == 'enchantment':
-        return _describe_enchantment(name, oracle, keywords, atmosphere)
+        return _describe_enchantment(name, oracle, keywords, atmosphere, flavor)
     elif card_type == 'instant':
         return _describe_spell(name, oracle, keywords, atmosphere, 'instant')
     elif card_type == 'sorcery':
@@ -124,9 +125,18 @@ def _describe_creature(name, subtypes, oracle, power, toughness, keywords, atmos
     if 'coin flip' in keywords:
         ability_flavor += ', surrounded by spinning coins and chaotic fortune'
 
+    # Defining anatomy — must survive the LLM rewrite. A Cyclops has exactly ONE
+    # eye; creatures named "...Eye of..." (e.g. Okaun/Zndrsplt) are one-eyed by
+    # flavor. Without this the model defaults to a normal two-eyed face.
+    anatomy = ''
+    sub_low = (subtypes or '').lower()
+    name_low = (name or '').lower()
+    if 'cyclops' in sub_low or re.search(r'\beye of\b', name_low) or 'one-eyed' in name_low:
+        anatomy = ' with a SINGLE large central eye (exactly one eye, cyclopean — never two eyes)'
+
     subtype_desc = f" {subtypes}" if subtypes else ''
     return (
-        f"A {size}{subtype_desc} called {name}{ability_flavor}, "
+        f"A {size}{subtype_desc} called {name}{anatomy}{ability_flavor}, "
         f"{atmosphere}."
     )
 
@@ -195,6 +205,14 @@ def _describe_artifact(name, type_line, oracle, keywords, atmosphere):
         coin_desc = ''
         if 'coin flip' in keywords or 'coin' in (oracle or '').lower():
             coin_desc = ' Spinning coins and elements of chance surround it.'
+        literal = _literal_object_from_name(name)
+        if literal:
+            # The name literally names a physical object/body part (e.g. "Krark's
+            # Thumb" -> a thumb). Depict THAT, not a generic runed amulet.
+            return (
+                f"{name} — depicted as {literal}, treated as a prized magical "
+                f"relic glowing with {atmosphere}.{coin_desc}"
+            )
         return (
             f"A powerful magical artifact — {name} — hovering and glowing "
             f"with {atmosphere}. An intricate object of arcane craftsmanship "
@@ -202,16 +220,66 @@ def _describe_artifact(name, type_line, oracle, keywords, atmosphere):
         )
 
 
-def _describe_enchantment(name, oracle, keywords, atmosphere):
-    """Generate description for an enchantment card."""
+# Artifact names that literally name a physical object/body part — map the head
+# noun to a concrete depiction so the art shows the actual thing, not a generic
+# glowing amulet. The trailing noun of the name is the object.
+_LITERAL_OBJECT_NOUNS = {
+    'thumb': 'a severed goblin thumb kept as a lucky talisman, leathery and ringed',
+    'hand': 'a preserved severed hand',
+    'eye': 'a single disembodied eye',
+    'skull': 'an ornate skull',
+    'heart': 'a glowing preserved heart',
+    'horn': 'a great curved horn',
+    'claw': 'a massive curved claw',
+    'fang': 'a long curved fang',
+    'tooth': 'a large tooth',
+    'crown': 'an ornate crown',
+    'ring': 'a single ornate ring',
+    'sword': 'a sword', 'blade': 'a blade', 'axe': 'an axe', 'dagger': 'a dagger',
+    'spear': 'a spear', 'shield': 'a shield', 'hammer': 'a war hammer',
+    'staff': 'a staff', 'wand': 'a wand', 'orb': 'a glowing orb',
+    'amulet': 'an amulet', 'talisman': 'a talisman', 'medallion': 'a medallion',
+    'mask': 'a mask', 'helm': 'a helm', 'gauntlet': 'a gauntlet',
+    'chalice': 'a chalice', 'goblet': 'a goblet', 'lantern': 'a lantern',
+    'mirror': 'an ornate mirror', 'bell': 'a bell', 'key': 'an ornate key',
+    'banner': 'a banner', 'scepter': 'a scepter', 'signet': 'a signet ring',
+    'coin': 'a large ornate coin', 'die': 'a die', 'idol': 'an idol',
+}
+
+
+def _literal_object_from_name(name: str):
+    """If the artifact's name ends in a concrete object/body-part noun, return a
+    short literal depiction of it (e.g. "Krark's Thumb" -> a severed thumb)."""
+    words = re.findall(r"[A-Za-z]+", (name or '').lower())
+    for w in reversed(words):  # the head noun is usually last ("...'s Thumb")
+        if w in _LITERAL_OBJECT_NOUNS:
+            return _LITERAL_OBJECT_NOUNS[w]
+    return None
+
+
+def _describe_enchantment(name, oracle, keywords, atmosphere, flavor=''):
+    """Generate description for an enchantment card.
+
+    Enchantments have no physical object, so the OLD anchor defaulted to
+    "swirling abstract magical energy / flowing shapes" — which made every
+    enchantment render as a generic glowing vortex. Instead, anchor on the
+    card's actual STORY (flavor + rules) so the art depicts a concrete scene
+    (the warriors, ritual, place, or event the enchantment represents).
+    """
     coin_desc = ''
     if 'coin flip' in keywords or 'coin' in (oracle or '').lower():
-        coin_desc = ' Spinning coins and symbols of fate weave through the magic.'
+        coin_desc = ' Elements of chance and spinning coins feature in the scene.'
+    # Use ONLY flavor text (clean prose) as the story anchor — NOT raw oracle,
+    # which is rules syntax with mana symbols ('{T}', '{2}', reminder text). This
+    # string is the fallback returned to FLUX verbatim when the prompt LLM is
+    # unavailable, so any rules text here would be baked into the art as garbled
+    # symbols. Strip stray '{...}' tokens defensively.
+    story = re.sub(r'\{[^}]*\}', '', flavor or '').strip()
+    story_line = f" The scene is drawn from its story: {story}" if story else ''
     return (
-        f"A manifestation of pure magical energy — {name} — swirling "
-        f"patterns of {atmosphere} forming an ethereal enchantment that "
-        f"warps reality around it. Abstract magical forces take visible "
-        f"form in brilliant colors and flowing shapes.{coin_desc}"
+        f"A concrete illustrated scene representing the enchantment {name} — "
+        f"depict the people, creatures, place, or event it embodies (not abstract "
+        f"energy), set in an atmosphere of {atmosphere}.{story_line}{coin_desc}"
     )
 
 
@@ -421,7 +489,7 @@ def generate_prompts_for_deck(cards: list[dict], style_preamble: str = None) -> 
 # ---------------------------------------------------------------------------
 def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'openai',
                               local_model: str = 'llama3.1:8b',
-                              style_hint: str = '') -> str:
+                              style_hint: str = '', steer: str = '') -> str:
     """Use an LLM to generate a subject description tailored to the deck's style.
 
     Sends the LLM a rule-based description as a reference anchor plus
@@ -432,25 +500,33 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     If style_hint is provided (e.g. "Wes Anderson Film — Minimalist, Flat"),
     the LLM will tailor its tone to match the intended aesthetic.
 
+    If `steer` is provided (free-text user direction, e.g. "at night",
+    "underwater", "more whimsical, less grand"), the scene is pushed firmly in
+    that direction — the lever for escaping a theme the regenerator keeps circling.
+
     Supports both OpenAI (cloud) and Ollama (local) backends.
     Falls back to rule-based if AI fails.
     """
     name = card.get('name', 'Unknown')
     type_line = card.get('type_line', '')
     oracle = card.get('oracle_text', '')
+    flavor = card.get('flavor_text', '')
     card_type = card.get('card_type', 'other')
 
     # Rule-based description as anchor — ensures correct subject identity
     base_desc = generate_subject_description(card)
 
     # Type-specific guidance so the LLM knows WHAT to depict
+    # NO_CHARACTER cards must NOT get a person/face/creature as the focal point —
+    # the deck theme (e.g. sci-fi → android faces) otherwise hijacks the subject.
+    _no_character = card_type in ('artifact', 'enchantment', 'land', 'instant', 'sorcery')
     type_guidance = {
-        'artifact': 'Depict the artifact OBJECT itself — the physical item, weapon, ring, or device. NOT a landscape.',
-        'enchantment': 'Depict the magical effect or ethereal manifestation as a visible phenomenon.',
-        'instant': 'Depict the dramatic moment of the spell being cast — the action and energy.',
+        'artifact': 'Depict the artifact OBJECT itself, filling the frame. If the card NAME literally names a physical thing or body part (e.g. "Krark\'s Thumb" = a thumb, "Sol Ring" = a ring, "Sword of X" = a sword), depict THAT literal object as the relic — do NOT substitute a generic glowing disc, amulet, or runed orb. NOT a landscape, NOT a person.',
+        'enchantment': 'Depict the SCENE the enchantment represents — the people, creatures, place, ritual, or event drawn from its flavor and rules text (e.g. an army of warriors growing stronger under a hopeful dawn, a blessing settling over a battlefield). Do NOT default to abstract swirling energy, a glowing aura, or a magical vortex — give it concrete subject matter.',
+        'instant': 'Depict the dramatic moment of the spell being cast — the action and energy itself.',
         'sorcery': 'Depict the spell being cast — the ritual, the gathering of power.',
-        'land': 'Depict the LOCATION — terrain, architecture, or natural formation.',
-        'creature': 'Depict the creature itself as the focal point.',
+        'land': 'Depict the LOCATION — terrain, architecture, or natural formation. NO central character.',
+        'creature': 'Depict the creature itself as the single focal point.',
         'planeswalker': 'Depict the planeswalker character in a dramatic pose.',
     }
     guidance = type_guidance.get(card_type, 'Depict the subject described by the card name.')
@@ -458,10 +534,33 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     system_msg = (
         "You write art descriptions for card illustrations. "
         "Given an MTG card and a reference description, rewrite it into a more "
-        "creative and evocative 2-3 sentence scene. Keep the same subject and "
-        "focal point — enhance the imagery, don't change what's being depicted. "
+        "creative and evocative 2-3 sentence scene. "
+        "THE #1 RULE: the card's own subject (from the reference description) MUST "
+        "be the single, unmistakable, dominant focal point that fills the frame. "
+        "Enhance the imagery; do NOT change WHAT is depicted and do NOT introduce a "
+        "different focal subject. Setting and atmosphere are BACKGROUND only — they "
+        "must never replace, crowd out, or upstage the card's subject. "
+        "Be inventive and VARY it each time: choose a fresh setting, camera angle, "
+        "distance, time of day, weather, and composition so re-rolls feel distinct "
+        "rather than repeating the same scene — but always keep the same focal subject. "
+        "PRESERVE the subject's defining anatomy stated in the reference: if it says "
+        "a SINGLE / central / one eye (a cyclops), the creature has exactly ONE eye — "
+        "write 'eye' (singular), NEVER 'eyes', and never give it two. Likewise keep "
+        "any other stated defining features. "
+        "ANCHOR THE SCENE IN THE CARD'S OWN STORY: draw concrete subjects, "
+        "characters, places, and events from the card's flavor text and rules. "
+        "AVOID generic abstract filler — do NOT default to 'swirling magical "
+        "energy', a 'luminescent/ethereal aura', a 'glowing vortex', or 'flowing "
+        "shapes'. Depict real, recognizable subject matter (people, creatures, "
+        "settings, objects, action), even for spells and enchantments. "
         "Do NOT include any style directions — just describe the subject matter."
     )
+    if _no_character:
+        system_msg += (
+            "\n\nThis card depicts an OBJECT or PLACE, not a character. Do NOT make a "
+            "person, face, head, figure, or creature the focal point. Any incidental "
+            "figures must stay small and in the background. The object/location is the star."
+        )
     if style_hint:
         # Detect dark/horror mood from the style hint
         _hint_lower = style_hint.lower()
@@ -486,10 +585,9 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             if _themes:
                 system_msg += (
                     f"\n\nTHEMATIC ELEMENTS — The deck's visual identity includes: {_themes}. "
-                    "Weave these motifs into every scene. For example, if the themes include "
-                    "'cosmic horror' and 'undead masses', a forest should have twisted trees "
-                    "with fleshy bark and skeletal roots, not just a dark forest. Make the "
-                    "thematic DNA visible in the subject matter itself."
+                    "Let these motifs color the BACKGROUND and atmosphere only — they must "
+                    "NOT become the focal point or replace the card's own subject. Keep the "
+                    "card's subject dominant and clearly readable; the themes are set dressing."
                 )
         else:
             system_msg += (
@@ -503,35 +601,42 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             if _themes:
                 system_msg += (
                     f"\n\nTHEMATIC ELEMENTS — The deck's visual identity includes: {_themes}. "
-                    "Subtly weave these motifs into the scene so cards feel cohesive."
+                    "Let these motifs appear only in the BACKGROUND and atmosphere so cards "
+                    "feel cohesive — never let them replace or upstage the card's own subject."
                 )
+
+    if steer and steer.strip():
+        system_msg += (
+            f"\n\nUSER DIRECTION (HIGHEST PRIORITY) — Re-imagine the scene to satisfy "
+            f"this request: \"{steer.strip()}\". Treat it as a strong steer: change the "
+            f"setting, action, framing, time, or mood as needed to honor it, while still "
+            f"depicting the card's subject. Make the result clearly DIFFERENT from a "
+            f"generic version — don't fall back to the usual scene."
+        )
 
     user_msg = (
         f"Card: {name}\nType: {type_line}\nRules: {oracle}\n"
-        f"Direction: {guidance}\n"
-        f"Reference description: {base_desc}\n"
-        f"Rewrite this into a detailed scene description (2-3 sentences):"
+        + (f"Flavor text (use this as the THEMATIC ANCHOR for the scene): {flavor}\n" if flavor else "")
+        + f"Direction: {guidance}\n"
+        + (f"User steer (honor this above all): {steer.strip()}\n" if steer and steer.strip() else "")
+        + f"Reference description: {base_desc}\n"
+        f"Ground the scene in this card's flavor and rules — concrete subjects, not "
+        f"abstract energy. Rewrite into a detailed scene description (2-3 sentences):"
     )
 
     try:
-        if backend == 'local':
-            from ollama import chat
-            response = chat(model=local_model, messages=[
+        import mlx_llm
+        return mlx_llm.chat(
+            messages=[
                 {'role': 'system', 'content': system_msg},
                 {'role': 'user', 'content': user_msg},
-            ])
-            return response.message.content.strip()
-        else:
-            response = openai_client.chat.completions.create(
-                model='gpt-4o-mini',
-                messages=[
-                    {'role': 'system', 'content': system_msg},
-                    {'role': 'user', 'content': user_msg},
-                ],
-                max_tokens=200,
-                temperature=0.8,
-            )
-            return response.choices[0].message.content.strip()
+            ],
+            model=local_model,
+            max_tokens=200,
+            temperature=0.8,  # varied between re-rolls; 0.95 made the 3B model
+                              # degenerate into word-salad tails ("waveform GS cave
+                              # events super intend impact"), so keep it lower.
+        )
     except Exception as e:
         print(f"  [prompt_gen] AI failed for {name}: {e}, using rule-based")
         return generate_subject_description(card)
@@ -575,6 +680,67 @@ def generate_prompts_with_ai(
         time.sleep(0.05)  # Brief rate limit
 
     return prompts
+
+
+# ---------------------------------------------------------------------------
+# Source-canonical style descriptors for FLUX
+# ---------------------------------------------------------------------------
+def build_source_style_prompt(style_source: str, backend: str = 'local',
+                              local_model: str = 'llama3.1:8b') -> str:
+    """Ask the LLM for a named style's *canonical* visual descriptors for FLUX.
+
+    The vision model often mislabels a recognizable style's medium (e.g. tagging
+    Wes Anderson live-action films as "digital painting"), and those wrong tokens
+    fight the style. FLUX knows famous named styles well, and so does the LLM —
+    so for a recognized source we generate accurate descriptors from the source
+    NAME (composition, framing, palette, lighting, mood, signature technique)
+    rather than trusting the per-image vision distillation.
+
+    Returns a single comma-separated descriptor line, or '' on failure.
+    """
+    if not style_source or not style_source.strip():
+        return ''
+    system_msg = (
+        "You are a prompt engineer for the FLUX text-to-image model. Given the name "
+        "of a visual/artistic style, output ONE line of 10-16 comma-separated visual "
+        "descriptors that capture that style's MOST DISTINCTIVE, RECOGNIZABLE look so "
+        "FLUX reproduces it unmistakably.\n"
+        "Include concrete, specific phrases for: the actual medium (e.g. 'live-action "
+        "35mm film still', 'cel animation', 'oil painting'); composition and framing "
+        "(e.g. 'perfectly symmetrical', 'centered head-on framing', 'flat planimetric "
+        "staging'); color palette (specific hues); lighting; and mood.\n"
+        "Rules: be SPECIFIC to THIS style, not generic. Use multi-word descriptor "
+        "phrases, not single vague words. Do NOT output category labels like "
+        "'medium' or 'composition' themselves — output the actual descriptive values. "
+        "No subject matter, no proper nouns, no character/place names. Output ONLY the "
+        "comma-separated descriptor phrases, nothing else."
+    )
+    user_msg = (
+        "Style: Studio Ghibli\nDescriptors: hand-painted cel animation, lush "
+        "watercolor backgrounds, soft rounded character designs, gentle naturalistic "
+        "lighting, painterly clouds, warm nostalgic palette, whimsical, serene\n\n"
+        f"Style: {style_source}\nDescriptors:"
+    )
+    try:
+        import mlx_llm
+        out = mlx_llm.chat(
+            messages=[
+                {'role': 'system', 'content': system_msg},
+                {'role': 'user', 'content': user_msg},
+            ],
+            model=local_model, max_tokens=120, temperature=0.4,
+        )
+        # Single line, strip the source name if it leaked in.
+        out = out.strip().splitlines()[0] if out.strip() else ''
+        import re as _re
+        for word in style_source.split():
+            if len(word) > 3:
+                out = _re.sub(r'\b' + _re.escape(word) + r'\b', '', out, flags=_re.IGNORECASE)
+        out = _re.sub(r'\s{2,}', ' ', out).strip(' ,')
+        return out
+    except Exception as e:
+        print(f"  [style] build_source_style_prompt failed for '{style_source}': {e}")
+        return ''
 
 
 # ---------------------------------------------------------------------------
@@ -635,24 +801,16 @@ def generate_flavor_text(card: dict, inspiration_description: str = '',
     )
 
     try:
-        if backend == 'local':
-            from ollama import chat
-            response = chat(model=local_model, messages=[
+        import mlx_llm
+        text = mlx_llm.chat(
+            messages=[
                 {'role': 'system', 'content': system_msg},
                 {'role': 'user', 'content': user_msg},
-            ])
-            text = response.message.content.strip()
-        else:
-            response = openai_client.chat.completions.create(
-                model='gpt-4o-mini',
-                messages=[
-                    {'role': 'system', 'content': system_msg},
-                    {'role': 'user', 'content': user_msg},
-                ],
-                max_tokens=100,
-                temperature=0.9,
-            )
-            text = response.choices[0].message.content.strip()
+            ],
+            model=local_model,
+            max_tokens=100,
+            temperature=0.9,
+        )
 
         # Clean up LLM artifacts
         # Strip markdown formatting (* _ ** __)

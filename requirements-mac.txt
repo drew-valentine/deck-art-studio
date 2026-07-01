@@ -1,0 +1,17 @@
+# Mac-only (Apple Silicon) MLX-native pipeline dependencies.
+#
+# This feature branch replaces the cloud (OpenAI) + PyTorch-MPS/Ollama pipeline
+# with MLX-native components. These packages require Apple Silicon + macOS and
+# will NOT install on the Ubuntu CI runner — that's why they live here and not in
+# requirements.txt, and why every import of them in the codebase is lazy
+# (inside functions), so prompt_generator.py / vision_analyzer.py still import on CI.
+#
+#   pip install -r requirements.txt -r requirements-mac.txt
+#
+# Pinned: mflux's public API has shifted between releases. If you bump these,
+# re-verify the Flux1 / generate_image / Redux entry points in
+# local_image_generator.py against the installed package.
+
+mflux==0.18.0          # MLX-native FLUX.1 image generation
+mlx-lm==0.31.3         # MLX LLM inference (prompt generation / distillation)
+mlx-vlm==0.6.3         # MLX vision-language inference (inspiration style analysis)
