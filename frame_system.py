@@ -140,11 +140,15 @@ def render_godzilla(card_dict, fs):
     svg.append(_defs(T))
 
     nx, ny, nw, nh = nb
+    # The dark inner name plate is short (single row) when there's a nickname (the
+    # sub-banner below holds the real name); tall (covers the sub-banner) when
+    # there's no nickname, so no empty gold strip hangs below the name.
+    plate_h = 52 if has_nick else 80
+    pcy = ny + 11 + (plate_h / 2)   # vertical centre of the name row / pips
     if not use_banner:
         svg.append(_panel(nx, ny + 6, nw, nh - 12, T, radius=18))  # plain fallback bar
     else:
-        # dark inner name plate — white name reads on dark, like the real card
-        svg.append(f'<rect x="{nx+28}" y="{ny+11}" width="{nw-56}" height="52" rx="11" '
+        svg.append(f'<rect x="{nx+28}" y="{ny+11}" width="{nw-56}" height="{plate_h}" rx="11" '
                    f'fill="url(#darkgrad)" stroke="{T["gold_lo"]}" stroke-width="2"/>')
 
     # fit the display name so it clears the mana pips
@@ -157,19 +161,19 @@ def render_godzilla(card_dict, fs):
         nf = max(19, int(nf * name_avail / est))
 
     if has_nick:
-        svg.append(_text(nx + 46, ny + 11 + 26 + nf * 0.34, card.showcase_name, size=nf,
+        svg.append(_text(nx + 46, pcy + nf * 0.34, card.showcase_name, size=nf,
                          font=T['font_title'], fill=T['white']))
         # subtitle: dark ink on the gold sub-banner
         svg.append(_text(nx + nw / 2, ny + 92, card.name, size=18, italic=True,
                          font=T['font_rules'], fill=T['ink'], anchor='middle'))
     else:
-        svg.append(_text(nx + 46, ny + 11 + 26 + nf * 0.34, card.name, size=nf,
+        svg.append(_text(nx + 46, pcy + nf * 0.34, card.name, size=nf,
                          font=T['font_title'], fill=T['white']))
     # mana pips (on the dark name plate, right side)
     px = nx + nw - 54
     for pip in reversed(pips):
-        svg.append(f'<circle cx="{px+16}" cy="{ny+37}" r="16" fill="rgba(0,0,0,0.45)"/>')
-        svg.append(cfr._pip_image_tag(pip, px, ny + 37 - 16, 32))
+        svg.append(f'<circle cx="{px+16}" cy="{pcy}" r="16" fill="rgba(0,0,0,0.45)"/>')
+        svg.append(cfr._pip_image_tag(pip, px, pcy - 16, 32))
         px -= 40
 
     # type + rules as ONE cohesive panel
