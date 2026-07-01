@@ -345,6 +345,14 @@ FRAME_STYLES = {
         'frame_set': 'iko',
         'layout': 'iko',
     },
+    'oldschool': {
+        'label': 'Retro (1993)',
+        'description': 'The original Alpha/Beta/Unlimited beige border — inset art window, '
+                       'textured text box, black serif text. Built from the authentic ABU assets.',
+        'mode': 'image',
+        'frame_set': 'abu',
+        'layout': 'abu',
+    },
     'clean': {
         'label': 'Clean',
         'description': 'Raw art, no frame at all',
@@ -2777,6 +2785,91 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
     return '\n'.join(svg)
 
 
+# Original ABU (1993) layout — pixel coords in 750x1050, measured from the abu
+# frame PNGs. Art window is inset (y110-571); text is black serif on beige.
+ABU_LAYOUT = {
+    'name_y0': 34, 'name_y1': 100,
+    'type_y0': 574, 'type_y1': 618,
+    'rules_y0': 628, 'rules_y1': 992,
+    'x_margin': 62, 'x_right': 688,
+    'pt_y': 1016,
+}
+
+
+def _create_abu_text_svg(card: CardData, fs: dict) -> str:
+    """Text overlay for the original 1993 (ABU) border: black serif name, type,
+    rules (in the textured box) and P/T, over the beige frame."""
+    L = ABU_LAYOUT
+    W, H = CARD_WIDTH, CARD_HEIGHT
+    mana_pips = parse_mana_cost(card.mana_cost)
+    ink = '#1a1712'
+
+    svg = ['<?xml version="1.0" encoding="UTF-8"?>',
+           f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
+           f'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">']
+    if _FONT_FACE_CSS:
+        svg.append(f'<style type="text/css">\n{_FONT_FACE_CSS}\n</style>')
+
+    tx = L['x_margin']
+    esc_name = card.name.replace('&', '&amp;').replace('<', '&lt;')
+    pip_w = len(mana_pips) * (MANA_PIP_SIZE + MANA_PIP_GAP) + 14 if mana_pips else 0
+    name_avail = (L['x_right'] - tx) - pip_w
+    nf = NAME_FONT
+    if len(card.name) * nf * 0.58 > name_avail and name_avail > 0:
+        nf = max(20, int(nf * name_avail / (len(card.name) * nf * 0.58)))
+    ncy = (L['name_y0'] + L['name_y1']) / 2 + nf * 0.35
+    svg.append(f'<text x="{tx}" y="{ncy}" font-family="{NAME_FONT_FAMILY}" '
+               f'font-size="{nf}" font-weight="bold" fill="{ink}">{esc_name}</text>')
+
+    # Mana pips (right-aligned in the name row)
+    if mana_pips:
+        pcy = (L['name_y0'] + L['name_y1']) / 2
+        px = L['x_right']
+        for pip in reversed(mana_pips):
+            pxx = px - MANA_PIP_SIZE
+            svg.append(f'<circle cx="{pxx + MANA_PIP_SIZE/2 + 0.5}" cy="{pcy + 1}" '
+                       f'r="{MANA_PIP_SIZE/2}" fill="rgba(0,0,0,0.28)"/>')
+            svg.append(_pip_image_tag(pip, pxx, pcy - MANA_PIP_SIZE/2, MANA_PIP_SIZE))
+            px -= (MANA_PIP_SIZE + MANA_PIP_GAP)
+
+    # Type line
+    esc_type = card.type_line.replace('&', '&amp;').replace('<', '&lt;')
+    type_w = L['x_right'] - tx
+    tf = TYPE_FONT
+    if len(card.type_line) * tf * 0.50 > type_w and type_w > 0:
+        tf = max(18, int(tf * type_w / (len(card.type_line) * tf * 0.50)))
+    tcy = (L['type_y0'] + L['type_y1']) / 2 + tf * 0.35
+    svg.append(f'<text x="{tx}" y="{tcy}" font-family="{TYPE_FONT_FAMILY}" '
+               f'font-size="{tf}" font-weight="bold" fill="{ink}">{esc_type}</text>')
+
+    # Rules text (black serif), shrink to fit the text box
+    if card.oracle_text:
+        rbox_w = L['x_right'] - tx
+        rbox_h = (L['rules_y1'] - L['rules_y0']) - 12
+        r_font, r_line, MIN_R = RULES_FONT, RULES_LINE_H, 16
+        needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
+        while needed > rbox_h and r_font > MIN_R:
+            r_font -= 1
+            r_line = int(RULES_LINE_H * r_font / RULES_FONT)
+            needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
+        if needed > rbox_h + 2:
+            fs.setdefault('_quality', []).append(
+                f'rules_overflow: needs {needed:.0f}px but box is {rbox_h:.0f}px (font {r_font})')
+        rules_lines, _ = render_rules_text_svg(
+            card.oracle_text, tx, L['rules_y0'] + 8 + r_font * 0.8,
+            rbox_w, rbox_h, r_font, r_line, text_color=ink)
+        svg.extend(rules_lines)
+
+    # P/T (black, bottom-right)
+    if card.power is not None and card.toughness is not None:
+        svg.append(f'<text x="{L["x_right"] - 2}" y="{L["pt_y"]}" text-anchor="end" '
+                   f'font-family="{PT_FONT_FAMILY}" font-size="34" font-weight="bold" '
+                   f'fill="{ink}">{card.power}/{card.toughness}</text>')
+
+    svg.append('</svg>')
+    return '\n'.join(svg)
+
+
 def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Image.Image:
     """Frame PNG + P/T box (gradient-aware), WITHOUT text.
 
@@ -2804,6 +2897,9 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     if frame_img is None:
         # Fallback to colorless if specific color not found
         frame_img = _load_frame_image(frame_set, 'c')
+    if frame_img is None and frame_set == 'abu':
+        # ABU has no multicolor/colorless frame — fall back to artifact then land.
+        frame_img = _load_frame_image(frame_set, 'a') or _load_frame_image(frame_set, 'l')
     if frame_img is None:
         # No frame images available — return empty
         return Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
@@ -2844,6 +2940,21 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
             out[..., c] = np.where(interior, cream[c] * op + out[..., c] * (1 - op), out[..., c])
         out[..., 3] = np.where(interior, np.maximum(a, int(255 * op)), a)
         result = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), 'RGBA')
+
+    if frame_set == 'abu':
+        # ABU colored frames tint the text box per color (green = dark brown wood),
+        # which makes black rules text illegible. Real old cards use a light
+        # parchment box for every color, so overlay the WHITE frame's light
+        # text-box region onto whatever colored border we loaded.
+        white = _load_frame_image('abu', 'w')
+        if white is not None:
+            if white.size != (CARD_WIDTH, CARD_HEIGHT):
+                white = white.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+            L = ABU_LAYOUT
+            x0, y0 = L['x_margin'] - 16, L['rules_y0'] - 14
+            x1, y1 = L['x_right'] + 16, L['rules_y1'] + 14
+            box = white.crop((x0, y0, x1, y1))
+            result.alpha_composite(box, (x0, y0))
 
     # Composite P/T box overlay for creatures
     has_pt = card.power is not None and card.toughness is not None
@@ -2890,9 +3001,12 @@ def _render_image_frame(card_dict: dict, card: CardData, fs: dict) -> Image.Imag
     """
     result = _compose_image_frame_base(card_dict, card, fs)
 
-    # Render text-only SVG and composite on top (iko showcase uses its own layout)
+    # Render text-only SVG and composite on top (each image frame set can carry
+    # its own layout/text renderer)
     if fs.get('layout') == 'iko' or fs.get('frame_set') == 'iko':
         text_svg = _create_iko_text_svg(card, fs)
+    elif fs.get('layout') == 'abu' or fs.get('frame_set') == 'abu':
+        text_svg = _create_abu_text_svg(card, fs)
     else:
         text_svg = _create_text_only_svg(card, fs)
     text_png_data = cairosvg.svg2png(
@@ -2948,6 +3062,10 @@ def render_text_overlay(card_dict: dict, frame_settings: dict) -> bytes:
     if fs.get('mode') == 'image':
         if fs.get('layout') == 'iko' or fs.get('frame_set') == 'iko':
             text_svg = _create_iko_text_svg(card, fs)
+            return cairosvg.svg2png(bytestring=text_svg.encode('utf-8'),
+                                    output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
+        if fs.get('layout') == 'abu' or fs.get('frame_set') == 'abu':
+            text_svg = _create_abu_text_svg(card, fs)
             return cairosvg.svg2png(bytestring=text_svg.encode('utf-8'),
                                     output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
         # Compute dynamic PT center if not already set
