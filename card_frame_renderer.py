@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 try:
     import cairosvg
-    from PIL import Image
+    from PIL import Image, ImageDraw
     import xml.etree.ElementTree as ET
 except ImportError as e:
     raise ImportError(f"Required package missing: {e}. Install with: pip install cairosvg pillow")
@@ -1934,6 +1934,10 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
             r_line_h = int(RULES_LINE_H * r_font / RULES_FONT)
             needed_h = _measure_rules_text(oracle, rules_inner_w, r_font, r_line_h)
 
+        if needed_h + flavor_reserve > rules_max_h + 2:  # overflows even at min font
+            fs.setdefault('_quality', []).append(
+                f'rules_overflow: needs {needed_h:.0f}px but box is {rules_max_h:.0f}px (font {r_font})')
+
         rules_text_y_start = rules_y + RULES_PADDING + r_font * 0.8
         rules_svg, rules_used_h = render_rules_text_svg(
             oracle,
@@ -2514,6 +2518,10 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
             r_line_h = int(RULES_LINE_H * r_font / RULES_FONT)
             needed_h = _measure_rules_text(oracle, rules_inner_w, r_font, r_line_h)
 
+        if needed_h + flavor_reserve > rules_max_h + 2:  # overflows even at min font
+            fs.setdefault('_quality', []).append(
+                f'rules_overflow: needs {needed_h:.0f}px but box is {rules_max_h:.0f}px (font {r_font})')
+
         rules_text_y_start = rules_y + RULES_PADDING + r_font * 0.8
         rules_svg, rules_used_h = render_rules_text_svg(
             oracle,
@@ -2733,12 +2741,27 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
     svg.append(f'<text x="{tx}" y="{tcy}" font-family="{TYPE_FONT_FAMILY}" '
                f'font-size="{type_font}" font-weight="bold" fill="{white}">{esc_type}</text>')
 
-    # ── Rules text (dark on the light box) ──
-    rules_lines, _ = render_rules_text_svg(
-        card.oracle_text or '', tx, L['rules_y0'] + 32,
-        L['x_right'] - tx, L['rules_y1'] - L['rules_y0'] - 16,
-        27, 11, text_color=dark)
-    svg.extend(rules_lines)
+    # ── Rules text (dark on the light box), measured + shrunk to fit ──
+    # NOTE: render_rules_text_svg's 5th arg is LINE HEIGHT (RULES_LINE_H=37 for
+    # font 29), not a small gap — passing a tiny value crams every line on top
+    # of the next. Use the real line height and shrink the font for long oracles.
+    if card.oracle_text:
+        rbox_w = L['x_right'] - tx
+        rbox_top = L['rules_y0'] + 8
+        rbox_h = (L['rules_y1'] - L['rules_y0']) - 16
+        r_font, r_line, MIN_R = RULES_FONT, RULES_LINE_H, 16
+        needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
+        while needed > rbox_h and r_font > MIN_R:
+            r_font -= 1
+            r_line = int(RULES_LINE_H * r_font / RULES_FONT)
+            needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
+        if needed > rbox_h + 2:  # still overflows even at the minimum font
+            fs.setdefault('_quality', []).append(
+                f'rules_overflow: needs {needed:.0f}px but box is {rbox_h:.0f}px (font {r_font})')
+        rules_lines, _ = render_rules_text_svg(
+            card.oracle_text, tx, rbox_top + r_font * 0.8,
+            rbox_w, rbox_h, r_font, r_line, text_color=dark)
+        svg.extend(rules_lines)
 
     # ── P/T (gold, bottom-right) ──
     if card.power is not None and card.toughness is not None:
@@ -2788,13 +2811,22 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
 
     result = frame_img.copy()
 
-    # Some frame sets (iko showcase) layer a 'colored/' overlay on top of the
-    # base black+gold frame — e.g. the light rules box. No-op for m15.
-    colored = _load_frame_image(frame_set, f'colored/{color_key}')
-    if colored is not None:
-        if colored.size != (CARD_WIDTH, CARD_HEIGHT):
-            colored = colored.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
-        result = Image.alpha_composite(result, colored)
+    # Ikoria showcase: the real card has an OPAQUE light-cream rules box
+    # (regardless of card color) so dark rules text stays crisp over any art.
+    # The card-colored 'colored/' overlay is both semi-transparent and tinted per
+    # color (dark for black cards), so paint our own opaque cream box inside the
+    # base frame's gold-trimmed rules region instead.
+    if frame_set == 'iko':
+        L = IKO_LAYOUT
+        cream = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+        cd = ImageDraw.Draw(cream)
+        # Sit inside the base frame's gold trim (rules box gold border ~x37-712,
+        # y805-1049) so the trim stays visible around the cream fill.
+        cd.rounded_rectangle(
+            [L['x_margin'] - 6, L['rules_y0'] + 2, L['x_right'] + 6, L['rules_y1'] + 12],
+            radius=8, fill=(238, 232, 216, 255))
+        # cream ON TOP of the base's dark interior, so rules text reads crisply
+        result = Image.alpha_composite(result, cream)
 
     # Composite P/T box overlay for creatures
     has_pt = card.power is not None and card.toughness is not None
