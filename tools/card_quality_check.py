@@ -133,8 +133,10 @@ def check_textbox_legible(card, style):
         return None
     over_dark = Image.alpha_composite(
         Image.new('RGBA', (W, H), (12, 12, 12, 255)), frame).convert('L')
+    # Sample a band squarely inside every image frame's rules box (m15's runs to
+    # the bottom; iko's ends ~y0.92) — staying above 0.90 avoids the bottom margin.
     x0, x1 = int(W * 0.15), int(W * 0.80)
-    y0, y1 = int(H * 0.80), int(H * 0.94)
+    y0, y1 = int(H * 0.80), int(H * 0.89)
     crop = over_dark.crop((x0, y0, x1, y1))
     hist = crop.histogram()
     mean = sum(i * c for i, c in enumerate(hist)) / max(1, sum(hist))

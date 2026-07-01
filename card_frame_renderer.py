@@ -2661,13 +2661,15 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
     return '\n'.join(svg)
 
 
-# Ikoria showcase layout — pixel coords in the 750x1050 output space (measured
-# from the vendored iko frame PNGs).
+# Ikoria showcase layout — pixel coords in the 750x1050 output space, measured
+# from the vendored iko frame PNGs (rules box interior really ends ~y972, so text
+# must stay above that or it spills below the box onto the art).
 IKO_LAYOUT = {
     'title_y0': 43, 'title_y1': 117,
-    'type_y0': 726, 'type_y1': 803,
-    'rules_y0': 812, 'rules_y1': 1030,
+    'type_y0': 727, 'type_y1': 800,
+    'rules_y0': 812, 'rules_y1': 966,
     'x_margin': 58, 'x_right': 694,
+    'pt_y': 1012,  # P/T sits on the bottom margin, below the rules box
 }
 
 
@@ -2763,9 +2765,10 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
             rbox_w, rbox_h, r_font, r_line, text_color=dark)
         svg.extend(rules_lines)
 
-    # ── P/T (gold, bottom-right) ──
+    # ── P/T (gold, on the bottom margin below the rules box) ──
     if card.power is not None and card.toughness is not None:
-        svg.append(f'<text x="{L["x_right"] - 4}" y="{L["rules_y1"] + 8}" text-anchor="end" '
+        svg.append(f'<text x="{L["x_right"] - 4}" y="{L.get("pt_y", L["rules_y1"] + 44)}" '
+                   f'text-anchor="end" '
                    f'font-family="{PT_FONT_FAMILY}" font-size="40" font-weight="bold" '
                    f'fill="#f4e4a8" stroke="rgba(0,0,0,0.6)" stroke-width="0.8">'
                    f'{card.power}/{card.toughness}</text>')
@@ -2817,16 +2820,30 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     # color (dark for black cards), so paint our own opaque cream box inside the
     # base frame's gold-trimmed rules region instead.
     if frame_set == 'iko':
+        # Recolor the base frame's OWN rules-box interior (its real, correctly
+        # shaped + aligned box) to a translucent light cream, instead of drawing a
+        # rectangle over it. This keeps the frame's border and alignment with the
+        # type bar and just tints the interior — art shows faintly through (the
+        # showcase look) while dark text stays readable.
+        import numpy as np
         L = IKO_LAYOUT
-        cream = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
-        cd = ImageDraw.Draw(cream)
-        # TRANSLUCENT light box (art subtly shows through — the showcase look),
-        # inset to stay INSIDE the base frame's gold trim so it never bleeds over
-        # the border. Light + only mildly translucent keeps dark text readable.
-        cd.rounded_rectangle(
-            [L['x_margin'] - 2, L['rules_y0'] + 6, L['x_right'] + 2, L['rules_y1'] + 6],
-            radius=7, fill=(240, 234, 219, 208))
-        result = Image.alpha_composite(result, cream)
+        arr = np.array(result).astype(np.int32)
+        r, g, b, a = arr[..., 0], arr[..., 1], arr[..., 2], arr[..., 3]
+        # Interior of the rules box = the DARK region (the border, whatever its
+        # color, is bright/saturated; the interior is near-black for every color
+        # frame). Using the frame's own dark interior gives a fill that exactly
+        # matches its border shape and aligns with the type bar above.
+        bright = np.maximum(np.maximum(r, g), b)
+        band = np.zeros((CARD_HEIGHT, CARD_WIDTH), bool)
+        band[L['rules_y0'] - 4: L['rules_y1'] + 8, :] = True
+        interior = band & (a > 60) & (bright < 115)
+        cream = np.array([240, 234, 219], dtype=np.float64)
+        op = 0.80  # translucency (art shows faintly through)
+        out = arr.astype(np.float64)
+        for c in range(3):
+            out[..., c] = np.where(interior, cream[c] * op + out[..., c] * (1 - op), out[..., c])
+        out[..., 3] = np.where(interior, np.maximum(a, int(255 * op)), a)
+        result = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), 'RGBA')
 
     # Composite P/T box overlay for creatures
     has_pt = card.power is not None and card.toughness is not None
