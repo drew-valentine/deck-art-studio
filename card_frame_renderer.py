@@ -1946,7 +1946,10 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
                 card.flavor_text.strip(), rules_inner_w, FLAVOR_FONT, FLAVOR_LINE_H
             ) + FLAVOR_LINE_H  # extra for divider gap
 
-        while needed_h + flavor_reserve > rules_max_h and r_font > MIN_RULES_FONT:
+        # Auto mode (no explicit size) shrinks text to fit the box. When the user
+        # sets a size in the frame editor, honor it exactly (WYSIWYG) — overflowing
+        # lines are clipped at the box bottom rather than silently shrunk.
+        while (not fs.get('rules_font_size')) and needed_h + flavor_reserve > rules_max_h and r_font > MIN_RULES_FONT:
             r_font -= 1
             r_line_h = int(RULES_LINE_H * r_font / RULES_FONT)
             needed_h = _measure_rules_text(oracle, rules_inner_w, r_font, r_line_h)
@@ -2530,7 +2533,10 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
                 card.flavor_text.strip(), rules_inner_w, FLAVOR_FONT, FLAVOR_LINE_H
             ) + FLAVOR_LINE_H
 
-        while needed_h + flavor_reserve > rules_max_h and r_font > MIN_RULES_FONT:
+        # Auto mode (no explicit size) shrinks text to fit the box. When the user
+        # sets a size in the frame editor, honor it exactly (WYSIWYG) — overflowing
+        # lines are clipped at the box bottom rather than silently shrunk.
+        while (not fs.get('rules_font_size')) and needed_h + flavor_reserve > rules_max_h and r_font > MIN_RULES_FONT:
             r_font -= 1
             r_line_h = int(RULES_LINE_H * r_font / RULES_FONT)
             needed_h = _measure_rules_text(oracle, rules_inner_w, r_font, r_line_h)
@@ -2768,7 +2774,8 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
         r_line = int(RULES_LINE_H * r_font / RULES_FONT)
         MIN_R = 16
         needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
-        while needed > rbox_h and r_font > MIN_R:
+        # Auto only shrinks when no explicit size is set; honor the user's size exactly.
+        while (not fs.get('rules_font_size')) and needed > rbox_h and r_font > MIN_R:
             r_font -= 1
             r_line = int(RULES_LINE_H * r_font / RULES_FONT)
             needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
@@ -2853,7 +2860,8 @@ def _create_abu_text_svg(card: CardData, fs: dict) -> str:
         rbox_h = (L['rules_y1'] - L['rules_y0']) - 12
         r_font, r_line, MIN_R = RULES_FONT, RULES_LINE_H, 16
         needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
-        while needed > rbox_h and r_font > MIN_R:
+        # Auto only shrinks when no explicit size is set; honor the user's size exactly.
+        while (not fs.get('rules_font_size')) and needed > rbox_h and r_font > MIN_R:
             r_font -= 1
             r_line = int(RULES_LINE_H * r_font / RULES_FONT)
             needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
