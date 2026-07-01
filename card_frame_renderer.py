@@ -2914,30 +2914,18 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     # color (dark for black cards), so paint our own opaque cream box inside the
     # base frame's gold-trimmed rules region instead.
     if frame_set == 'iko':
-        # Recolor the base frame's OWN rules-box interior (its real, correctly
-        # shaped + aligned box) to a translucent light cream, instead of drawing a
-        # rectangle over it. This keeps the frame's border and alignment with the
-        # type bar and just tints the interior — art shows faintly through (the
-        # showcase look) while dark text stays readable.
         import numpy as np
-        L = IKO_LAYOUT
-        arr = np.array(result).astype(np.int32)
-        r, g, b, a = arr[..., 0], arr[..., 1], arr[..., 2], arr[..., 3]
-        # Interior of the rules box = the DARK region (the border, whatever its
-        # color, is bright/saturated; the interior is near-black for every color
-        # frame). Using the frame's own dark interior gives a fill that exactly
-        # matches its border shape and aligns with the type bar above.
-        bright = np.maximum(np.maximum(r, g), b)
-        band = np.zeros((CARD_HEIGHT, CARD_WIDTH), bool)
-        band[L['rules_y0'] - 4: L['rules_y1'] + 8, :] = True
-        interior = band & (a > 60) & (bright < 115)
-        cream = np.array([240, 234, 219], dtype=np.float64)
-        op = 0.80  # translucency (art shows faintly through)
-        out = arr.astype(np.float64)
-        for c in range(3):
-            out[..., c] = np.where(interior, cream[c] * op + out[..., c] * (1 - op), out[..., c])
-        out[..., 3] = np.where(interior, np.maximum(a, int(255 * op)), a)
-        result = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), 'RGBA')
+        # Clean cream rules box, drawn as a rounded rectangle at the frame's REAL
+        # box bounds (measured x50-700, y808-972). The previous dark-pixel mask
+        # bled full-width into the side margins at the bottom of the box (the
+        # frame's dark lower region spans the whole card there), producing ugly
+        # translucent blobs in the corners. A rounded rect avoids that entirely.
+        # Mostly opaque (alpha 216) so text is crisp and busy art only faintly
+        # shows through — matching the reference's solid parchment box.
+        box = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+        ImageDraw.Draw(box).rounded_rectangle(
+            [50, 808, 700, 972], radius=16, fill=(244, 238, 224, 216))
+        result = Image.alpha_composite(result, box)
 
         # The iko/short asset caps the card with an opaque BLACK bottom bar below
         # the rules box; the real showcase card is full-bleed art to the bottom
@@ -2947,7 +2935,7 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         rr, gg, bb, aa = (arr2[..., 0].astype(int), arr2[..., 1].astype(int),
                           arr2[..., 2].astype(int), arr2[..., 3])
         below = np.zeros((CARD_HEIGHT, CARD_WIDTH), bool)
-        below[L['rules_y1'] + 6:, :] = True   # below the rules-box gold border
+        below[978:, :] = True   # below the rules-box bottom border
         black_bar = below & (aa > 0) & (np.maximum(np.maximum(rr, gg), bb) < 55)
         arr2[..., 3] = np.where(black_bar, 0, aa)
         result = Image.fromarray(arr2, 'RGBA')
