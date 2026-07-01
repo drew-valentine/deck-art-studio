@@ -113,18 +113,17 @@ def render(card, style):
     return composed, issues
 
 
-def check_textbox_opacity(card, style):
-    """Legibility gate: a frame with a text box must make its rules region
-    art-independent (opaque), so text stays readable over ANY art. Render the
-    frame over a dark and a light solid 'art' and diff the rules region — a
-    translucent box lets the art bleed through and the two differ.
+def check_textbox_legible(card, style):
+    """Legibility gate: dark rules text must stay readable over ANY art. Render
+    the frame over a DARK solid 'art' — the rules box must still be light enough
+    for dark text to contrast. (A translucent-but-light showcase box passes; a
+    dark or too-see-through box fails, because busy/dark art bleeds through and
+    the text disappears — the exact defect from the earlier Godzilla frame.)
 
-    Skips styles with no text box (full-art, clean/no_frame).
+    Only image-mode frames (m15, godzilla) claim a readable box; the SVG frosted-
+    glass / full-art styles are intentionally translucent and are skipped.
     """
     fs = cfr.resolve_frame_settings(card, {'style': style})
-    # Only image-mode frames (m15, godzilla) claim a solid, art-independent rules
-    # box. The SVG styles (classic frosted glass, full-art) are intentionally
-    # translucent, so this legibility gate doesn't apply to them.
     if fs.get('mode') != 'image' or fs.get('no_frame'):
         return None
     cardobj = cfr._build_card_data(card, fs)
@@ -132,23 +131,15 @@ def check_textbox_opacity(card, style):
         frame = cfr._render_image_frame(card, cardobj, fs)
     except Exception:
         return None
-    dark = Image.new('RGBA', (W, H), (16, 16, 16, 255))
-    light = Image.new('RGBA', (W, H), (235, 235, 235, 255))
-    a = Image.alpha_composite(dark, frame).convert('RGB')
-    b = Image.alpha_composite(light, frame).convert('RGB')
-    # Sample squarely inside the rules box (lower band), avoiding the P/T corner.
+    over_dark = Image.alpha_composite(
+        Image.new('RGBA', (W, H), (12, 12, 12, 255)), frame).convert('L')
     x0, x1 = int(W * 0.15), int(W * 0.80)
     y0, y1 = int(H * 0.80), int(H * 0.94)
-    ca, cb = a.crop((x0, y0, x1, y1)), b.crop((x0, y0, x1, y1))
-    pa, pb = ca.load(), cb.load()
-    n, tot = 0, 0
-    for yy in range(0, y1 - y0, 3):
-        for xx in range(0, x1 - x0, 3):
-            n += 1
-            tot += sum(abs(pa[xx, yy][k] - pb[xx, yy][k]) for k in range(3))
-    mean_diff = tot / max(1, n)
-    if mean_diff > 24:  # art visibly bleeds through the "box"
-        return f'translucent_textbox: rules region shifts {mean_diff:.0f}/765 between dark/light art'
+    crop = over_dark.crop((x0, y0, x1, y1))
+    hist = crop.histogram()
+    mean = sum(i * c for i, c in enumerate(hist)) / max(1, sum(hist))
+    if mean < 130:  # box stays too dark over dark art -> dark text unreadable
+        return f'rules_box_illegible: brightness {mean:.0f}/255 over dark art (dark text would vanish)'
     return None
 
 
@@ -190,7 +181,7 @@ def main():
             total += 1
             img, issues = render(card, st)
             row[st] = img
-            opacity_issue = check_textbox_opacity(card, st)
+            opacity_issue = check_textbox_legible(card, st)
             if opacity_issue:
                 issues.append(opacity_issue)
             for iss in issues:

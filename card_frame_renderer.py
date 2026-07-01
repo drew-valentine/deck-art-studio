@@ -2820,12 +2820,12 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         L = IKO_LAYOUT
         cream = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
         cd = ImageDraw.Draw(cream)
-        # Sit inside the base frame's gold trim (rules box gold border ~x37-712,
-        # y805-1049) so the trim stays visible around the cream fill.
+        # TRANSLUCENT light box (art subtly shows through — the showcase look),
+        # inset to stay INSIDE the base frame's gold trim so it never bleeds over
+        # the border. Light + only mildly translucent keeps dark text readable.
         cd.rounded_rectangle(
-            [L['x_margin'] - 6, L['rules_y0'] + 2, L['x_right'] + 6, L['rules_y1'] + 12],
-            radius=8, fill=(238, 232, 216, 255))
-        # cream ON TOP of the base's dark interior, so rules text reads crisply
+            [L['x_margin'] - 2, L['rules_y0'] + 6, L['x_right'] + 2, L['rules_y1'] + 6],
+            radius=7, fill=(240, 234, 219, 208))
         result = Image.alpha_composite(result, cream)
 
     # Composite P/T box overlay for creatures
