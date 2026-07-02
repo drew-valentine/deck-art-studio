@@ -325,6 +325,17 @@ FRAME_STYLES = {
         'controls': {'colors': ['textbox', 'border', 'text'],
                      'box_opacity': True, 'showcase': True},
     },
+    'planeswalker': {
+        'label': 'Planeswalker',
+        'description': 'The authentic M15-era planeswalker frame — near-full-height art, '
+                       'translucent alternating ability bands, loyalty badges and shield. '
+                       'Planeswalkers in the M15 style use this automatically. Built from the '
+                       'cardconjurer planeswalker assets.',
+        'mode': 'image',
+        'frame_set': 'planeswalker',
+        'layout': 'planeswalker',
+        'controls': {'colors': ['text']},
+    },
     'artdeco': {
         'label': 'Art Deco',
         'description': 'New Capenna Art Deco showcase — geometric gilded frame, dark bars with '
@@ -498,6 +509,11 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None) -> dict:
     style_key = card_overrides.get('style',
                 deck_settings.get('style', 'basic'))
     style_key = _style_remap.get(style_key, style_key)
+    # Planeswalkers in the standard M15 style use the authentic planeswalker
+    # frame automatically, like real cards.
+    if (style_key == 'm15' and card_dict.get('loyalty') is not None
+            and _LOYALTY_RE.search(card_dict.get('oracle_text') or '')):
+        style_key = 'planeswalker'
     style = FRAME_STYLES.get(style_key, FRAME_STYLES['basic'])
 
     # ── Build layers: start from style defaults (image-based styles have no layers) ──
@@ -3131,6 +3147,141 @@ def _create_bar_box_text_svg(card: CardData, fs: dict, L: dict,
     return '\n'.join(svg)
 
 
+# Authentic planeswalker frame — packPlaneswalkerRegular.js bounds in
+# 750x1050. Bright bars -> dark title/type; ability bands drawn by us
+# (alternating translucent light/dark, black text); loyalty white on the
+# frame's baked shield.
+PW_FRAME_LAYOUT = {
+    'title_y0': 39, 'title_y1': 96,
+    'type_y0': 591, 'type_y1': 648,
+    'x_margin': 65, 'x_right': 690,
+    'band_x0': 87, 'band_x1': 694,     # ability band span
+    'text_x': 135, 'text_w': 545,      # ability text (indented past badges)
+    'area_y0': 655, 'area_y1': 990,    # ability area
+    'loy_cx': 657, 'loy_cy': 966,      # starting loyalty (baked shield)
+}
+
+
+def _pw_frame_band_layout(card: CardData):
+    """Deterministic ability-band layout for the planeswalker frame, shared
+    by the chrome compositor and the text overlay so they always agree.
+
+    Returns (font, line_h, bands) where bands is a list of
+    (y0, y1, cost, text) filling the whole ability area — band heights are
+    proportional to each ability's measured text, with a minimum for the
+    badge, and the font shrinks until everything fits (never truncates)."""
+    L = PW_FRAME_LAYOUT
+    abilities = _parse_loyalty_abilities(card.oracle_text or '')
+    if not abilities:
+        return None
+    area_h = L['area_y1'] - L['area_y0']
+    MIN_BAND = 56  # room for a loyalty badge
+    font = 24
+    while True:
+        line_h = int(RULES_LINE_H * font / RULES_FONT)
+        heights = []
+        for ab in abilities:
+            h = _measure_rules_text(ab['text'], L['text_w'], font, line_h)
+            heights.append(max(h + line_h * 0.55, MIN_BAND))
+        if sum(heights) <= area_h or font <= RULES_FONT_FLOOR:
+            break
+        font -= 1
+    # scale bands to fill the full area (real cards' bands tile the box)
+    scale = area_h / sum(heights)
+    bands, y = [], float(L['area_y0'])
+    for ab, h in zip(abilities, heights):
+        h2 = h * scale
+        bands.append((y, y + h2, ab['cost'], ab['text']))
+        y += h2
+    return font, line_h, bands
+
+
+def _create_pw_frame_text_svg(card: CardData, fs: dict) -> str:
+    """Text overlay for the authentic planeswalker frame: dark title/type on
+    the bright bars, BLACK ability text on the translucent bands, white cost
+    numbers on the badges, white starting loyalty on the baked shield."""
+    L = PW_FRAME_LAYOUT
+    W, H = CARD_WIDTH, CARD_HEIGHT
+    mana_pips = parse_mana_cost(card.mana_cost)
+    _ovr = (fs.get('color_overrides', {}) or {}).get('text')
+    ink = _ovr or '#1a1712'
+
+    svg = ['<?xml version="1.0" encoding="UTF-8"?>',
+           f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
+           f'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">']
+    if _FONT_FACE_CSS:
+        svg.append(f'<style type="text/css">\n{_FONT_FACE_CSS}\n</style>')
+
+    tx = L['x_margin']
+    esc_name = card.name.replace('&', '&amp;').replace('<', '&lt;')
+    pip_w = len(mana_pips) * (MANA_PIP_SIZE + MANA_PIP_GAP) + 14 if mana_pips else 0
+    name_avail = (L['x_right'] - tx) - pip_w
+    nf = 40
+    if len(card.name) * nf * 0.58 > name_avail and name_avail > 0:
+        nf = max(22, int(nf * name_avail / (len(card.name) * nf * 0.58)))
+    ncy = (L['title_y0'] + L['title_y1']) / 2 + nf * 0.35
+    svg.append(f'<text x="{tx}" y="{ncy}" font-family="{NAME_FONT_FAMILY}" '
+               f'font-size="{nf}" font-weight="bold" fill="{ink}">{esc_name}</text>')
+
+    if mana_pips:
+        pcy = (L['title_y0'] + L['title_y1']) / 2
+        px = L['x_right']
+        for pip in reversed(mana_pips):
+            pxx = px - MANA_PIP_SIZE
+            svg.append(f'<circle cx="{pxx + MANA_PIP_SIZE/2 + 0.5}" cy="{pcy + 1}" '
+                       f'r="{MANA_PIP_SIZE/2}" fill="rgba(0,0,0,0.3)"/>')
+            svg.append(_pip_image_tag(pip, pxx, pcy - MANA_PIP_SIZE/2, MANA_PIP_SIZE))
+            px -= (MANA_PIP_SIZE + MANA_PIP_GAP)
+
+    esc_type = card.type_line.replace('&', '&amp;').replace('<', '&lt;')
+    tf = 34
+    type_avail = L['x_right'] - tx
+    if len(card.type_line) * tf * 0.50 > type_avail and type_avail > 0:
+        tf = max(19, int(tf * type_avail / (len(card.type_line) * tf * 0.50)))
+    tcy = (L['type_y0'] + L['type_y1']) / 2 + tf * 0.35
+    svg.append(f'<text x="{tx}" y="{tcy}" font-family="{TYPE_FONT_FAMILY}" '
+               f'font-size="{tf}" font-weight="bold" fill="{ink}">{esc_type}</text>')
+
+    layout = _pw_frame_band_layout(card)
+    if layout:
+        font, line_h, bands = layout
+        for (y0, y1, cost, text) in bands:
+            # vertically center the measured text inside its band
+            h_text = _measure_rules_text(text, L['text_w'], font, line_h)
+            ty = y0 + max((y1 - y0 - h_text) / 2, 4) + font * 0.8
+            lines, _ = render_rules_text_svg(text, L['text_x'], ty,
+                                             L['text_w'], (y1 - y0), font, line_h,
+                                             text_color='#1a1712')
+            svg.extend(lines)
+            if cost:
+                # white cost number centered on the badge art (chrome pastes
+                # the badge at x56..130 -> center x93)
+                disp = cost.replace('−', '-')
+                svg.append(f'<text x="93" y="{(y0 + y1) / 2 + 8}" text-anchor="middle" '
+                           f'font-family="{PT_FONT_FAMILY}" font-size="24" '
+                           f'font-weight="bold" fill="white">{disp}</text>')
+    elif card.oracle_text:
+        # not actually ability-structured — plain rules text on a light band
+        lines, _ = render_rules_text_svg(card.oracle_text, L['text_x'],
+                                         L['area_y0'] + 28, L['text_w'],
+                                         L['area_y1'] - L['area_y0'], 24, 30,
+                                         text_color='#1a1712')
+        svg.extend(lines)
+
+    if card.loyalty:
+        svg.append(f'<text x="{L["loy_cx"]}" y="{L["loy_cy"] + 13}" text-anchor="middle" '
+                   f'font-family="{PT_FONT_FAMILY}" font-size="38" font-weight="bold" '
+                   f'fill="white">{card.loyalty}</text>')
+    elif card.power is not None and card.toughness is not None:
+        # non-planeswalker creature in this frame: P/T on the baked shield
+        svg.append(f'<text x="{L["loy_cx"]}" y="{L["loy_cy"] + 11}" text-anchor="middle" '
+                   f'font-family="{PT_FONT_FAMILY}" font-size="30" font-weight="bold" '
+                   f'fill="white">{card.power}/{card.toughness}</text>')
+
+    svg.append('</svg>')
+    return '\n'.join(svg)
+
+
 # New Capenna Art Deco — pack SNCArtDeco.js bounds in 750x1050. Dark bars ->
 # white title/type; light geometric rules panel -> dark rules text.
 ARTDECO_LAYOUT = {
@@ -3576,6 +3727,17 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     if frame_set == 'neoSamurai' and color_key in ('a', 'c', 'l'):
         color_key = 'm'
 
+    # Planeswalker frames live at regular/planeswalkerFrame<K>.png (uppercase);
+    # colorless/land fall back to the artifact frame.
+    if frame_set == 'planeswalker':
+        if color_key in ('c', 'l'):
+            color_key = 'a'
+        def _pwk(k):
+            return f'regular/planeswalkerFrame{k.upper()}' if k in 'wubrgma' else k
+        color_key = _pwk(color_key)
+        if two_keys:
+            two_keys = (_pwk(two_keys[0]), _pwk(two_keys[1]))
+
     # 8th Edition ships dedicated COLORED LAND frames (wl/ul/bl/rl/gl/ml):
     # lands with a color identity use their color's land variant instead of
     # the plain colored (spell) frame; colorless lands keep 'l'.
@@ -3842,6 +4004,56 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
                 lay.paste(pt_img, (L['pt_x'], L['pt_y']))
                 result = Image.alpha_composite(result, lay)
 
+    if frame_set == 'planeswalker':
+        # Ability bands: alternating translucent light/dark fills over the
+        # frame's transparent ability window (art ghosts through), gradient
+        # transition strips at band boundaries, loyalty-cost badge art on
+        # the left. Layout shared with the text overlay via
+        # _pw_frame_band_layout so chrome and text always agree.
+        _pw = _pw_frame_band_layout(card)
+        if _pw is None:
+            # Non-planeswalker card in this frame: one light band across the
+            # whole ability area so plain rules text stays legible.
+            Lp = PW_FRAME_LAYOUT
+            overlay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+            ImageDraw.Draw(overlay).rectangle(
+                [Lp['band_x0'], Lp['area_y0'], Lp['band_x1'], Lp['area_y1']],
+                fill=(255, 255, 255, 214))
+            result = Image.alpha_composite(result, overlay)
+        if _pw:
+            Lp = PW_FRAME_LAYOUT
+            _font, _line_h, bands = _pw
+            x0, x1 = Lp['band_x0'], Lp['band_x1']
+            overlay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+            drw = ImageDraw.Draw(overlay)
+            for i, (y0, y1, cost, text) in enumerate(bands):
+                fill = (255, 255, 255, 214) if i % 2 == 0 else (201, 201, 201, 214)
+                drw.rectangle([x0, round(y0), x1, round(y1)], fill=fill)
+            result = Image.alpha_composite(result, overlay)
+            for i in range(1, len(bands)):
+                strip = _load_frame_image(
+                    frame_set, 'abilityLineEven' if i % 2 == 0 else 'abilityLineOdd')
+                if strip is not None:
+                    strip = strip.resize((x1 - x0, 13), Image.Resampling.LANCZOS)
+                    lay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+                    lay.paste(strip, (x0, round(bands[i][0]) - 6))
+                    result = Image.alpha_composite(result, lay)
+            for (y0, y1, cost, text) in bands:
+                if not cost:
+                    continue
+                cs = cost.replace('−', '-').strip()
+                icon = ('planeswalkerPlus' if cs.startswith('+')
+                        else 'planeswalkerMinus' if cs.startswith('-')
+                        else 'planeswalkerNeutral')
+                img = _load_frame_image(frame_set, icon)
+                if img is not None:
+                    bw = 74
+                    bh = round(img.height * bw / img.width)
+                    img = img.resize((bw, bh), Image.Resampling.LANCZOS)
+                    lay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+                    lay.paste(img, (56, round((y0 + y1) / 2 - bh / 2)))
+                    result = Image.alpha_composite(result, lay)
+
     # Data-driven overlays (crown/stamp/P/T at pack bounds) for the newer
     # image sets that all share the same structure. 'crown_dir' pieces are
     # legendary-gated; 'stamp' composites always; all gradient-aware.
@@ -3983,6 +4195,8 @@ def _render_image_frame(card_dict: dict, card: CardData, fs: dict) -> Image.Imag
         text_svg = _create_8th_text_svg(card, fs)
     elif fs.get('layout') == 'msa' or fs.get('frame_set') == 'mysticalArchive':
         text_svg = _create_msa_text_svg(card, fs)
+    elif fs.get('layout') == 'planeswalker' or fs.get('frame_set') == 'planeswalker':
+        text_svg = _create_pw_frame_text_svg(card, fs)
     elif fs.get('layout') == 'artdeco' or fs.get('frame_set') == 'sncArtDeco':
         text_svg = _create_artdeco_text_svg(card, fs)
     elif fs.get('layout') == 'samurai' or fs.get('frame_set') == 'neoSamurai':
@@ -4066,7 +4280,8 @@ def render_text_overlay(card_dict: dict, frame_settings: dict) -> bytes:
                                     output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
         _new_sets = {'artdeco': _create_artdeco_text_svg, 'sncArtDeco': _create_artdeco_text_svg,
                      'samurai': _create_samurai_text_svg, 'neoSamurai': _create_samurai_text_svg,
-                     'etched': _create_etched_text_svg}
+                     'etched': _create_etched_text_svg,
+                     'planeswalker': _create_pw_frame_text_svg}
         _fn = _new_sets.get(fs.get('layout')) or _new_sets.get(fs.get('frame_set'))
         if _fn:
             text_svg = _fn(card, fs)
