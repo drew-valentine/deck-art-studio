@@ -42,3 +42,12 @@ plate, and a gold holo stamp at the bottom center.
 5. Print-safe check: P/T bottom y995.5 → 54.5px = 4.6mm ✓; stamp y994 ✓.
 6. **Fidelity proof before "done"**: side-by-side vs `reference_raw_layers.png`
    for 5 representative cards; 0-diff chrome check vs the raw assembly.
+
+## Deliberate divergence: bottom mask
+
+The asset's baked black rounded bottom (border.png region, y830–1050) covered
+too much art. The renderer extracts it via border.png, erases it from the
+base frame, and re-composites it squashed to 70% height anchored at the card
+bottom (side curves begin ~y896 instead of ~y830). The `bottom_mask` setting
+(designer toggle, default on) hides it entirely — art runs to the bottom
+edge. Chrome matched the raw assembly at 0.000% diff before this rework.

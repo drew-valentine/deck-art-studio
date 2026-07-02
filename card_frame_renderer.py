@@ -333,7 +333,7 @@ FRAME_STYLES = {
         'mode': 'image',
         'frame_set': 'lotr',
         'layout': 'lotr',
-        'controls': {'colors': ['text']},
+        'controls': {'colors': ['text'], 'bottom_mask': True},
     },
     'crystal': {
         'label': 'Crystal',
@@ -495,6 +495,9 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None) -> dict:
         # Godzilla/iko rules-box opacity 0..1 (transparency); card > deck.
         'box_opacity': card_overrides.get(
             'box_opacity', deck_settings.get('box_opacity', None)),
+        # LOTR bottom mask toggle (rounded black bottom); card > deck > on.
+        'bottom_mask': card_overrides.get(
+            'bottom_mask', deck_settings.get('bottom_mask', True)),
         # Godzilla/iko rules text size in px (user-tunable); card > deck.
         'rules_font_size': card_overrides.get(
             'rules_font_size', deck_settings.get('rules_font_size', None)),
@@ -3358,6 +3361,33 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
 
     if frame_set == 'lotr':
         L = LOTR_LAYOUT
+        import numpy as np
+
+        # ── Bottom mask: the asset's baked black rounded bottom (border.png
+        # marks exactly those pixels). Extracted and re-composited 30% LOWER
+        # (squashed toward the card bottom) so it covers less art; the
+        # 'bottom_mask' setting toggles it off entirely. Panel/stamp/P/T are
+        # unaffected (panel isn't in the mask; stamp/P/T composite on top). ──
+        bmask = _load_frame_image(frame_set, 'border')
+        if bmask is not None:
+            if bmask.size != (CARD_WIDTH, CARD_HEIGHT):
+                bmask = bmask.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+            ma = np.array(bmask.getchannel('A'), dtype=np.float32) / 255.0
+            rarr = np.array(result)
+            piece = rarr.copy()
+            piece[..., 3] = (piece[..., 3] * ma).astype('uint8')
+            rarr[..., 3] = (rarr[..., 3] * (1.0 - ma)).astype('uint8')
+            result = Image.fromarray(rarr, 'RGBA')
+            if fs.get('bottom_mask', True):
+                ys = np.where(ma.max(axis=1) > 0.15)[0]
+                y0 = int(ys.min())
+                new_h = max(1, round((CARD_HEIGHT - y0) * 0.7))  # 30% lower
+                squashed = Image.fromarray(piece, 'RGBA').crop(
+                    (0, y0, CARD_WIDTH, CARD_HEIGHT)).resize(
+                    (CARD_WIDTH, new_h), Image.Resampling.LANCZOS)
+                lay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+                lay.paste(squashed, (0, CARD_HEIGHT - new_h))
+                result = Image.alpha_composite(result, lay)
 
         def _lotr_piece(subdir, key):
             """Load a lotr sub-asset, gradient-aware for two-color cards."""

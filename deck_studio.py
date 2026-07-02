@@ -7447,6 +7447,13 @@ header .separator {
                 <label class="frame-text-label">Showcase Name</label>
                 <input type="text" class="frame-text-input" id="frameOverrideShowcase" placeholder="e.g. GODZILLA, KING OF THE MONSTERS" title="Big title for the Godzilla/showcase frame; the card's real name renders small beneath it.">
               </div>
+              <div class="frame-text-row" id="frameBottomMaskRow" style="display:none;">
+                <label class="frame-text-label">Bottom Mask</label>
+                <label class="frame-auto-toggle" title="The rounded black mask across the card bottom. Off = art runs to the bottom edge.">
+                  <input type="checkbox" id="frameBottomMask" checked onchange="scheduleFramePreview()">
+                  <span>Show rounded bottom</span>
+                </label>
+              </div>
               <div class="frame-text-row" id="frameBoxOpacityRow" style="display:none;">
                 <label class="frame-text-label">Box Transparency</label>
                 <input type="range" class="frame-layer-slider" id="frameBoxOpacity" min="30" max="100" step="1" value="93"
@@ -10032,6 +10039,8 @@ function selectFrameStyle(key) {
   if (showcaseRow) showcaseRow.style.display = controls.showcase ? '' : 'none';
   const boxOpRow = document.getElementById('frameBoxOpacityRow');
   if (boxOpRow) boxOpRow.style.display = controls.box_opacity ? '' : 'none';
+  const bottomMaskRow = document.getElementById('frameBottomMaskRow');
+  if (bottomMaskRow) bottomMaskRow.style.display = controls.bottom_mask ? '' : 'none';
   // Rules Text Size applies to every frame style (they all have rules text).
   const rulesSizeRow = document.getElementById('frameRulesSizeRow');
   if (rulesSizeRow) rulesSizeRow.style.display = style.no_frame ? 'none' : '';
@@ -10093,6 +10102,8 @@ function populateFrameFromSettings(settings) {
     const rulesSzVal = document.getElementById('frameRulesSizeVal');
     if (rulesSzVal) rulesSzVal.textContent = rulesSzEl.value + 'pt';
   }
+  const bottomMaskEl = document.getElementById('frameBottomMask');
+  if (bottomMaskEl) bottomMaskEl.checked = settings.bottom_mask !== false;  // default on
 }
 
 function wireFrameInputs() {
@@ -10454,6 +10465,10 @@ function gatherFrameSettings() {
   const boxOpEl = document.getElementById('frameBoxOpacity');
   if (boxOpEl && style && style.controls && style.controls.box_opacity) {
     settings.box_opacity = parseInt(boxOpEl.value) / 100;
+  }
+  const bottomMaskEl = document.getElementById('frameBottomMask');
+  if (bottomMaskEl && style && style.controls && style.controls.bottom_mask) {
+    settings.bottom_mask = bottomMaskEl.checked;
   }
   const rulesSzEl = document.getElementById('frameRulesSize');
   if (rulesSzEl) settings.rules_font_size = parseInt(rulesSzEl.value);
