@@ -10335,6 +10335,12 @@ async function loadFrameDesignerForCard(cardName) {
   // Load frame + text layers
   await loadFrameLayerForCanvas();
   if (loading) loading.classList.remove('visible');
+
+  // If nothing loaded, the canvas is a silent black box — say what happened
+  // (most often the Flask server isn't running / was restarted).
+  if (!_fdCompositor.artImage && !_fdCompositor.frameImage) {
+    showToast('Frame preview failed to load — is the server running? Try refreshing.', 'error');
+  }
 }
 
 async function loadFrameLayerForCanvas() {
