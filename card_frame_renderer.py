@@ -1764,7 +1764,8 @@ def render_planeswalker_abilities(card_oracle: str,
                                   max_width: float, max_height: float,
                                   font_size: int, line_spacing: int,
                                   text_color: str = '#1a1410',
-                                  theme: dict = None) -> tuple:
+                                  theme: dict = None,
+                                  avoid=None) -> tuple:
     """Render planeswalker abilities with large loyalty cost badges and dividers.
 
     Matches authentic MTG planeswalker card layout:
@@ -1812,8 +1813,8 @@ def render_planeswalker_abilities(card_oracle: str,
         if ability['cost'] is not None:
             cost_str = ability['cost']
 
-            # Position badge: left-aligned, plate-centered on the first text line
-            badge_x = x_start - 6  # slightly past the left padding for prominence
+            # Position badge: flush with the content rect's left edge
+            badge_x = x_start
             badge_y = current_y - badge_h * 0.42
             line_center_y = current_y - font_size * 0.32  # first line visual center
 
@@ -1859,13 +1860,15 @@ def render_planeswalker_abilities(card_oracle: str,
             ability_w = max_width
 
         # Render the ability text (unbounded height — the caller's fitting
-        # loop guarantees the total fits, so no inner truncation either)
+        # loop guarantees the total fits, so no inner truncation either).
+        # `avoid` (absolute y) wraps bottom lines around the loyalty shield.
         text_svg, text_h = render_rules_text_svg(
             ability['text'],
             ability_x, current_y,
             ability_w, 100000,
             font_size, line_spacing,
             text_color=text_color,
+            avoid=avoid,
         )
         svg_elements.extend(text_svg)
 
@@ -3021,10 +3024,8 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
     # of the next. Use the real line height and shrink the font for long oracles.
     if card.oracle_text and _is_planeswalker(card):
         # box top moves up to 780 for planeswalkers (see _compose_image_frame_base)
-        svg.extend(_render_pw_rules_svg(card, fs, tx, 788,
-                                        L['x_right'] - tx,
-                                        996 - 788 - 8, dark))
-        svg.extend(_start_loyalty_badge_svg(card.loyalty, 659, 985))
+        svg.extend(_render_pw_content_svg(card, fs, tx, 788,
+                                          L['x_right'], 996, dark))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8
@@ -3068,24 +3069,62 @@ def _is_planeswalker(card: CardData) -> bool:
     return card.loyalty is not None and bool(_LOYALTY_RE.search(card.oracle_text or ''))
 
 
-def _render_pw_rules_svg(card: CardData, fs: dict, tx: float, rbox_top: float,
-                         rbox_w: float, rbox_h: float, text_color: str) -> list:
-    """Planeswalker loyalty abilities for image-frame text overlays: loyalty
-    badges + dividers via render_planeswalker_abilities, with a fitting loop
-    so every ability always renders inside the box (never truncates)."""
+def _render_pw_content_svg(card: CardData, fs: dict, x0: float, y0: float,
+                           x1: float, y1: float, text_color: str) -> list:
+    """ALL planeswalker content for a badge-treatment style — ability badges,
+    ability text, and the starting-loyalty shield — laid out to fit strictly
+    INSIDE the content rect (x0,y0)-(x1,y1). The invariants, for any style:
+
+    - badges anchor at x0 and never extend left of it
+    - the first ability starts low enough that the tallest badge's plate
+      (Plus, whose arrow extends the sprite above the plate) stays below y0
+    - the loyalty shield tucks fully inside the bottom-right corner and
+      ability text wraps around it via the avoid mechanism
+    - the fitting loop shrinks the font until start offset + content height
+      fits the rect (content never truncates and never crosses y1)
+    """
+    rect_h = y1 - y0
+    # Starting-loyalty shield, fully inside the bottom-right corner
+    shield = None
+    if card.loyalty:
+        sw = min(88.0, rect_h * 0.45)
+        sh = sw * _LOYALTY_SHIELD_GEOM['aspect']
+        s_cx = x1 - sw * (1 - _LOYALTY_SHIELD_GEOM['cx']) - 3
+        s_cy = y1 - sh * (1 - _LOYALTY_SHIELD_GEOM['cy']) - 3
+        shield = (s_cx, s_cy, sw, sh)
+
     pw_font = int(RULES_FONT * 0.82)
     while True:
         pw_line_h = int(RULES_LINE_H * pw_font / RULES_FONT)
+        # Tallest badge (Plus) extends 0.525*aspect above its plate center;
+        # plate center anchors 0.32em above the first baseline. Start the
+        # first line low enough that the badge top stays inside the rect.
+        badge_w = pw_font * 3.48
+        badge_above = _BADGE_GEOM['planeswalkerPlus']['cy'] * \
+            _BADGE_GEOM['planeswalkerPlus']['aspect'] * badge_w
+        # badge top = y0 + start_off - 0.32em (line center) - badge_above,
+        # so start_off must exceed badge_above + 0.32em for the badge to
+        # stay inside the rect.
+        start_off = max(pw_font * 0.8, badge_above + pw_font * 0.32 + 3)
+        avoid = None
+        if shield is not None:
+            text_x = x0 + badge_w + round(pw_font * 0.52)  # matches text_indent
+            avoid = (shield[1] - shield[3] * _LOYALTY_SHIELD_GEOM['cy'] - 4,
+                     max(60.0, (shield[0] - shield[2] * _LOYALTY_SHIELD_GEOM['cx']) - 8 - text_x))
         elems, used_h = render_planeswalker_abilities(
-            card.oracle_text or "", tx, rbox_top + pw_font * 0.8,
-            rbox_w, rbox_h, pw_font, pw_line_h, text_color=text_color)
-        if used_h <= rbox_h or pw_font <= RULES_FONT_FLOOR:
+            card.oracle_text or "", x0, y0 + start_off,
+            x1 - x0, rect_h, pw_font, pw_line_h, text_color=text_color,
+            avoid=avoid)
+        if start_off + used_h <= rect_h - 2 or pw_font <= RULES_FONT_FLOOR:
             break
         pw_font -= 1
-    if used_h > rbox_h + 2:  # only possible at the hard floor
+    if start_off + used_h > rect_h + 2:  # only possible at the hard floor
         fs.setdefault('_quality', []).append(
-            f'rules_overflow: planeswalker needs {used_h:.0f}px '
-            f'but box is {rbox_h:.0f}px (font {pw_font})')
+            f'rules_overflow: planeswalker needs {start_off + used_h:.0f}px '
+            f'but box is {rect_h:.0f}px (font {pw_font})')
+    if shield is not None:
+        elems = list(elems) + _start_loyalty_badge_svg(
+            card.loyalty, shield[0], shield[1], size=shield[2])
     return elems
 
 
@@ -3193,13 +3232,11 @@ def _create_bar_box_text_svg(card: CardData, fs: dict, L: dict,
                f'font-size="{tf}" font-weight="bold" fill="{bar_col}">{esc_type}</text>')
 
     if card.oracle_text and _is_planeswalker(card):
-        # Planeswalker: loyalty badges + dividers, starting-loyalty shield
-        # where a creature's P/T would sit.
-        rbox_w = L['x_right'] - tx
-        svg.extend(_render_pw_rules_svg(card, fs, tx, L['rules_y0'] + 8, rbox_w,
-                                        (L['rules_y1'] - L['rules_y0']) - 16,
-                                        rules_col))
-        svg.extend(_start_loyalty_badge_svg(card.loyalty, L['pt_cx'], L['pt_cy'] - 6))
+        # Planeswalker: badges + text + loyalty shield, all strictly inside
+        # the rules content rect.
+        svg.extend(_render_pw_content_svg(card, fs, tx, L['rules_y0'] + 8,
+                                          L['x_right'], L['rules_y1'] - 8,
+                                          rules_col))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8
@@ -3552,10 +3589,8 @@ def _create_lotr_text_svg(card: CardData, fs: dict) -> str:
 
     # ── Rules text (DARK on the parchment panel) ──
     if card.oracle_text and _is_planeswalker(card):
-        svg.extend(_render_pw_rules_svg(card, fs, tx, L['rules_y0'] + 8,
-                                        L['x_right'] - tx,
-                                        (L['rules_y1'] - L['rules_y0']) - 16, dark))
-        svg.extend(_start_loyalty_badge_svg(card.loyalty, L['pt_cx'], L['pt_cy'] - 6))
+        svg.extend(_render_pw_content_svg(card, fs, tx, L['rules_y0'] + 8,
+                                          L['x_right'], L['rules_y1'] - 8, dark))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8
@@ -3662,10 +3697,8 @@ def _create_crystal_text_svg(card: CardData, fs: dict) -> str:
 
     # ── Rules text (LIGHT on the dark stone box), measured + shrunk to fit ──
     if card.oracle_text and _is_planeswalker(card):
-        svg.extend(_render_pw_rules_svg(card, fs, tx, L['rules_y0'] + 8,
-                                        L['x_right'] - tx,
-                                        (L['rules_y1'] - L['rules_y0']) - 16, rules_col))
-        svg.extend(_start_loyalty_badge_svg(card.loyalty, L['pt_cx'], L['pt_cy'] - 6))
+        svg.extend(_render_pw_content_svg(card, fs, tx, L['rules_y0'] + 8,
+                                          L['x_right'], L['rules_y1'] - 8, rules_col))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8

@@ -282,6 +282,90 @@ def check_pw_badge_alignment():
     return issues
 
 
+# The content rect each badge-treatment style's planeswalker layout must stay
+# inside — mirrors the rects passed to _render_pw_content_svg by the creators.
+def _pw_rects():
+    L8, LM = cfr.EIGHTH_LAYOUT, cfr.MSA_LAYOUT
+    LA, LS, LE = cfr.ARTDECO_LAYOUT, cfr.SAMURAI_LAYOUT, cfr.ETCHED_LAYOUT
+    LC, LL = cfr.CRYSTAL_LAYOUT, cfr.LOTR_LAYOUT
+    def bar(L):
+        return (L['x_margin'], L['rules_y0'] + 8, L['x_right'], L['rules_y1'] - 8)
+    return {
+        'godzilla': (cfr.IKO_LAYOUT['x_margin'], 788, cfr.IKO_LAYOUT['x_right'], 996),
+        'crystal': bar(LC), 'lotr': bar(LL), '8th': bar(L8), 'msa': bar(LM),
+        'artdeco': bar(LA), 'samurai': bar(LS), 'etched': bar(LE),
+    }
+
+
+def check_pw_content_in_rect():
+    """Planeswalker content (badges + text + loyalty shield) must stay
+    strictly inside each style's rules content rect. Rasterizes the text
+    overlay with and without the pw content; the diff is the pw ink, and
+    every ink pixel must be inside the declared rect (±3px tolerance)."""
+    import numpy as np
+    import copy as _copy
+    jace = next(c for c in CARDS if c.get('loyalty'))
+    issues = []
+    for style, (x0, y0, x1, y1) in _pw_rects().items():
+        fs = cfr.resolve_frame_settings(jace, {'style': style})
+        full = cfr._build_card_data(jace, fs)
+        blank_dict = dict(jace)
+        blank_dict['oracle_text'] = ''
+        blank_dict['loyalty'] = None
+        blank = cfr._build_card_data(blank_dict, fs)
+        try:
+            svg_full = _text_svg_for(full, fs)
+            svg_blank = _text_svg_for(blank, fs)
+        except Exception as e:
+            issues.append((style, f'pw_rect_render_error: {e}'))
+            continue
+        a = _rasterize(svg_full)
+        b = _rasterize(svg_blank)
+        ink = (np.abs(a.astype(int) - b.astype(int)).sum(axis=2) > 40)
+        if not ink.any():
+            issues.append((style, 'pw_rect: no planeswalker ink rendered'))
+            continue
+        ys, xs = np.where(ink)
+        TOL = 3
+        out = []
+        if xs.min() < x0 - TOL: out.append(f'left {x0 - xs.min():.0f}px')
+        if xs.max() > x1 + TOL: out.append(f'right {xs.max() - x1:.0f}px')
+        if ys.min() < y0 - TOL: out.append(f'top {y0 - ys.min():.0f}px')
+        if ys.max() > y1 + TOL: out.append(f'bottom {ys.max() - y1:.0f}px')
+        if out:
+            issues.append((style, f'pw_content_outside_rect: {", ".join(out)} '
+                                  f'(ink x{xs.min()}-{xs.max()} y{ys.min()}-{ys.max()} '
+                                  f'vs rect x{x0}-{x1} y{y0}-{y1})'))
+    return issues
+
+
+def _text_svg_for(cardobj, fs):
+    if fs.get('frame_set') == 'iko':
+        return cfr._create_iko_text_svg(cardobj, fs)
+    if fs.get('frame_set') == 'crystal':
+        return cfr._create_crystal_text_svg(cardobj, fs)
+    if fs.get('frame_set') == 'lotr':
+        return cfr._create_lotr_text_svg(cardobj, fs)
+    if fs.get('frame_set') == '8th':
+        return cfr._create_8th_text_svg(cardobj, fs)
+    if fs.get('frame_set') == 'mysticalArchive':
+        return cfr._create_msa_text_svg(cardobj, fs)
+    if fs.get('frame_set') == 'sncArtDeco':
+        return cfr._create_artdeco_text_svg(cardobj, fs)
+    if fs.get('frame_set') == 'neoSamurai':
+        return cfr._create_samurai_text_svg(cardobj, fs)
+    if fs.get('frame_set') == 'etched':
+        return cfr._create_etched_text_svg(cardobj, fs)
+    raise ValueError(f"no text creator for {fs.get('frame_set')}")
+
+
+def _rasterize(svg):
+    import numpy as np
+    png = cairosvg.svg2png(bytestring=svg.encode('utf-8'),
+                           output_width=W, output_height=H)
+    return __import__('numpy').array(Image.open(io.BytesIO(png)).convert('RGBA'))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--style', default=None, help='only this style')
@@ -292,6 +376,8 @@ def main():
     grid, failures, total = [], [], 0
     for iss in check_pw_badge_alignment():
         failures.append(('(badge geometry)', '-', iss))
+    for style, iss in check_pw_content_in_rect():
+        failures.append(('(pw rect)', style, iss))
     for card in CARDS:
         row = {}
         for st in styles:
