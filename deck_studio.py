@@ -10062,7 +10062,7 @@ function setLayerControls(key, visible, opacity) {
 
 function populateFrameFromSettings(settings) {
   const styleMap = {classic:'basic', basic:'basic', modern:'m15', borderless:'basic',
-                    minimal:'basic', 'full-art':'basic', nyx:'m15',
+                    minimal:'basic', 'full-art':'clean', nyx:'m15',
                     vintage:'m15', retro:'m15', frameless:'clean', clean:'clean',
                     m15:'m15'};
   if (settings.preset && !settings.style) {

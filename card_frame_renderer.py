@@ -432,7 +432,7 @@ def _migrate_v1_to_v2(settings: dict) -> dict:
     preset_map = {
         'classic': 'basic', 'modern': 'm15',
         'borderless': 'basic',
-        'minimal': 'basic', 'full-art': 'basic',
+        'minimal': 'basic', 'full-art': 'clean',
         'vintage': 'm15', 'retro': 'm15',
         'frameless': 'clean',
     }
@@ -489,9 +489,11 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None) -> dict:
         deck_settings = _migrate_v1_to_v2(deck_settings)
 
     # ── Determine style: card override > deck > basic ──
-    # Map removed/renamed styles to the closest remaining style
+    # Map removed/renamed styles to the closest remaining style.
+    # full-art -> clean: closest surviving look (art-dominant, no textbox),
+    # not basic (which would add a frosted textbox + oracle over the art).
     _style_remap = {'modern': 'm15', 'retro': 'm15', 'nyx': 'm15', 'vintage': 'm15',
-                    'classic': 'basic', 'full-art': 'basic',
+                    'classic': 'basic', 'full-art': 'clean',
                     'borderless': 'basic', 'minimal': 'basic'}
     style_key = card_overrides.get('style',
                 deck_settings.get('style', 'basic'))
