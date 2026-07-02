@@ -1213,12 +1213,15 @@ def _pt_box_path_pointed(x: float, y: float, w: float, h: float) -> str:
 # Rules text renderer with inline mana symbols
 # ===========================================================================
 def _wrap_paragraph_with_pips(tokens: List[dict], max_width: float,
-                              font_size: int) -> List[List[dict]]:
+                              font_size: int, width_fn=None) -> List[List[dict]]:
     """Word-wrap a tokenized paragraph into lines, estimating widths.
 
     Returns a list of lines.  Each line is a list of items:
         {'type': 'text', 'value': "word1 word2 ..."}   (accumulated text)
         {'type': 'symbol', 'value': 'R'}                (pip)
+
+    `width_fn(line_index)` optionally gives a per-line max width (used to wrap
+    bottom lines narrower around a P/T plate); falls back to `max_width`.
     """
     space_w = _measure_text(' ', font_size)
     pip_w = RULES_PIP_SIZE + 2       # width reserved for a pip image
@@ -1239,6 +1242,9 @@ def _wrap_paragraph_with_pips(tokens: List[dict], max_width: float,
     cur_width = 0.0
     cur_text_run = ""
 
+    def cur_max_width():
+        return width_fn(len(lines)) if width_fn else max_width
+
     def flush_text_run():
         nonlocal cur_text_run
         if cur_text_run:
@@ -1256,7 +1262,7 @@ def _wrap_paragraph_with_pips(tokens: List[dict], max_width: float,
     for item in items:
         if item['type'] == 'symbol':
             needed = pip_w + (space_w if cur_width > 0 else 0)
-            if cur_width > 0 and cur_width + needed > max_width:
+            if cur_width > 0 and cur_width + needed > cur_max_width():
                 start_new_line()
             # Flush text BEFORE the space so the space is a separate gap
             flush_text_run()
@@ -1276,7 +1282,7 @@ def _wrap_paragraph_with_pips(tokens: List[dict], max_width: float,
             # Check if previous item was a pip (last item in cur_line is a symbol)
             after_pip = (cur_line and cur_line[-1].get('type') == 'symbol')
 
-            if cur_width > 0 and cur_width + needed > max_width:
+            if cur_width > 0 and cur_width + needed > cur_max_width():
                 start_new_line()
                 cur_text_run = word
                 cur_width = word_width
@@ -1304,12 +1310,17 @@ def render_rules_text_svg(oracle_text: str, x_start: float, y_start: float,
                           font_size: int, line_spacing: int,
                           text_color: str = '#000',
                           font_family: str = None,
-                          italic: bool = False) -> Tuple[List[str], float]:
+                          italic: bool = False,
+                          avoid: Optional[Tuple[float, float]] = None) -> Tuple[List[str], float]:
     """Render oracle text as SVG with inline pip symbols.
 
     Text segments are rendered as single <text> elements so the SVG engine
     handles character spacing natively.  Pips are placed inline using
     estimated widths.
+
+    `avoid` = (y_top, narrow_width): lines whose baseline reaches y_top wrap at
+    `narrow_width` instead of `max_width`, flowing around a P/T plate in the
+    box's bottom-right corner instead of running under it.
     """
     if not oracle_text:
         return [], 0
@@ -1333,7 +1344,14 @@ def render_rules_text_svg(oracle_text: str, x_start: float, y_start: float,
             continue
 
         tokens = tokenize_oracle_text(paragraph)
-        lines = _wrap_paragraph_with_pips(tokens, max_width, font_size)
+        width_fn = None
+        if avoid is not None:
+            base_y = current_y
+            width_fn = (lambda i, _b=base_y:
+                        min(max_width, avoid[1])
+                        if _b + i * line_spacing + font_size * 0.3 >= avoid[0]
+                        else max_width)
+        lines = _wrap_paragraph_with_pips(tokens, max_width, font_size, width_fn)
 
         for line_items in lines:
             if current_y + line_spacing > y_start + max_height:
@@ -1382,8 +1400,12 @@ def render_rules_text_svg(oracle_text: str, x_start: float, y_start: float,
 # Main frame SVG generator
 # ===========================================================================
 def _measure_rules_text(oracle_text: str, max_width: float,
-                        font_size: int, line_spacing: int) -> float:
-    """Pre-measure how tall the rules text will be without rendering."""
+                        font_size: int, line_spacing: int,
+                        avoid: Optional[Tuple[float, float]] = None) -> float:
+    """Pre-measure how tall the rules text will be without rendering.
+
+    `avoid` mirrors render_rules_text_svg's parameter, with y_top expressed
+    RELATIVE to the first baseline (callers pass abs_y_top - y_start)."""
     if not oracle_text:
         return 0
 
@@ -1396,7 +1418,14 @@ def _measure_rules_text(oracle_text: str, max_width: float,
             continue
 
         tokens = tokenize_oracle_text(paragraph)
-        lines = _wrap_paragraph_with_pips(tokens, max_width, font_size)
+        width_fn = None
+        if avoid is not None:
+            base_y = current_y
+            width_fn = (lambda i, _b=base_y:
+                        min(max_width, avoid[1])
+                        if _b + i * line_spacing + font_size * 0.3 >= avoid[0]
+                        else max_width)
+        lines = _wrap_paragraph_with_pips(tokens, max_width, font_size, width_fn)
         current_y += len(lines) * line_spacing
 
         if para_idx < len(paragraphs) - 1:
@@ -2728,7 +2757,10 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
 IKO_LAYOUT = {  # measured from the cardconjurer iko asset's real boxes
     'title_y0': 43, 'title_y1': 117,
     'type_y0': 726, 'type_y1': 803,
-    'rules_y0': 818, 'rules_y1': 998,   # tall cream box drawn over the rules area
+    # Tall cream box drawn over the rules area. Text band expanded +26%
+    # (818-998 -> 800-1026): tighter top padding under the type bar, and the
+    # box now runs to y1034 (flush with the P/T plate bottom) instead of 1022.
+    'rules_y0': 800, 'rules_y1': 1026,
     'x_margin': 62, 'x_right': 690,
     'pt_y': 1012,
 }
@@ -2805,24 +2837,35 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8
         rbox_h = (L['rules_y1'] - L['rules_y0']) - 16
+        # Creatures: wrap the bottom lines narrower so text flows AROUND the
+        # gold P/T plate (x596-706, y986-1034) instead of running under it.
+        avoid_abs = None
+        if card.power is not None and card.toughness is not None:
+            avoid_abs = (976.0, 524.0)  # (plate top - pad, narrow line width)
         # Rules text size: user-tunable via the frame editor ('rules_font_size',
         # default 30pt), consistent across cards. Shrink-to-fit still applies below
         # for very long oracles. Only the RULES text is affected.
         r_font = int(fs.get('rules_font_size') or 30)
         r_line = int(RULES_LINE_H * r_font / RULES_FONT)
         MIN_R = 16
-        needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
+
+        def _measure(font, line):
+            av = ((avoid_abs[0] - (rbox_top + font * 0.8), avoid_abs[1])
+                  if avoid_abs else None)
+            return _measure_rules_text(card.oracle_text, rbox_w, font, line, avoid=av)
+
+        needed = _measure(r_font, r_line)
         # Auto only shrinks when no explicit size is set; honor the user's size exactly.
         while (not fs.get('rules_font_size')) and needed > rbox_h and r_font > MIN_R:
             r_font -= 1
             r_line = int(RULES_LINE_H * r_font / RULES_FONT)
-            needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
+            needed = _measure(r_font, r_line)
         if needed > rbox_h + 2:  # still overflows even at the minimum font
             fs.setdefault('_quality', []).append(
                 f'rules_overflow: needs {needed:.0f}px but box is {rbox_h:.0f}px (font {r_font})')
         rules_lines, _ = render_rules_text_svg(
             card.oracle_text, tx, rbox_top + r_font * 0.8,
-            rbox_w, rbox_h, r_font, r_line, text_color=dark)
+            rbox_w, rbox_h, r_font, r_line, text_color=dark, avoid=avoid_abs)
         svg.extend(rules_lines)
 
     # ── P/T (gold, centered in the gold plate drawn by the frame compositor) ──
@@ -2905,21 +2948,32 @@ def _create_crystal_text_svg(card: CardData, fs: dict) -> str:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8
         rbox_h = (L['rules_y1'] - L['rules_y0']) - 16
+        # Creatures: wrap bottom lines narrower around the ice P/T box
+        # (x578, y923) instead of running under it.
+        avoid_abs = None
+        if card.power is not None and card.toughness is not None:
+            avoid_abs = (915.0, 506.0)  # (P/T box top - pad, narrow line width)
         r_font = int(fs.get('rules_font_size') or 30)
         r_line = int(RULES_LINE_H * r_font / RULES_FONT)
         MIN_R = 16
-        needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
+
+        def _measure(font, line):
+            av = ((avoid_abs[0] - (rbox_top + font * 0.8), avoid_abs[1])
+                  if avoid_abs else None)
+            return _measure_rules_text(card.oracle_text, rbox_w, font, line, avoid=av)
+
+        needed = _measure(r_font, r_line)
         # Auto only shrinks when no explicit size is set; honor the user's size exactly.
         while (not fs.get('rules_font_size')) and needed > rbox_h and r_font > MIN_R:
             r_font -= 1
             r_line = int(RULES_LINE_H * r_font / RULES_FONT)
-            needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
+            needed = _measure(r_font, r_line)
         if needed > rbox_h + 2:
             fs.setdefault('_quality', []).append(
                 f'rules_overflow: needs {needed:.0f}px but box is {rbox_h:.0f}px (font {r_font})')
         rules_lines, _ = render_rules_text_svg(
             card.oracle_text, tx, rbox_top + r_font * 0.8,
-            rbox_w, rbox_h, r_font, r_line, text_color=rules_col)
+            rbox_w, rbox_h, r_font, r_line, text_color=rules_col, avoid=avoid_abs)
         svg.extend(rules_lines)
 
     # ── P/T (white, centered in the ice box drawn by the frame compositor) ──
@@ -3087,8 +3141,9 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         box_alpha = int(round(max(0.0, min(1.0, bop)) * 255)) if bop is not None else 236
 
         # by0 raised to meet the type bar bottom so there's no transparent art gap
-        # (seam) between the type bar and the cream rules box.
-        bx0, by0, bx1, by1, rad = 47, 792, 703, 1022, 22
+        # (seam) between the type bar and the cream rules box. by1 runs to the
+        # P/T plate bottom (1034) for a ~26% taller text area.
+        bx0, by0, bx1, by1, rad = 47, 792, 703, 1034, 22
         SS = 4
         big = Image.new('RGBA', (CARD_WIDTH * SS, CARD_HEIGHT * SS), (0, 0, 0, 0))
         bd = ImageDraw.Draw(big)
