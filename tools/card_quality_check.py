@@ -131,15 +131,24 @@ def check_textbox_legible(card, style):
         frame = cfr._render_image_frame(card, cardobj, fs)
     except Exception:
         return None
-    over_dark = Image.alpha_composite(
-        Image.new('RGBA', (W, H), (12, 12, 12, 255)), frame).convert('L')
+    # Light-text frames (e.g. crystal's dark stone box) invert the failure mode:
+    # the box must stay DARK even over bright art, or the light text vanishes.
+    light_text = cfr.FRAME_STYLES.get(style, {}).get('rules_text') == 'light'
+    worst_art = (240, 240, 240, 255) if light_text else (12, 12, 12, 255)
+    over_worst = Image.alpha_composite(
+        Image.new('RGBA', (W, H), worst_art), frame).convert('L')
     # Sample a band squarely inside every image frame's rules box (m15's runs to
     # the bottom; iko's ends ~y0.92) — staying above 0.90 avoids the bottom margin.
     x0, x1 = int(W * 0.15), int(W * 0.80)
     y0, y1 = int(H * 0.80), int(H * 0.89)
-    crop = over_dark.crop((x0, y0, x1, y1))
+    crop = over_worst.crop((x0, y0, x1, y1))
     hist = crop.histogram()
     mean = sum(i * c for i, c in enumerate(hist)) / max(1, sum(hist))
+    if light_text:
+        # Box must read dark over bright art so light text contrasts.
+        if mean > 165:
+            return f'rules_box_illegible: brightness {mean:.0f}/255 over light art (light text would vanish)'
+        return None
     # Threshold 90: cardconjurer's authentic gold-tan box reads ~110 over pure-dark
     # art (clearly legible over real art); wall-of-text cards dip to ~99 because
     # the dense dark text lowers the sample average, not because the box is dark.

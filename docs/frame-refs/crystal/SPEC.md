@@ -23,8 +23,18 @@ assets + reference are pinned on disk **before** any renderer code.
 
 ## Reference
 
-`reference_raw_layers.png` = base(`u`) + `pinline` + `crowns/u` + `pt/u` over
-neutral art. This is the fidelity target the finished render must match.
+`reference_raw_layers.png` = base(`u`) + `crowns/u` + `pt/u` (at packCrystal.js
+bounds) over neutral gray. This is the fidelity target the finished render must
+match. (The original pin also composited `pinline.png`, but that file is a flat
+palette *mask*, not a visual layer — it painted the whole card flat blue and
+made the reference useless; regenerated without it.)
+
+**Deliberate divergence:** the asset's rules box is only ~45% opaque, which
+washes out the light rules text over bright art (measured 159/255 in the rules
+band over white). The renderer self-composites the frame's own box region
+(selected by the `rules.png` mask) to deepen it to ~214/255 alpha while keeping
+the scratched-stone texture. Chrome elsewhere matches the raw assembly exactly
+(0.000% pixel diff measured before the box deepening was added).
 
 ## Observed layout (approx, measured off the 1500×2100 reference — REMEASURE precisely first)
 

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 try:
     import cairosvg
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageChops, ImageDraw
     import xml.etree.ElementTree as ET
 except ImportError as e:
     raise ImportError(f"Required package missing: {e}. Install with: pip install cairosvg pillow")
@@ -344,6 +344,16 @@ FRAME_STYLES = {
         'mode': 'image',
         'frame_set': 'iko',
         'layout': 'iko',
+    },
+    'crystal': {
+        'label': 'Crystal',
+        'description': 'Shattered-ice showcase — crystalline border with a legendary crown of '
+                       'ice shards, dark stone bars and rules box with light text. Built from '
+                       'the cardconjurer Crystal frame assets.',
+        'mode': 'image',
+        'frame_set': 'crystal',
+        'layout': 'crystal',
+        'rules_text': 'light',   # light text on the dark stone box (quality gate inverts)
     },
     'clean': {
         'label': 'Clean',
@@ -2825,6 +2835,103 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
     return '\n'.join(svg)
 
 
+# Crystal frame layout — pixel coords in 750x1050, converted from cardconjurer's
+# packCrystal.js bounds (fractions of 1500x2100) and confirmed against the
+# assets' alpha bounds. All bars and the rules box are dark stone -> LIGHT text.
+CRYSTAL_LAYOUT = {
+    'title_y0': 53, 'title_y1': 110,
+    'type_y0': 594, 'type_y1': 648,
+    'rules_y0': 671, 'rules_y1': 957,
+    'x_margin': 64, 'x_right': 690,
+    # P/T box (packCrystal.js: x 1157/1500, y 1847/2100, 294x170 asset at 1:2 scale)
+    'pt_x': 578, 'pt_y': 923, 'pt_w': 147, 'pt_h': 85,
+    'pt_cx': 652, 'pt_cy': 970,          # P/T text center (ice box interior)
+    'crown_h': 54,                        # crown strip height (107/2100)
+}
+
+
+def _create_crystal_text_svg(card: CardData, fs: dict) -> str:
+    """Text overlay for the Crystal frame: light beleren text on the dark stone
+    title/type bars, LIGHT rules text on the dark scratched-stone rules box
+    (unlike m15/iko's cream boxes), white P/T over the ice box. Rendered in
+    750x1050 pixel space to match the measured frame."""
+    L = CRYSTAL_LAYOUT
+    W, H = CARD_WIDTH, CARD_HEIGHT
+    mana_pips = parse_mana_cost(card.mana_cost)
+    white = '#f2f3f5'
+    # rules text colour honors the designer's Text override, else light default
+    rules_col = (fs.get('color_overrides', {}) or {}).get('text') or white
+
+    svg = ['<?xml version="1.0" encoding="UTF-8"?>',
+           f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
+           f'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">']
+    if _FONT_FACE_CSS:
+        svg.append(f'<style type="text/css">\n{_FONT_FACE_CSS}\n</style>')
+
+    tx = L['x_margin']
+    esc_name = card.name.replace('&', '&amp;').replace('<', '&lt;')
+    pip_w = len(mana_pips) * (MANA_PIP_SIZE + MANA_PIP_GAP) + 14 if mana_pips else 0
+    name_avail = (L['x_right'] - tx) - pip_w
+    nf = 40  # packCrystal.js title size 0.0381 * 1050
+    if len(card.name) * nf * 0.58 > name_avail and name_avail > 0:
+        nf = max(22, int(nf * name_avail / (len(card.name) * nf * 0.58)))
+    ncy = (L['title_y0'] + L['title_y1']) / 2 + nf * 0.35
+    svg.append(f'<text x="{tx}" y="{ncy}" font-family="{NAME_FONT_FAMILY}" '
+               f'font-size="{nf}" font-weight="bold" fill="{white}">{esc_name}</text>')
+
+    # ── Mana pips (right-aligned in the title bar) ──
+    if mana_pips:
+        pcy = (L['title_y0'] + L['title_y1']) / 2
+        px = L['x_right']
+        for pip in reversed(mana_pips):
+            pxx = px - MANA_PIP_SIZE
+            svg.append(f'<circle cx="{pxx + MANA_PIP_SIZE/2 + 0.5}" cy="{pcy + 1}" '
+                       f'r="{MANA_PIP_SIZE/2}" fill="rgba(0,0,0,0.3)"/>')
+            svg.append(_pip_image_tag(pip, pxx, pcy - MANA_PIP_SIZE/2, MANA_PIP_SIZE))
+            px -= (MANA_PIP_SIZE + MANA_PIP_GAP)
+
+    # ── Type line (light on the dark stone type bar), fit to width ──
+    esc_type = card.type_line.replace('&', '&amp;').replace('<', '&lt;')
+    type_w_avail = L['x_right'] - tx
+    tf = 34  # packCrystal.js type size 0.0324 * 1050
+    if len(card.type_line) * tf * 0.50 > type_w_avail and type_w_avail > 0:
+        tf = max(19, int(tf * type_w_avail / (len(card.type_line) * tf * 0.50)))
+    tcy = (L['type_y0'] + L['type_y1']) / 2 + tf * 0.35
+    svg.append(f'<text x="{tx}" y="{tcy}" font-family="{TYPE_FONT_FAMILY}" '
+               f'font-size="{tf}" font-weight="bold" fill="{white}">{esc_type}</text>')
+
+    # ── Rules text (LIGHT on the dark stone box), measured + shrunk to fit ──
+    if card.oracle_text:
+        rbox_w = L['x_right'] - tx
+        rbox_top = L['rules_y0'] + 8
+        rbox_h = (L['rules_y1'] - L['rules_y0']) - 16
+        r_font = int(fs.get('rules_font_size') or 30)
+        r_line = int(RULES_LINE_H * r_font / RULES_FONT)
+        MIN_R = 16
+        needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
+        # Auto only shrinks when no explicit size is set; honor the user's size exactly.
+        while (not fs.get('rules_font_size')) and needed > rbox_h and r_font > MIN_R:
+            r_font -= 1
+            r_line = int(RULES_LINE_H * r_font / RULES_FONT)
+            needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
+        if needed > rbox_h + 2:
+            fs.setdefault('_quality', []).append(
+                f'rules_overflow: needs {needed:.0f}px but box is {rbox_h:.0f}px (font {r_font})')
+        rules_lines, _ = render_rules_text_svg(
+            card.oracle_text, tx, rbox_top + r_font * 0.8,
+            rbox_w, rbox_h, r_font, r_line, text_color=rules_col)
+        svg.extend(rules_lines)
+
+    # ── P/T (white, centered in the ice box drawn by the frame compositor) ──
+    if card.power is not None and card.toughness is not None:
+        svg.append(f'<text x="{L["pt_cx"]}" y="{L["pt_cy"] + 36 * 0.35}" text-anchor="middle" '
+                   f'font-family="{PT_FONT_FAMILY}" font-size="36" font-weight="bold" '
+                   f'fill="{white}">{card.power}/{card.toughness}</text>')
+
+    svg.append('</svg>')
+    return '\n'.join(svg)
+
+
 # Original ABU (1993) layout — pixel coords in 750x1050, measured from the abu
 # frame PNGs. Art window is inset (y110-571); text is black serif on beige.
 ABU_LAYOUT = {
@@ -2938,8 +3045,8 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     if frame_img is None:
         # Fallback to colorless if specific color not found
         frame_img = _load_frame_image(frame_set, 'c')
-    if frame_img is None and frame_set == 'abu':
-        # ABU has no multicolor/colorless frame — fall back to artifact then land.
+    if frame_img is None and frame_set in ('abu', 'crystal'):
+        # These sets have no colorless frame — fall back to artifact then land.
         frame_img = _load_frame_image(frame_set, 'a') or _load_frame_image(frame_set, 'l')
     if frame_img is None:
         # No frame images available — return empty
@@ -3020,9 +3127,59 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
             box = white.crop((x0, y0, x1, y1))
             result.alpha_composite(box, (x0, y0))
 
+    if frame_set == 'crystal':
+        # The asset's scratched-stone rules box is only ~45% opaque — bright art
+        # bleeding through washes out the LIGHT rules text (the old Godzilla box
+        # defect). Self-composite the frame's own box region (selected by the
+        # rules.png mask) to deepen opacity while keeping the stone texture.
+        rules_mask = _load_frame_image(frame_set, 'rules')
+        if rules_mask is not None:
+            if rules_mask.size != (CARD_WIDTH, CARD_HEIGHT):
+                rules_mask = rules_mask.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+            box_layer = result.copy()
+            box_layer.putalpha(ImageChops.multiply(result.getchannel('A'),
+                                                   rules_mask.getchannel('A')))
+            result = Image.alpha_composite(result, box_layer)
+            result = Image.alpha_composite(result, box_layer)
+
+    if frame_set == 'crystal' and 'Legendary' in (card.type_line or ''):
+        # Legendary crown of ice shards across the very top (separate per-color
+        # strip asset, 1500x107; gradient-aware like the main frame).
+        crown = None
+        if two_keys:
+            crown = _gradient_frame_image(frame_set, two_keys[0], two_keys[1],
+                                          subdir='crowns/', blend=grad_mode)
+        if crown is None:
+            crown = _load_frame_image(frame_set, f'crowns/{color_key}')
+        if crown is None:  # no crowns/c — artifact crown reads neutral
+            crown = _load_frame_image(frame_set, 'crowns/a')
+        if crown is not None:
+            ch = CRYSTAL_LAYOUT['crown_h']
+            crown = crown.resize((CARD_WIDTH, ch), Image.Resampling.LANCZOS)
+            crown_layer = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+            crown_layer.paste(crown, (0, 0))
+            result = Image.alpha_composite(result, crown_layer)
+
     # Composite P/T box overlay for creatures
     has_pt = card.power is not None and card.toughness is not None
-    if has_pt:
+    if has_pt and frame_set == 'crystal':
+        # Crystal's pack defines exact P/T bounds — place the ice box there,
+        # no m15-style rescale. Text is drawn by _create_crystal_text_svg.
+        pt_img = None
+        if two_keys:
+            pt_img = _gradient_frame_image(frame_set, two_keys[0], two_keys[1],
+                                           subdir='pt/', blend=grad_mode)
+        if pt_img is None:
+            pt_img = _load_frame_image(frame_set, f'pt/{color_key}')
+        if pt_img is None:
+            pt_img = _load_frame_image(frame_set, 'pt/c')
+        if pt_img is not None:
+            L = CRYSTAL_LAYOUT
+            pt_resized = pt_img.resize((L['pt_w'], L['pt_h']), Image.Resampling.LANCZOS)
+            pt_layer = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+            pt_layer.paste(pt_resized, (L['pt_x'], L['pt_y']))
+            result = Image.alpha_composite(result, pt_layer)
+    elif has_pt:
         pt_img = None
         if two_keys:
             pt_img = _gradient_frame_image(frame_set, two_keys[0], two_keys[1],
@@ -3069,6 +3226,8 @@ def _render_image_frame(card_dict: dict, card: CardData, fs: dict) -> Image.Imag
     # its own layout/text renderer)
     if fs.get('layout') == 'iko' or fs.get('frame_set') == 'iko':
         text_svg = _create_iko_text_svg(card, fs)
+    elif fs.get('layout') == 'crystal' or fs.get('frame_set') == 'crystal':
+        text_svg = _create_crystal_text_svg(card, fs)
     elif fs.get('layout') == 'abu' or fs.get('frame_set') == 'abu':
         text_svg = _create_abu_text_svg(card, fs)
     else:
@@ -3126,6 +3285,10 @@ def render_text_overlay(card_dict: dict, frame_settings: dict) -> bytes:
     if fs.get('mode') == 'image':
         if fs.get('layout') == 'iko' or fs.get('frame_set') == 'iko':
             text_svg = _create_iko_text_svg(card, fs)
+            return cairosvg.svg2png(bytestring=text_svg.encode('utf-8'),
+                                    output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
+        if fs.get('layout') == 'crystal' or fs.get('frame_set') == 'crystal':
+            text_svg = _create_crystal_text_svg(card, fs)
             return cairosvg.svg2png(bytestring=text_svg.encode('utf-8'),
                                     output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
         if fs.get('layout') == 'abu' or fs.get('frame_set') == 'abu':
