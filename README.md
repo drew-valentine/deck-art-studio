@@ -6,6 +6,8 @@ A self-hosted web app for generating custom AI art for Magic: The Gathering prox
 
 > **Apple Silicon only.** Image generation, prompt writing, and style analysis all run locally via Apple's **MLX** framework. Deck Art Studio used to support an OpenAI cloud backend and a PyTorch/Ollama local backend; both have been replaced by a single MLX-native pipeline (FLUX.1-schnell + Llama + Qwen2.5-VL). It needs an M-series Mac with **18 GB+ unified memory** (16 GB may work; see [Requirements](#requirements)).
 
+<img width="3024" height="1726" alt="Deck Art Studio Sample" src="https://github.com/user-attachments/assets/d6a9710b-539c-40e5-bf10-07003f90772a" />
+
 ![Deck Art Studio — main interface](docs/images/app-main.jpg)
 
 ![Deck Art Studio — EDH Play extension](docs/images/app-extension.jpg)
