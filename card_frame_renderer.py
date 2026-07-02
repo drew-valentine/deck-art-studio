@@ -506,12 +506,16 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None) -> dict:
     _style_remap = {'modern': 'm15', 'retro': 'm15', 'nyx': 'm15', 'vintage': 'm15',
                     'classic': 'basic', 'full-art': 'clean',
                     'borderless': 'basic', 'minimal': 'basic'}
-    style_key = card_overrides.get('style',
-                deck_settings.get('style', 'basic'))
+    _card_style = card_overrides.get('style')
+    style_key = _card_style or deck_settings.get('style', 'basic')
     style_key = _style_remap.get(style_key, style_key)
     # Planeswalkers in the standard M15 style use the authentic planeswalker
-    # frame automatically, like real cards.
-    if (style_key == 'm15' and card_dict.get('loyalty') is not None
+    # frame automatically, like real cards — but only when m15 came from the
+    # DECK style. An explicit per-card 'm15' override is honored (the user
+    # chose that frame deliberately, with its full set of color controls).
+    _card_is_m15 = _style_remap.get(_card_style, _card_style) == 'm15'
+    if (style_key == 'm15' and not _card_is_m15
+            and card_dict.get('loyalty') is not None
             and _LOYALTY_RE.search(card_dict.get('oracle_text') or '')):
         style_key = 'planeswalker'
     style = FRAME_STYLES.get(style_key, FRAME_STYLES['basic'])
@@ -1525,7 +1529,10 @@ def _max_fitting_rules_font(measure, box_h: float, desired: int,
 # ===========================================================================
 # Planeswalker loyalty ability renderer
 # ===========================================================================
-_LOYALTY_RE = re.compile(r'^([+\-−0]+\d*)\s*:\s*')
+# Loyalty ability cost at a line start: '+2:', '0:', '−12:', '−X:', '+X:'.
+# MULTILINE so .search() detects planeswalkers whose oracle text OPENS
+# with a static ability (e.g. Nissa, Who Shakes the World).
+_LOYALTY_RE = re.compile(r'^([+\-−]?(?:\d+|[Xx]))\s*:\s*', re.MULTILINE)
 
 
 def _get_loyalty_shape_key(cost_str: str) -> Optional[str]:
@@ -2154,6 +2161,19 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
         fs['_pw_rect'] = ((fx + RULES_PADDING) * _sx, (rules_y + RULES_PADDING) * _sy,
                           (fx + RULES_PADDING + rules_inner_w) * _sx,
                           (rules_y + RULES_PADDING + rules_max_h) * _sy)
+        # Loyalty shield geometry (mirrors the shield block below) so the
+        # ability text can wrap AROUND the shield instead of being occluded
+        # by it — same avoid mechanism as _render_pw_content_svg.
+        _shield_avoid_top = _shield_left = None
+        if card.loyalty:
+            _g = _LOYALTY_SHIELD_GEOM
+            _lsize = 102
+            _limit_vb = 1014 * VB_H / CARD_HEIGHT
+            _lcx = (VB_W - art_m) + 8 - _lsize * (1 - _g['cx'])
+            _lcy = min(rules_bottom + 8,
+                       _limit_vb - (_lsize * _g['aspect']) * (1 - _g['cy']))
+            _shield_avoid_top = _lcy - _g['cy'] * _lsize * _g['aspect'] - 4
+            _shield_left = _lcx - _g['cx'] * _lsize
         pw_font = int(RULES_FONT * 0.82)
         while True:
             pw_line_h = int(RULES_LINE_H * pw_font / RULES_FONT)
@@ -2164,6 +2184,11 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
                 _BADGE_GEOM['planeswalkerPlus']['aspect'] * (pw_font * 3.48)
             _start_off = max(pw_font * 0.8, _badge_above + pw_font * 0.32 + 3)
             rules_text_y_start = rules_y + RULES_PADDING + _start_off
+            _avoid = None
+            if _shield_avoid_top is not None:
+                _text_x = (fx + RULES_PADDING) + pw_font * 3.48 + round(pw_font * 0.52)
+                _avoid = (_shield_avoid_top,
+                          max(60.0, _shield_left - 8 - _text_x))
             rules_svg, rules_used_h = render_planeswalker_abilities(
                 card.oracle_text or "",
                 fx + RULES_PADDING, rules_text_y_start,
@@ -2171,13 +2196,14 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
                 pw_font, pw_line_h,
                 text_color=text_color,
                 theme=theme,
+                avoid=_avoid,
             )
             if _start_off + rules_used_h <= rules_max_h or pw_font <= RULES_FONT_FLOOR:
                 break
             pw_font -= 1
-        if rules_used_h > rules_max_h + 2:  # only possible at the hard floor
+        if _start_off + rules_used_h > rules_max_h + 2:  # only at the hard floor
             fs.setdefault('_quality', []).append(
-                f'rules_overflow: planeswalker needs {rules_used_h:.0f}px '
+                f'rules_overflow: planeswalker needs {_start_off + rules_used_h:.0f}px '
                 f'but box is {rules_max_h:.0f}px (font {pw_font})')
     elif show_oracle and rules_max_h > 0:
         oracle = card.oracle_text or ""
@@ -2724,9 +2750,9 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
             if _start_off + rules_used_h <= rules_max_h or pw_font <= RULES_FONT_FLOOR:
                 break
             pw_font -= 1
-        if rules_used_h > rules_max_h + 2:  # only possible at the hard floor
+        if _start_off + rules_used_h > rules_max_h + 2:  # only at the hard floor
             fs.setdefault('_quality', []).append(
-                f'rules_overflow: planeswalker needs {rules_used_h:.0f}px '
+                f'rules_overflow: planeswalker needs {_start_off + rules_used_h:.0f}px '
                 f'but box is {rules_max_h:.0f}px (font {pw_font})')
     elif show_oracle and rules_max_h > 0:
         oracle = card.oracle_text or ""
@@ -3284,14 +3310,18 @@ def _pw_frame_band_layout(card: CardData):
     if not abilities:
         return None
     area_h = L['area_y1'] - L['area_y0']
-    MIN_BAND = 56  # room for a loyalty badge
     font = 24
     while True:
         line_h = int(RULES_LINE_H * font / RULES_FONT)
+        # Minimum band height holds the loyalty badge, which scales with the
+        # font (badge width font*3.1, plate height ~72% of that). A fixed
+        # minimum made 5+-ability walkers unfittable at ANY font, driving
+        # the loop straight to the unreadable floor.
+        min_band = font * 2.35 + 4
         heights = []
         for ab in abilities:
             h = _measure_rules_text(ab['text'], L['text_w'], font, line_h)
-            heights.append(max(h + line_h * 0.55, MIN_BAND))
+            heights.append(max(h + line_h * 0.55, min_band))
         if sum(heights) <= area_h or font <= RULES_FONT_FLOOR:
             break
         font -= 1
@@ -3354,28 +3384,38 @@ def _create_pw_frame_text_svg(card: CardData, fs: dict) -> str:
     layout = _pw_frame_band_layout(card)
     if layout:
         font, line_h, bands = layout
+        bw = min(74, round(font * 3.1))          # matches chrome badge width
+        bf = max(10, min(21, round(font * 0.875)))
         for (y0, y1, cost, text) in bands:
             # vertically center the measured text inside its band
             h_text = _measure_rules_text(text, L['text_w'], font, line_h)
+            if h_text > (y1 - y0) + 2:  # only possible at the hard floor
+                fs.setdefault('_quality', []).append(
+                    f'pw_band_overflow: ability needs {h_text:.0f}px '
+                    f'but band is {y1 - y0:.0f}px (font {font})')
             ty = y0 + max((y1 - y0 - h_text) / 2, 4) + font * 0.8
+            # max_height never clips below the measured text: bands must
+            # render complete abilities even when over-tall (flagged above)
             lines, _ = render_rules_text_svg(text, L['text_x'], ty,
-                                             L['text_w'], (y1 - y0), font, line_h,
-                                             text_color='#1a1712')
+                                             L['text_w'],
+                                             max(y1 - y0, h_text + line_h),
+                                             font, line_h,
+                                             text_color=ink)
             svg.extend(lines)
             if cost:
                 # white cost number on the badge plate (chrome anchors the
-                # plate center on the band center at x56 w74)
+                # plate center on the band center at x56, width bw)
                 disp = cost.replace('−', '-')
-                gx = 56 + _BADGE_GEOM[_badge_icon_for(cost)]['cx'] * 74
-                svg.append(f'<text x="{gx:.1f}" y="{(y0 + y1) / 2 + 21 * 0.35}" '
+                gx = 56 + _BADGE_GEOM[_badge_icon_for(cost)]['cx'] * bw
+                svg.append(f'<text x="{gx:.1f}" y="{(y0 + y1) / 2 + bf * 0.35}" '
                            f'text-anchor="middle" font-family="{PT_FONT_FAMILY}" '
-                           f'font-size="21" font-weight="bold" fill="white">{disp}</text>')
+                           f'font-size="{bf}" font-weight="bold" fill="white">{disp}</text>')
     elif card.oracle_text:
         # not actually ability-structured — plain rules text on a light band
         lines, _ = render_rules_text_svg(card.oracle_text, L['text_x'],
                                          L['area_y0'] + 28, L['text_w'],
                                          L['area_y1'] - L['area_y0'], 24, 30,
-                                         text_color='#1a1712')
+                                         text_color=ink)
         svg.extend(lines)
 
     if card.loyalty:
@@ -4163,7 +4203,7 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
                 icon = _badge_icon_for(cost)
                 img = _load_frame_image(frame_set, icon)
                 if img is not None:
-                    bw = 74
+                    bw = min(74, round(_font * 3.1))  # scales with band font
                     bh = round(img.height * bw / img.width)
                     img = img.resize((bw, bh), Image.Resampling.LANCZOS)
                     lay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))

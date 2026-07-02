@@ -66,6 +66,16 @@ CARDS = [
     {'name': 'Aurelia, Exemplar of Justice and the Boros Legion Forever', 'type_line': 'Legendary Creature — Angel',
      'mana_cost': '{2}{R}{W}', 'colors': ['R', 'W'], 'color_identity': ['R', 'W'],
      'oracle_text': 'Flying\nMentor', 'power': '2', 'toughness': '5'},
+    # Hostile walker: oracle OPENS with statics (MULTILINE detection), has an
+    # X cost (badge parse), and 5 paragraphs (band-fit at readable fonts) —
+    # each property covers a defect the happy-path Jace card missed.
+    {'name': 'Chandra, Static Storm', 'type_line': 'Legendary Planeswalker — Chandra',
+     'mana_cost': '{4}{R}{R}', 'colors': ['R'], 'color_identity': ['R'], 'loyalty': '5',
+     'oracle_text': 'Whenever you cast a red spell, Chandra, Static Storm deals 1 damage to any target.\n'
+                    'Red spells you cast cost {1} less to cast.\n'
+                    '+2: Add {R}{R}. Chandra, Static Storm deals 1 damage to up to one target player.\n'
+                    '−3: Chandra, Static Storm deals 3 damage to target creature or planeswalker.\n'
+                    '−X: Chandra, Static Storm deals X damage to each of up to X targets.'},
     {'name': 'Jace, the Mind Sculptor', 'type_line': 'Legendary Planeswalker — Jace',
      'mana_cost': '{2}{U}{U}', 'colors': ['U'], 'color_identity': ['U'], 'loyalty': '3',
      'oracle_text': '+2: Look at the top card of target player’s library. You may put that card '
@@ -202,28 +212,7 @@ def check_rules_render_full(card, style):
         return None
     cardobj = cfr._build_card_data(card, fs)
     try:
-        if fs.get('frame_set') == 'iko':
-            svg = cfr._create_iko_text_svg(cardobj, fs)
-        elif fs.get('frame_set') == 'crystal':
-            svg = cfr._create_crystal_text_svg(cardobj, fs)
-        elif fs.get('frame_set') == 'lotr':
-            svg = cfr._create_lotr_text_svg(cardobj, fs)
-        elif fs.get('frame_set') == '8th':
-            svg = cfr._create_8th_text_svg(cardobj, fs)
-        elif fs.get('frame_set') == 'mysticalArchive':
-            svg = cfr._create_msa_text_svg(cardobj, fs)
-        elif fs.get('frame_set') == 'sncArtDeco':
-            svg = cfr._create_artdeco_text_svg(cardobj, fs)
-        elif fs.get('frame_set') == 'neoSamurai':
-            svg = cfr._create_samurai_text_svg(cardobj, fs)
-        elif fs.get('frame_set') == 'etched':
-            svg = cfr._create_etched_text_svg(cardobj, fs)
-        elif fs.get('frame_set') == 'planeswalker':
-            svg = cfr._create_pw_frame_text_svg(cardobj, fs)
-        elif fs.get('mode') == 'image':
-            svg = cfr._create_text_only_svg(cardobj, fs)
-        else:
-            svg = cfr.create_card_frame_svg(cardobj, fs)
+        svg = _text_svg_for(cardobj, fs)
     except Exception as e:
         return f'rules_fit_render_error: {type(e).__name__}: {e}'
     overflow = [n for n in fs.get('_quality', []) if 'overflow' in n]
@@ -306,14 +295,9 @@ def check_pw_content_in_rect():
         blank_dict['loyalty'] = None
         blank = cfr._build_card_data(blank_dict, fs)
         try:
-            if fs.get('mode') == 'image':
-                svg_full = _text_svg_for(full, fs)
-                fs_blank = dict(fs)
-                svg_blank = _text_svg_for(blank, fs_blank)
-            else:
-                svg_full = cfr.create_card_frame_svg(full, fs)
-                fs_blank = dict(fs)
-                svg_blank = cfr.create_card_frame_svg(blank, fs_blank)
+            svg_full = _text_svg_for(full, fs)
+            fs_blank = dict(fs)
+            svg_blank = _text_svg_for(blank, fs_blank)
         except Exception as e:
             issues.append((style, f'pw_rect_render_error: {e}'))
             continue
@@ -357,23 +341,26 @@ def check_pw_content_in_rect():
 
 
 def _text_svg_for(cardobj, fs):
-    if fs.get('frame_set') == 'iko':
-        return cfr._create_iko_text_svg(cardobj, fs)
-    if fs.get('frame_set') == 'crystal':
-        return cfr._create_crystal_text_svg(cardobj, fs)
-    if fs.get('frame_set') == 'lotr':
-        return cfr._create_lotr_text_svg(cardobj, fs)
-    if fs.get('frame_set') == '8th':
-        return cfr._create_8th_text_svg(cardobj, fs)
-    if fs.get('frame_set') == 'mysticalArchive':
-        return cfr._create_msa_text_svg(cardobj, fs)
-    if fs.get('frame_set') == 'sncArtDeco':
-        return cfr._create_artdeco_text_svg(cardobj, fs)
-    if fs.get('frame_set') == 'neoSamurai':
-        return cfr._create_samurai_text_svg(cardobj, fs)
-    if fs.get('frame_set') == 'etched':
-        return cfr._create_etched_text_svg(cardobj, fs)
-    raise ValueError(f"no text creator for {fs.get('frame_set')}")
+    """THE frame_set -> text-creator dispatch for this gate. Every check
+    renders through this one table so a new style added to the renderer
+    can't silently exercise the wrong creator in one check but not another."""
+    creators = {
+        'iko': cfr._create_iko_text_svg,
+        'crystal': cfr._create_crystal_text_svg,
+        'lotr': cfr._create_lotr_text_svg,
+        '8th': cfr._create_8th_text_svg,
+        'mysticalArchive': cfr._create_msa_text_svg,
+        'sncArtDeco': cfr._create_artdeco_text_svg,
+        'neoSamurai': cfr._create_samurai_text_svg,
+        'etched': cfr._create_etched_text_svg,
+        'planeswalker': cfr._create_pw_frame_text_svg,
+    }
+    fn = creators.get(fs.get('frame_set'))
+    if fn is not None:
+        return fn(cardobj, fs)
+    if fs.get('mode') == 'image':
+        return cfr._create_text_only_svg(cardobj, fs)
+    return cfr.create_card_frame_svg(cardobj, fs)
 
 
 def _rasterize(svg):
