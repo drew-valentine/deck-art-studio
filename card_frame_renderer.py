@@ -1822,8 +1822,8 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
     _grad_set = fs.get('frame_gradient', 'auto')
     _gcols = card.colors or card.color_identity or []
     _co = fs.get('color_overrides', {}) or {}
-    if (_grad_set not in ('off', False) and len(_gcols) == 2
-            and not showcase and 'field' not in _co and 'bg' not in _co):
+    if (_grad_set not in ('off', False) and len(_gcols) == 2 and not showcase
+            and 'field' not in _co and 'bg' not in _co and 'textbox' not in _co):
         g1, g2 = sorted(_gcols, key=lambda c: 'WUBRG'.index(c)
                         if c in 'WUBRG' else 99)
         if g1 in COLOR_THEMES and g2 in COLOR_THEMES:
@@ -1836,17 +1836,25 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
                 else:
                     stops = (f'<stop offset="0%" stop-color="{c1}"/>'
                              f'<stop offset="100%" stop-color="{c2}"/>')
-                return (f'<linearGradient id="{gid}" x1="0" y1="0" x2="1" y2="0">'
-                        f'{stops}</linearGradient>')
+                # userSpaceOnUse spanning the CARD width: one card-wide
+                # left→right gradient shared by every shape, so 'split' seams
+                # at the card's center (not each box's own center) and boxes
+                # near an edge read as solidly that side's color.
+                return (f'<linearGradient id="{gid}" gradientUnits="userSpaceOnUse" '
+                        f'x1="0" y1="0" x2="{VB_W}" y2="0">{stops}</linearGradient>')
 
             svg.append(
                 '<defs>'
                 + _grad_def('fdBgGrad', COLOR_THEMES[g1]['bg'], COLOR_THEMES[g2]['bg'])
                 + _grad_def('fdFieldGrad', COLOR_THEMES[g1]['field'], COLOR_THEMES[g2]['field'])
+                + _grad_def('fdTextboxGrad', COLOR_THEMES[g1]['textbox'], COLOR_THEMES[g2]['textbox'])
                 + '</defs>')
             field = 'url(#fdFieldGrad)'  # field only ever fills boxes → gradient them all
             grad_theme = dict(theme)
             grad_theme['bg'] = 'url(#fdBgGrad)'
+            # the rules textbox is the largest colored surface — gradient it too
+            textbox = 'url(#fdTextboxGrad)'
+            grad_theme['textbox'] = textbox
 
     # Add nyx starfield pattern definition if needed
     if render.get('frame_pattern') == 'nyx':
@@ -3131,7 +3139,12 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     # the user approved ("much much better").
     if frame_set == 'iko':
         import numpy as np
-        accent = result.getpixel((54, 850))[:3]
+        # Accent sampled from BOTH sides of the frame: on a two-color gradient
+        # frame the left and right accents differ (e.g. blue|red), and the box
+        # border / P/T plate outline must follow — a single left-side sample
+        # painted the right-hanging P/T plate the LEFT color.
+        accent_l = result.getpixel((54, 850))[:3]
+        accent_r = result.getpixel((CARD_WIDTH - 54, 850))[:3]
         # Honor the frame designer's settings, falling back to the approved
         # defaults when nothing is set: Colors > Textbox (box fill), Colors >
         # Border (box border), and the text-box layer opacity (transparency).
@@ -3147,7 +3160,8 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
                 return default
 
         box_fill = _rgb(co.get('textbox'), (245, 239, 225))
-        box_border = _rgb(co.get('border'), tuple(accent))
+        box_border = _rgb(co.get('border'), tuple(accent_l))
+        box_border_r = _rgb(co.get('border'), tuple(accent_r))
         # box transparency: 'box_opacity' 0..1 (default ~0.93 = the approved look)
         bop = fs.get('box_opacity')
         box_alpha = int(round(max(0.0, min(1.0, bop)) * 255)) if bop is not None else 236
@@ -3180,6 +3194,21 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
             pr = [604 * SS, 966 * SS, 714 * SS, 1014 * SS]
             bd.rounded_rectangle(pr, radius=10 * SS, fill=(30, 24, 16, 240),
                                  outline=box_border + (255,), width=4 * SS)
+        if box_border_r != box_border:
+            # Two-color frame: repaint the accent strokes in the right-side
+            # color and blend left→right with the same card-wide mask as the
+            # frame itself, so the box border and P/T plate follow the gradient.
+            big_r = Image.new('RGBA', (CARD_WIDTH * SS, CARD_HEIGHT * SS), (0, 0, 0, 0))
+            bdr = ImageDraw.Draw(big_r)
+            bdr.rounded_rectangle(R, radius=rad * SS, fill=box_fill + (box_alpha,))
+            bdr.rounded_rectangle(R, radius=rad * SS, outline=(20, 18, 14, 255), width=7 * SS)
+            bdr.rounded_rectangle(R, radius=rad * SS, outline=box_border_r + (255,), width=4 * SS)
+            if card.power is not None and card.toughness is not None:
+                bdr.rounded_rectangle(pr, radius=10 * SS, fill=(30, 24, 16, 240),
+                                      outline=box_border_r + (255,), width=4 * SS)
+            band = 0.44 if (grad_mode or 'gradient') == 'gradient' else 0.015
+            mask = _horizontal_blend_mask(CARD_WIDTH * SS, CARD_HEIGHT * SS, band)
+            big = Image.composite(big_r, big, mask)
         result = Image.alpha_composite(result, big.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS))
 
     if frame_set == 'abu':
