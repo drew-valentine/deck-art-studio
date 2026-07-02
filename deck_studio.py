@@ -8792,8 +8792,9 @@ function toggleCollapsible(id) {
 function renderManaCost(manaCostStr) {
   if (!manaCostStr) return '';
   return manaCostStr.replace(/\{([^}]+)\}/g, (_, sym) => {
-    const slug = sym.toLowerCase().replace('/', '');
-    return `<img src="https://svgs.scryfall.io/card-symbols/${encodeURIComponent(sym)}.svg" alt="{${escapeHtml(sym)}}" width="16" height="16">`;
+    // Scryfall symbol SVGs drop the slash: {U/R} -> UR.svg, {U/P} -> UP.svg
+    const slug = sym.toUpperCase().replace(/\//g, '');
+    return `<img src="https://svgs.scryfall.io/card-symbols/${encodeURIComponent(slug)}.svg" alt="{${escapeHtml(sym)}}" width="16" height="16">`;
   });
 }
 
