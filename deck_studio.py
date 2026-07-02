@@ -9962,6 +9962,37 @@ function setColorInputs(theme) {
   }
 }
 
+// Which frame layer(s) each color picker actually drives (SVG styles).
+// A picker row only shows while at least one of its layers is visible, so
+// users never see a control that does nothing (e.g. classic hides its Frame
+// layer by default -> no Frame picker until the layer is enabled).
+// Border also drives the P/T box fill, so it stays while pt_box is visible.
+const COLOR_ROW_LAYERS = {
+  Bg: ['frame'],
+  Field: ['title_bar', 'type_bar'],
+  Textbox: ['text_box'],
+  Border: ['border', 'pt_box'],
+  Text: [],  // text always renders
+};
+
+function updateColorRowVisibility() {
+  const style = _frameStyles[_activeFrameStyle] || {};
+  for (const [suffix, layerKeys] of Object.entries(COLOR_ROW_LAYERS)) {
+    const row = document.getElementById('frameColorRow' + suffix);
+    if (!row) continue;
+    let show;
+    if (style.mode === 'image') {
+      show = ((style.controls || {}).colors || []).includes(suffix.toLowerCase());
+    } else {
+      show = layerKeys.length === 0 || layerKeys.some(lk => {
+        const vis = document.getElementById('frameVis_' + lk);
+        return vis ? vis.checked : false;
+      });
+    }
+    row.style.display = show ? '' : 'none';
+  }
+}
+
 function selectFrameStyle(key) {
   _activeFrameStyle = key;
 
@@ -9996,13 +10027,7 @@ function selectFrameStyle(key) {
   // Per-style controls (from FRAME_STYLES metadata): only show settings the
   // renderer actually honors for this style — no dead controls.
   const controls = style.controls || {};
-  // SVG styles honor all five color overrides; image styles declare a subset.
-  const colorKeys = controls.colors ||
-    (style.mode === 'image' ? [] : ['bg', 'field', 'textbox', 'border', 'text']);
-  for (const suffix of ['Bg', 'Field', 'Textbox', 'Border', 'Text']) {
-    const row = document.getElementById('frameColorRow' + suffix);
-    if (row) row.style.display = colorKeys.includes(suffix.toLowerCase()) ? '' : 'none';
-  }
+  updateColorRowVisibility();
   const showcaseRow = document.getElementById('frameShowcaseRow');
   if (showcaseRow) showcaseRow.style.display = controls.showcase ? '' : 'none';
   const boxOpRow = document.getElementById('frameBoxOpacityRow');
@@ -10042,6 +10067,7 @@ function populateFrameFromSettings(settings) {
     for (const [key, cfg] of Object.entries(settings.layers)) {
       setLayerControls(key, cfg.visible || false, cfg.opacity || 0);
     }
+    updateColorRowVisibility();  // saved layer visibility gates the pickers
   }
 
   const autoColors = settings.use_card_colors !== false;
@@ -10076,6 +10102,7 @@ function wireFrameInputs() {
     if (vis) vis.addEventListener('change', () => {
       const row = document.getElementById('frameLayer_' + key);
       if (row) row.classList.toggle('disabled', !vis.checked);
+      updateColorRowVisibility();  // color pickers follow their layer
       scheduleFramePreview();
     });
     if (slider) slider.addEventListener('input', () => {

@@ -935,7 +935,10 @@ def _render_border_layer(opacity: float, render: dict = None) -> str:
     a solid dark frame with the colored card interior visible through the cutout.
     """
     render = render or {}
-    bw = render.get('border_width', 8)
+    # A zero-width border is invisible even when the layer is toggled on
+    # (classic/full-art set border_width 0) — floor it so enabling the
+    # Border layer always actually draws a border.
+    bw = render.get('border_width', 8) or 8
     br = render.get('border_radius', 22)
     bc = render.get('border_color') or '#17140f'  # authentic dark brown-black
     w, h = VB_W, VB_H
@@ -1851,7 +1854,13 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
 
     # ── Layer: Border ──
     if _layer_visible(layers, 'border'):
-        svg.append(_render_border_layer(_layer_opacity(layers, 'border'), render))
+        # Colors > Border recolors the border layer (default stays the
+        # authentic dark, not the card-color theme border).
+        render_b = render
+        if 'border' in (fs.get('color_overrides') or {}):
+            render_b = dict(render)
+            render_b['border_color'] = fs['color_overrides']['border']
+        svg.append(_render_border_layer(_layer_opacity(layers, 'border'), render_b))
 
     # ── Layer: Frame background ──
     if _layer_visible(layers, 'frame'):
@@ -2775,9 +2784,12 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
     L = IKO_LAYOUT
     W, H = CARD_WIDTH, CARD_HEIGHT
     mana_pips = parse_mana_cost(card.mana_cost)
-    white = '#f6f1e6'
-    # rules text colour honors the designer's Text override, else the dark default
-    dark = (fs.get('color_overrides', {}) or {}).get('text') or '#1a1712'
+    # Colors > Text override applies to ALL card text (title/type/rules/PT),
+    # consistent with the other frame styles; defaults otherwise.
+    _ovr = (fs.get('color_overrides', {}) or {}).get('text')
+    white = _ovr or '#f6f1e6'
+    dark = _ovr or '#1a1712'
+    pt_col = _ovr or '#f4e4a8'
 
     svg = ['<?xml version="1.0" encoding="UTF-8"?>',
            f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
@@ -2871,7 +2883,7 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
     if card.power is not None and card.toughness is not None:
         svg.append(f'<text x="659" y="1002" text-anchor="middle" '
                    f'font-family="{PT_FONT_FAMILY}" font-size="34" font-weight="bold" '
-                   f'fill="#f4e4a8">{card.power}/{card.toughness}</text>')
+                   f'fill="{pt_col}">{card.power}/{card.toughness}</text>')
 
     svg.append('</svg>')
     return '\n'.join(svg)
@@ -2900,9 +2912,10 @@ def _create_crystal_text_svg(card: CardData, fs: dict) -> str:
     L = CRYSTAL_LAYOUT
     W, H = CARD_WIDTH, CARD_HEIGHT
     mana_pips = parse_mana_cost(card.mana_cost)
-    white = '#f2f3f5'
-    # rules text colour honors the designer's Text override, else light default
-    rules_col = (fs.get('color_overrides', {}) or {}).get('text') or white
+    # Colors > Text override applies to ALL card text (title/type/rules/PT),
+    # consistent with the other frame styles; light default otherwise.
+    white = (fs.get('color_overrides', {}) or {}).get('text') or '#f2f3f5'
+    rules_col = white
 
     svg = ['<?xml version="1.0" encoding="UTF-8"?>',
            f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
