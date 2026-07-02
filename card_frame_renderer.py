@@ -2763,10 +2763,11 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
 IKO_LAYOUT = {  # measured from the cardconjurer iko asset's real boxes
     'title_y0': 43, 'title_y1': 117,
     'type_y0': 726, 'type_y1': 803,
-    # Tall cream box drawn over the rules area. Text band expanded +26%
-    # (818-998 -> 800-1026): tighter top padding under the type bar, and the
-    # box now runs to y1034 (flush with the P/T plate bottom) instead of 1022.
-    'rules_y0': 800, 'rules_y1': 1026,
+    # Tall cream box drawn over the rules area. Text band expanded vs the
+    # original 818-998: tighter top padding under the type bar, deeper bottom.
+    # Bottom is capped by the 3mm print-safe zone (36px at 11.9px/mm) so the
+    # box border and P/T plate survive proxy cutting tolerances.
+    'rules_y0': 800, 'rules_y1': 996,
     'x_margin': 62, 'x_right': 690,
     'pt_y': 1012,
 }
@@ -2847,7 +2848,7 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
         # gold P/T plate (x596-706, y986-1034) instead of running under it.
         avoid_abs = None
         if card.power is not None and card.toughness is not None:
-            avoid_abs = (986.0, 534.0)  # (plate top - pad, narrow line width)
+            avoid_abs = (956.0, 532.0)  # (plate top - pad, narrow line width)
         # Rules text size: user-tunable via the frame editor ('rules_font_size',
         # default 30pt), consistent across cards. Shrink-to-fit still applies below
         # for very long oracles. Only the RULES text is affected.
@@ -2876,7 +2877,7 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
 
     # ── P/T (gold, centered in the gold plate drawn by the frame compositor) ──
     if card.power is not None and card.toughness is not None:
-        svg.append(f'<text x="661" y="1032" text-anchor="middle" '
+        svg.append(f'<text x="659" y="1002" text-anchor="middle" '
                    f'font-family="{PT_FONT_FAMILY}" font-size="34" font-weight="bold" '
                    f'fill="#f4e4a8">{card.power}/{card.toughness}</text>')
 
@@ -3147,9 +3148,9 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         box_alpha = int(round(max(0.0, min(1.0, bop)) * 255)) if bop is not None else 236
 
         # by0 raised to meet the type bar bottom so there's no transparent art gap
-        # (seam) between the type bar and the cream rules box. by1 runs to the
-        # P/T plate bottom (1034) for a ~26% taller text area.
-        bx0, by0, bx1, by1, rad = 47, 792, 703, 1034, 22
+        # (seam) between the type bar and the cream rules box. by1 keeps the box
+        # border ~4mm inside the cut line for print-safe proxy trimming.
+        bx0, by0, bx1, by1, rad = 47, 792, 703, 1004, 22
         SS = 4
         big = Image.new('RGBA', (CARD_WIDTH * SS, CARD_HEIGHT * SS), (0, 0, 0, 0))
         bd = ImageDraw.Draw(big)
@@ -3169,8 +3170,9 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         bd.rounded_rectangle(R, radius=rad * SS, outline=box_border + (255,), width=4 * SS)
         if card.power is not None and card.toughness is not None:
             # Offset down-right so the plate hangs off the box's bottom-right
-            # corner (like the real showcase stamps) instead of sitting inside it.
-            pr = [606 * SS, 996 * SS, 716 * SS, 1044 * SS]
+            # corner (like the real showcase stamps) instead of sitting inside
+            # it — while keeping 3mm (36px) print-safe margins to the cut line.
+            pr = [604 * SS, 966 * SS, 714 * SS, 1014 * SS]
             bd.rounded_rectangle(pr, radius=10 * SS, fill=(30, 24, 16, 240),
                                  outline=box_border + (255,), width=4 * SS)
         result = Image.alpha_composite(result, big.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS))
