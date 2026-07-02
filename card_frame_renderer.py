@@ -3379,14 +3379,21 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
             rarr[..., 3] = (rarr[..., 3] * (1.0 - ma)).astype('uint8')
             result = Image.fromarray(rarr, 'RGBA')
             if fs.get('bottom_mask', True):
+                piece_img = Image.fromarray(piece, 'RGBA')
                 ys = np.where(ma.max(axis=1) > 0.15)[0]
                 y0 = int(ys.min())
-                new_h = max(1, round((CARD_HEIGHT - y0) * 0.7))  # 30% lower
-                squashed = Image.fromarray(piece, 'RGBA').crop(
-                    (0, y0, CARD_WIDTH, CARD_HEIGHT)).resize(
-                    (CARD_WIDTH, new_h), Image.Resampling.LANCZOS)
+                # Keep the bottom rows 1:1 — they carry the card's corner
+                # rounding, and scaling them leaves a sliver of exposed art
+                # between the mask arc and the card corner. Only the side-wedge
+                # section above compresses (30% lower overall).
+                KEEP = 60
+                keep_top = CARD_HEIGHT - KEEP
+                new_top = y0 + round((CARD_HEIGHT - y0) * 0.3)
+                upper = piece_img.crop((0, y0, CARD_WIDTH, keep_top)).resize(
+                    (CARD_WIDTH, max(1, keep_top - new_top)), Image.Resampling.LANCZOS)
                 lay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
-                lay.paste(squashed, (0, CARD_HEIGHT - new_h))
+                lay.paste(upper, (0, new_top))
+                lay.paste(piece_img.crop((0, keep_top, CARD_WIDTH, CARD_HEIGHT)), (0, keep_top))
                 result = Image.alpha_composite(result, lay)
 
         def _lotr_piece(subdir, key):
