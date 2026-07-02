@@ -3252,7 +3252,10 @@ PW_FRAME_LAYOUT = {
     'text_x': 135, 'text_w': 545,      # ability text (indented past badges)
     'area_y0': 655, 'area_y1': 920,    # text-safe ability area (above the plate)
     'band_draw_y1': 962,               # bands visually extend behind the plate
-    'loy_cx': 642, 'loy_cy': 961,      # baked loyalty plate center (measured)
+    # Baked loyalty plate center from the maskLoyalty-isolated sprite bbox
+    # (x600-713.75, y923.5-994.5 with plate cx/cy ratios 0.498/0.465) —
+    # NOT from raw in-frame alpha, which is polluted by the bottom bar.
+    'loy_cx': 657, 'loy_cy': 956,
 }
 
 

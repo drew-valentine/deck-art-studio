@@ -380,6 +380,37 @@ def _rasterize(svg):
     return __import__('numpy').array(Image.open(io.BytesIO(png)).convert('RGBA'))
 
 
+def check_pw_frame_loyalty_centered():
+    """The Planeswalker frame's starting-loyalty numeral must center on the
+    baked plate (mask-isolated bbox x600-713.75 y923.5-994.5, plate center
+    (657, 956.5)). Isolates the glyph ink by diffing the overlay with and
+    without loyalty."""
+    import numpy as np
+    jace = next(c for c in CARDS if c.get('loyalty'))
+    fs = cfr.resolve_frame_settings(jace, {'style': 'planeswalker'})
+    full = cfr._build_card_data(jace, fs)
+    noloy_dict = dict(jace); noloy_dict['loyalty'] = None
+    noloy = cfr._build_card_data(noloy_dict, dict(fs))
+    a = _rasterize(cfr._create_pw_frame_text_svg(full, fs))
+    b = _rasterize(cfr._create_pw_frame_text_svg(noloy, dict(fs)))
+    ink = (np.abs(a.astype(int) - b.astype(int)).sum(axis=2) > 40)
+    # restrict to the plate zone (the loyalty diff also removes shield-band
+    # differences elsewhere if any)
+    ink[:900, :] = False
+    if not ink.any():
+        return ['pw_loyalty: numeral did not render']
+    ys, xs = np.where(ink)
+    gcx, gcy = (xs.min() + xs.max()) / 2, (ys.min() + ys.max()) / 2
+    issues = []
+    if abs(gcx - 657) > 6 or abs(gcy - 956.5) > 7:
+        issues.append(f'pw_loyalty_off_center: glyph center ({gcx:.0f},{gcy:.0f}) '
+                      f'vs plate center (657,956)')
+    if xs.min() < 604 or xs.max() > 710 or ys.min() < 928 or ys.max() > 991:
+        issues.append(f'pw_loyalty_outside_plate: glyph x{xs.min()}-{xs.max()} '
+                      f'y{ys.min()}-{ys.max()}')
+    return issues
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--style', default=None, help='only this style')
@@ -392,6 +423,8 @@ def main():
         failures.append(('(badge geometry)', '-', iss))
     for style, iss in check_pw_content_in_rect():
         failures.append(('(pw rect)', style, iss))
+    for iss in check_pw_frame_loyalty_centered():
+        failures.append(('(pw loyalty)', 'planeswalker', iss))
     for card in CARDS:
         row = {}
         for st in styles:
