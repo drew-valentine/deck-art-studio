@@ -43,11 +43,11 @@ plate, and a gold holo stamp at the bottom center.
 6. **Fidelity proof before "done"**: side-by-side vs `reference_raw_layers.png`
    for 5 representative cards; 0-diff chrome check vs the raw assembly.
 
-## Deliberate divergence: bottom mask
+## Bottom mask toggle
 
-The asset's baked black rounded bottom (border.png region, y830–1050) covered
-too much art. The renderer extracts it via border.png, erases it from the
-base frame, and re-composites it squashed to 70% height anchored at the card
-bottom (side curves begin ~y896 instead of ~y830). The `bottom_mask` setting
-(designer toggle, default on) hides it entirely — art runs to the bottom
-edge. Chrome matched the raw assembly at 0.000% diff before this rework.
+The asset's baked black rounded bottom (border.png region, y830–1050) is
+drawn as ONE silhouette with the colored side-border taper — repositioning
+it lower breaks that marriage and exposes an art seam (tried and reverted).
+Default: the asset's native geometry, untouched (0.000% chrome parity).
+The `bottom_mask` designer toggle (off) erases the black region entirely so
+art runs to the card bottom; stamp and P/T still composite on top.

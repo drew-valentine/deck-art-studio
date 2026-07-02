@@ -3363,38 +3363,21 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         L = LOTR_LAYOUT
         import numpy as np
 
-        # ── Bottom mask: the asset's baked black rounded bottom (border.png
-        # marks exactly those pixels). Extracted and re-composited 30% LOWER
-        # (squashed toward the card bottom) so it covers less art; the
-        # 'bottom_mask' setting toggles it off entirely. Panel/stamp/P/T are
-        # unaffected (panel isn't in the mask; stamp/P/T composite on top). ──
-        bmask = _load_frame_image(frame_set, 'border')
-        if bmask is not None:
-            if bmask.size != (CARD_WIDTH, CARD_HEIGHT):
-                bmask = bmask.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
-            ma = np.array(bmask.getchannel('A'), dtype=np.float32) / 255.0
-            rarr = np.array(result)
-            piece = rarr.copy()
-            piece[..., 3] = (piece[..., 3] * ma).astype('uint8')
-            rarr[..., 3] = (rarr[..., 3] * (1.0 - ma)).astype('uint8')
-            result = Image.fromarray(rarr, 'RGBA')
-            if fs.get('bottom_mask', True):
-                piece_img = Image.fromarray(piece, 'RGBA')
-                ys = np.where(ma.max(axis=1) > 0.15)[0]
-                y0 = int(ys.min())
-                # Keep the bottom rows 1:1 — they carry the card's corner
-                # rounding, and scaling them leaves a sliver of exposed art
-                # between the mask arc and the card corner. Only the side-wedge
-                # section above compresses (30% lower overall).
-                KEEP = 60
-                keep_top = CARD_HEIGHT - KEEP
-                new_top = y0 + round((CARD_HEIGHT - y0) * 0.3)
-                upper = piece_img.crop((0, y0, CARD_WIDTH, keep_top)).resize(
-                    (CARD_WIDTH, max(1, keep_top - new_top)), Image.Resampling.LANCZOS)
-                lay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
-                lay.paste(upper, (0, new_top))
-                lay.paste(piece_img.crop((0, keep_top, CARD_WIDTH, CARD_HEIGHT)), (0, keep_top))
-                result = Image.alpha_composite(result, lay)
+        # ── Bottom mask toggle: the asset's black rounded bottom (border.png
+        # marks exactly those pixels) is drawn as ONE silhouette with the
+        # colored side-border taper, so it cannot be repositioned without
+        # breaking that marriage (tried; left an exposed-art seam). Default ON
+        # keeps the asset's native geometry untouched; OFF erases the black so
+        # art runs to the card bottom (stamp/P/T still composite on top). ──
+        if not fs.get('bottom_mask', True):
+            bmask = _load_frame_image(frame_set, 'border')
+            if bmask is not None:
+                if bmask.size != (CARD_WIDTH, CARD_HEIGHT):
+                    bmask = bmask.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+                ma = np.array(bmask.getchannel('A'), dtype=np.float32) / 255.0
+                rarr = np.array(result)
+                rarr[..., 3] = (rarr[..., 3] * (1.0 - ma)).astype('uint8')
+                result = Image.fromarray(rarr, 'RGBA')
 
         def _lotr_piece(subdir, key):
             """Load a lotr sub-asset, gradient-aware for two-color cards."""
