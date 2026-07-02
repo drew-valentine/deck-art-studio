@@ -3089,27 +3089,51 @@ def _render_pw_rules_svg(card: CardData, fs: dict, tx: float, rbox_top: float,
     return elems
 
 
+# Starting-loyalty shield sprite (extracted from the cardconjurer pw frame
+# via maskLoyalty.png) — plate geometry measured from its alpha channel.
+_LOYALTY_SHIELD_GEOM = {'aspect': 143 / 228, 'cy': 0.465, 'cx': 0.498}
+
+
 def _start_loyalty_badge_svg(loyalty: str, cx: float, cy: float,
                              size: float = 100) -> list:
-    """Starting-loyalty shield (dark badge + white number), centered at
-    (cx, cy) in 750x1050 pixel space — used where a creature's P/T would go."""
+    """Starting-loyalty shield (authentic cardconjurer sprite + white
+    number), plate-centered at (cx, cy) in 750x1050 pixel space — used where
+    a creature's P/T would go. Falls back to the vector shape if the sprite
+    asset is missing."""
+    import base64
     parts = []
-    start_path_d = _LOYALTY_SVG_PATHS.get('loyalty_start')
-    loy_w, loy_h = size, size * 0.82
-    loy_x, loy_y = cx - loy_w / 2, cy - loy_h / 2
     loy_font = size * 0.40
-    if start_path_d:
-        sx, sy = loy_w / 32.0, loy_h / 32.0
-        parts.append(f'<g transform="translate({loy_x + 2.5},{loy_y + 2.5}) '
-                     f'scale({sx:.4f},{sy:.4f})">'
-                     f'<path d="{start_path_d}" fill="rgba(0,0,0,0.45)"/></g>')
-        parts.append(f'<g transform="translate({loy_x},{loy_y}) scale({sx:.4f},{sy:.4f})">'
-                     f'<path d="{start_path_d}" fill="#1a1410"/></g>')
-        text_y = loy_y + loy_h * 0.494 + loy_font * 0.35
-    else:
-        parts.append(f'<rect x="{loy_x}" y="{loy_y}" width="{loy_w}" height="{loy_h}" '
-                     f'rx="{loy_h/4}" fill="#1a1410"/>')
+    uri = _BADGE_URI_CACHE.get('loyaltyStart')
+    if uri is None:
+        path = FRAMES_DIR / 'planeswalker' / 'loyaltyStart.png'
+        uri = ('data:image/png;base64,' + base64.b64encode(path.read_bytes()).decode()
+               if path.exists() else '')
+        _BADGE_URI_CACHE['loyaltyStart'] = uri
+    if uri:
+        g = _LOYALTY_SHIELD_GEOM
+        w = size
+        h = w * g['aspect']
+        x = cx - g['cx'] * w
+        y = cy - g['cy'] * h
+        parts.append(f'<image x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" '
+                     f'xlink:href="{uri}"/>')
         text_y = cy + loy_font * 0.35
+    else:
+        start_path_d = _LOYALTY_SVG_PATHS.get('loyalty_start')
+        loy_w, loy_h = size, size * 0.82
+        loy_x, loy_y = cx - loy_w / 2, cy - loy_h / 2
+        if start_path_d:
+            sx, sy = loy_w / 32.0, loy_h / 32.0
+            parts.append(f'<g transform="translate({loy_x + 2.5},{loy_y + 2.5}) '
+                         f'scale({sx:.4f},{sy:.4f})">'
+                         f'<path d="{start_path_d}" fill="rgba(0,0,0,0.45)"/></g>')
+            parts.append(f'<g transform="translate({loy_x},{loy_y}) scale({sx:.4f},{sy:.4f})">'
+                         f'<path d="{start_path_d}" fill="#1a1410"/></g>')
+            text_y = loy_y + loy_h * 0.494 + loy_font * 0.35
+        else:
+            parts.append(f'<rect x="{loy_x}" y="{loy_y}" width="{loy_w}" height="{loy_h}" '
+                         f'rx="{loy_h/4}" fill="#1a1410"/>')
+            text_y = cy + loy_font * 0.35
     parts.append(f'<text x="{cx}" y="{text_y}" text-anchor="middle" '
                  f'font-family="{PT_FONT_FAMILY}" font-size="{loy_font:.0f}" '
                  f'font-weight="bold" fill="white">{loyalty}</text>')
