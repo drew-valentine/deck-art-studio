@@ -80,7 +80,7 @@
   - Long-term goal: Reproduce the most popular MTG frames over time using cardconjurer's open-source frame assets (https://github.com/Investigamer/cardconjurer/tree/master/img/frames).
   - Foundation: Stands on cardconjurer's frame-asset model (layered color PNGs + region/half masks), building on the existing `card_frame_renderer.py` (FRAME_STYLES / FRAME_LAYERS / FRAME_LAYER_ORDER, SVG vs PNG-layer modes) and `shared/frames/m15` assets.
   - Branch: `feat/frame-editor`
-  - Status: In progress — items 1–3 done; item 4 (frame-style library expansion) in progress — Crystal frame shipped with fidelity proof; LOTR/8th/MSA assets+SPECs pinned and awaiting build (one frame per change with fidelity proof + user sign-off).
+  - Status: In progress — items 1–4 substantially done — style library now Basic/Clean/Crystal/Showcase/LOTR/8th Edition/Mystical Archive/M15; remaining: item 5 (Frame Designer UX overhaul) and item 6 (visual validation harness; resemblance check partially covered by 0-diff chrome parity checks per frame).
   - Work items (roughly in order):
     - [x] 1. Codebase map & foundation review — understand `card_frame_renderer.py` (FRAME_STYLES/FRAME_LAYERS/FRAME_LAYER_ORDER, SVG vs PNG-layer modes), the Frame Designer UI, and `shared/frames/m15` assets — DONE
     - [x] 2. Left/right color gradient frames for multi-type / multicolor lands — composite two color frames via left/right half-masks (hard split) plus a smooth alpha-gradient blend across the middle, using the existing m15 color layers — DONE (commit 6c58ce3 "feat(frames): left→right color gradients for SVG frames (classic/retro)" plus earlier image-mode gradient support via `_gradient_frame_image` for m15/showcase)
@@ -90,9 +90,10 @@
     - [ ] 4. Frame-style library expansion — add more historical MTG frame styles via the layered-PNG model, so users can recreate frames across MTG history — IN PROGRESS
       - Note: A 1993/ABU "Retro" style was built then REMOVED for failing fidelity (commit 5b9a689 "chore(frames): remove 1993/ABU 'Retro' style + add frame-editing retro"). A retrospective playbook capturing the lessons was written at `docs/frame-editing-retro.md`.
       - [x] Crystal frame (crowned shattered-ice style) — DONE (commit 8c82ce2 "feat(frames): Crystal frame style — crowned shattered-ice showcase"), assets + reference + SPEC pinned in commit 117c009 (`shared/frames/crystal/`, `docs/frame-refs/crystal/SPEC.md`), shipped with fidelity proof
-      - [ ] LOTR "Ring" showcase frame — assets + reference + SPEC pinned (commit f739704, `shared/frames/lotr/`, `docs/frame-refs/lotr/SPEC.md`); build pending
-      - [ ] 8th Edition frame — assets + reference + SPEC pinned (commit f739704, `shared/frames/8th/`, `docs/frame-refs/8th/SPEC.md`); build pending
-      - [ ] Mystical Archive frame — assets + reference + SPEC pinned (commit f739704, `shared/frames/mysticalArchive/`, `docs/frame-refs/mysticalArchive/SPEC.md`); build pending
+      - [x] LOTR "Ring" showcase frame — DONE (commit 1e3a1eb; user signed off; bottom-mask toggle added commits f4edca5/ad1d063 — native geometry default, toggle to remove)
+      - [x] 8th Edition frame — DONE (commit e937622; colored land variants wl/ul/bl/rl/gl/ml supported; 0.000% chrome parity)
+      - [x] Mystical Archive frame — DONE (commit e937622; style key 'msa'; full-bleed art, legendary crown strip; 0.000% chrome parity)
+      - Note: CardConjurer attribution added to NOTICE/README/shared-frames README (commit c25d197); rules text now always renders with size-as-ceiling everywhere (commit 0a4096b).
     - [ ] 5. Frame Designer UX overhaul — style gallery with live thumbnails, WYSIWYG preview that matches the final Python composite (CLAUDE.md warns these are separate code paths — must stay in sync), intuitive color + gradient controls, art pan/zoom, per-card and apply-to-all. — NOT STARTED
     - [ ] 6. Visual validation harness — screenshot-based checks across styles × colors, browser-vs-Python-composite parity, per CLAUDE.md's mandate to validate frame changes in the actual browser. — NOT STARTED
       - Note: `docs/frame-editing-retro.md` calls for adding an objective resemblance/fidelity check to `tools/card_quality_check.py`.
