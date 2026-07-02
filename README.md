@@ -8,8 +8,6 @@ A self-hosted web app for generating custom AI art for Magic: The Gathering prox
 
 <img width="3024" height="1726" alt="Deck Art Studio Sample" src="https://github.com/user-attachments/assets/d6a9710b-539c-40e5-bf10-07003f90772a" />
 
-![Deck Art Studio — main interface](docs/images/app-main.jpg)
-
 ![Deck Art Studio — EDH Play extension](docs/images/app-extension.jpg)
 
 ## Samples
