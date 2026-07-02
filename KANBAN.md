@@ -11,8 +11,7 @@
     - Generation: one art image per card name. FLUX accepts arbitrary width/height; deck-level `art_orientation` (portrait/landscape) already exists for art aspect.
     - Extension (`extension/content.js`): replaces edhplay.com images by Scryfall UUID from image URL. DFC front and back share the same UUID (URLs differ by /front/ vs /back/), so back faces would currently be replaced with front art.
   - **Phasing (subtasks):**
-    - [ ] Phase 0 — Data foundation: store `layout` + per-face data (name, mana_cost, type_line, oracle_text, P/T, art_crop per face) in card entries; migration/backfill for existing decks; single-face cards unchanged.
-    - [ ] Phase 1 — Double-faced cards (transform / MDFC): generate art per face; render both faces as composites (front + back frame variants incl. transform indicator pips); UI face toggle in card detail + grid badge; extension distinguishes /front/ vs /back/ URLs; export-manifest includes both faces.
+    - Phase 0 + Phase 1 — **IN PROGRESS** on branch `feature/alt-layouts-dfc` (started 2026-07-02, owner drew-valentine). Split out as a dedicated "In Progress" work item below. Remaining phases (2, 3) stay in this Backlog epic.
     - [ ] Phase 2 — Adventure + Room text layouts: portrait, single art, split text-box rendering in `card_frame_renderer` (adventure: left sub-frame; room: two side-by-side door halves). Authentic/m15 style first, other styles later.
     - [ ] Phase 3 — Landscape cards (battles, split cards): landscape frame rendering (new canvas orientation 1050x750); battle defense counter; split cards = two halves each with own art; extension/print output rotation handling.
   - **Open question:** clarify with requester what "PIP cards" means (likely Kamigawa flip cards). Blocks scoping any flip-layout work.
@@ -79,6 +78,20 @@
 ## Ready
 
 ## In Progress
+
+- [ ] Alt Layouts Phase 0 + 1 — Data foundation + Double-faced cards (transform / MDFC) | Priority: P2 | Started: 2026-07-02 | Owner: drew-valentine
+  - Branch: `feature/alt-layouts-dfc`
+  - Part of EPIC: Support Alternative Card Layouts (see Backlog). Phases 2 (adventure/room) and 3 (landscape) remain in the epic in Backlog.
+  - Scope: Phase 0 (store `layout` + per-face data on import; backfill existing decks) merged with Phase 1 (per-face art generation + back-face composites + UI/extension/export support) as a single work item per Drew's approval.
+  - Acceptance criteria:
+    - Given a DFC (transform/MDFC) is imported, when the deck is saved, then `layout` and the full `card_faces` array (per-face name, mana_cost, type_line, oracle_text, P/T, art_crop) are stored on the card entry; single-face cards are unchanged.
+    - Given a deck was created before this change, when it is loaded, then a migration/backfill populates `layout` + `card_faces` for existing DFCs without user action.
+    - Given a DFC, when art is generated, then art is produced per face (front and back) rather than a single shared image.
+    - Given a DFC with generated art, when composites are rendered, then both the front and back faces render as card composites (back-face frame variant incl. transform indicator).
+    - Given a DFC is selected in the UI, when the user toggles the face, then the card detail (and grid badge) switches between front and back faces.
+    - Given the browser extension replaces images on edhplay.com, when a card URL is a back face (/back/), then the back-face art is used and it is not overwritten with the front-face art (distinguishes /front/ vs /back/).
+    - Given a deck with DFCs, when export-manifest runs, then both front and back faces are included.
+    - Validation gate: verified in the actual browser via Playwright with local FLUX generation before merge (per project Validation Requirements — no commit/merge/tag until visually confirmed).
 
 ## In Review
 
