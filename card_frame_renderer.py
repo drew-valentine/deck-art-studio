@@ -1704,6 +1704,43 @@ def _render_loyalty_badge_vector(cost_str: str, x: float, y: float,
     return elements
 
 
+_BADGE_URI_CACHE: Dict[str, str] = {}
+
+
+def _authentic_loyalty_badge_svg(cost_str: str, x: float, y: float,
+                                 badge_w: float, font_size: float) -> list:
+    """Loyalty-cost badge using the real cardconjurer badge art (embedded as
+    a data URI) with a white cost number centered on it. Returns [] if the
+    badge assets aren't available (callers fall back to vector shapes)."""
+    import base64
+    cs = cost_str.replace('−', '-').strip()
+    icon = ('planeswalkerPlus' if cs.startswith('+')
+            else 'planeswalkerMinus' if cs.startswith('-')
+            else 'planeswalkerNeutral')
+    uri = _BADGE_URI_CACHE.get(icon)
+    if uri is None:
+        path = FRAMES_DIR / 'planeswalker' / f'{icon}.png'
+        if not path.exists():
+            _BADGE_URI_CACHE[icon] = ''
+            return []
+        uri = 'data:image/png;base64,' + base64.b64encode(path.read_bytes()).decode()
+        _BADGE_URI_CACHE[icon] = uri
+    if not uri:
+        return []
+    # badge art aspect ~140x101 (the colon separator is baked into the art)
+    bh = badge_w * 101 / 140
+    by = y + (badge_w * 0.85 - bh) / 2  # visually center vs the old vector box
+    cx = x + badge_w * 0.47             # number sits left of the baked colon
+    cy = by + bh / 2 + font_size * 0.32
+    return [
+        f'<image x="{x:.1f}" y="{by:.1f}" width="{badge_w:.1f}" height="{bh:.1f}" '
+        f'xlink:href="{uri}"/>',
+        f'<text x="{cx:.1f}" y="{cy:.1f}" text-anchor="middle" '
+        f'font-family="{PT_FONT_FAMILY}" font-size="{font_size}" '
+        f'font-weight="bold" fill="white">{cs}</text>',
+    ]
+
+
 def render_planeswalker_abilities(card_oracle: str,
                                   x_start: float, y_start: float,
                                   max_width: float, max_height: float,
@@ -1761,11 +1798,17 @@ def render_planeswalker_abilities(card_oracle: str,
             badge_x = x_start - 6  # slightly past the left padding for prominence
             badge_y = current_y - badge_h * 0.42
 
-            # Render badge (vector path with cost overlay)
-            badge_elements = _render_loyalty_badge_vector(
-                cost_str, badge_x, badge_y, badge_w, badge_h,
-                badge_font_size
-            )
+            # Authentic cardconjurer badge art (Plus/Minus/Neutral raster,
+            # colon baked in) with a white cost number — the vector shapes
+            # read as flat clip-art next to the real thing.
+            badge_elements = _authentic_loyalty_badge_svg(
+                cost_str, badge_x, badge_y, badge_w, badge_font_size)
+            if not badge_elements:
+                # Vector fallback if the badge assets are missing
+                badge_elements = _render_loyalty_badge_vector(
+                    cost_str, badge_x, badge_y, badge_w, badge_h,
+                    badge_font_size
+                )
 
             if badge_elements:
                 svg_elements.extend(badge_elements)
@@ -1811,7 +1854,7 @@ def render_planeswalker_abilities(card_oracle: str,
         # The visible shape in the badge is ~65% of badge_h
         badge_visible_h = badge_h * 0.65
         actual_h = max(text_h, badge_visible_h) if ability['cost'] is not None else text_h
-        current_y += actual_h + line_spacing * 0.6
+        current_y += actual_h + line_spacing * 0.45
 
     return svg_elements, current_y - y_start
 
@@ -2958,9 +3001,10 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
     # font 29), not a small gap — passing a tiny value crams every line on top
     # of the next. Use the real line height and shrink the font for long oracles.
     if card.oracle_text and _is_planeswalker(card):
-        svg.extend(_render_pw_rules_svg(card, fs, tx, L['rules_y0'] + 8,
+        # box top moves up to 780 for planeswalkers (see _compose_image_frame_base)
+        svg.extend(_render_pw_rules_svg(card, fs, tx, 788,
                                         L['x_right'] - tx,
-                                        (L['rules_y1'] - L['rules_y0']) - 16, dark))
+                                        996 - 788 - 8, dark))
         svg.extend(_start_loyalty_badge_svg(card.loyalty, 659, 985))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
@@ -3814,7 +3858,9 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         # by0 raised to meet the type bar bottom so there's no transparent art gap
         # (seam) between the type bar and the cream rules box. by1 keeps the box
         # border ~4mm inside the cut line for print-safe proxy trimming.
-        bx0, by0, bx1, by1, rad = 47, 792, 703, 1004, 22
+        # Planeswalkers get every available pixel (box hugs the type bar).
+        _pw_card = card.loyalty is not None and _LOYALTY_RE.search(card.oracle_text or '')
+        bx0, by0, bx1, by1, rad = 47, (780 if _pw_card else 792), 703, 1004, 22
         SS = 4
         big = Image.new('RGBA', (CARD_WIDTH * SS, CARD_HEIGHT * SS), (0, 0, 0, 0))
         bd = ImageDraw.Draw(big)
