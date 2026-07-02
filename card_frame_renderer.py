@@ -1706,17 +1706,35 @@ def _render_loyalty_badge_vector(cost_str: str, x: float, y: float,
 
 _BADGE_URI_CACHE: Dict[str, str] = {}
 
+# Per-icon plate geometry, measured from the badge PNGs' alpha channel. The
+# arrow extends the bounding box differently per icon (Plus: arrow on top,
+# Minus: bottom, Neutral: none), so the cost number must anchor to the PLATE
+# center, not the image center. aspect = h/w; cy/cx = plate center as a
+# fraction of image height/width (baked colon excluded from cx).
+_BADGE_GEOM = {
+    'planeswalkerPlus':    {'aspect': 101 / 140, 'cy': 0.525, 'cx': 0.493},
+    'planeswalkerMinus':   {'aspect': 99 / 142,  'cy': 0.354, 'cx': 0.493},
+    'planeswalkerNeutral': {'aspect': 85 / 142,  'cy': 0.453, 'cx': 0.489},
+}
 
-def _authentic_loyalty_badge_svg(cost_str: str, x: float, y: float,
-                                 badge_w: float, font_size: float) -> list:
-    """Loyalty-cost badge using the real cardconjurer badge art (embedded as
-    a data URI) with a white cost number centered on it. Returns [] if the
-    badge assets aren't available (callers fall back to vector shapes)."""
-    import base64
+
+def _badge_icon_for(cost_str: str) -> str:
     cs = cost_str.replace('−', '-').strip()
-    icon = ('planeswalkerPlus' if cs.startswith('+')
+    return ('planeswalkerPlus' if cs.startswith('+')
             else 'planeswalkerMinus' if cs.startswith('-')
             else 'planeswalkerNeutral')
+
+
+def _authentic_loyalty_badge_svg(cost_str: str, x: float, line_center_y: float,
+                                 badge_w: float, font_size: float) -> list:
+    """Loyalty-cost badge using the real cardconjurer badge art (embedded as
+    a data URI), with the white cost number anchored to the measured PLATE
+    center — vertically aligned to line_center_y regardless of which way the
+    icon's arrow extends. Returns [] if the badge assets aren't available
+    (callers fall back to vector shapes)."""
+    import base64
+    cs = cost_str.replace('−', '-').strip()
+    icon = _badge_icon_for(cost_str)
     uri = _BADGE_URI_CACHE.get(icon)
     if uri is None:
         path = FRAMES_DIR / 'planeswalker' / f'{icon}.png'
@@ -1727,11 +1745,11 @@ def _authentic_loyalty_badge_svg(cost_str: str, x: float, y: float,
         _BADGE_URI_CACHE[icon] = uri
     if not uri:
         return []
-    # badge art aspect ~140x101 (the colon separator is baked into the art)
-    bh = badge_w * 101 / 140
-    by = y + (badge_w * 0.85 - bh) / 2  # visually center vs the old vector box
-    cx = x + badge_w * 0.47             # number sits left of the baked colon
-    cy = by + bh / 2 + font_size * 0.32
+    g = _BADGE_GEOM[icon]
+    bh = badge_w * g['aspect']
+    by = line_center_y - g['cy'] * bh   # plate center sits on line_center_y
+    cx = x + g['cx'] * badge_w
+    cy = line_center_y + font_size * 0.35
     return [
         f'<image x="{x:.1f}" y="{by:.1f}" width="{badge_w:.1f}" height="{bh:.1f}" '
         f'xlink:href="{uri}"/>',
@@ -1794,15 +1812,16 @@ def render_planeswalker_abilities(card_oracle: str,
         if ability['cost'] is not None:
             cost_str = ability['cost']
 
-            # Position badge: left-aligned, vertically centered with first text line
+            # Position badge: left-aligned, plate-centered on the first text line
             badge_x = x_start - 6  # slightly past the left padding for prominence
             badge_y = current_y - badge_h * 0.42
+            line_center_y = current_y - font_size * 0.32  # first line visual center
 
             # Authentic cardconjurer badge art (Plus/Minus/Neutral raster,
             # colon baked in) with a white cost number — the vector shapes
             # read as flat clip-art next to the real thing.
             badge_elements = _authentic_loyalty_badge_svg(
-                cost_str, badge_x, badge_y, badge_w, badge_font_size)
+                cost_str, badge_x, line_center_y, badge_w, badge_font_size)
             if not badge_elements:
                 # Vector fallback if the badge assets are missing
                 badge_elements = _render_loyalty_badge_vector(
@@ -3298,12 +3317,13 @@ def _create_pw_frame_text_svg(card: CardData, fs: dict) -> str:
                                              text_color='#1a1712')
             svg.extend(lines)
             if cost:
-                # white cost number centered on the badge art (chrome pastes
-                # the badge at x56..130 -> center x93)
+                # white cost number on the badge plate (chrome anchors the
+                # plate center on the band center at x56 w74)
                 disp = cost.replace('−', '-')
-                svg.append(f'<text x="93" y="{(y0 + y1) / 2 + 8}" text-anchor="middle" '
-                           f'font-family="{PT_FONT_FAMILY}" font-size="24" '
-                           f'font-weight="bold" fill="white">{disp}</text>')
+                gx = 56 + _BADGE_GEOM[_badge_icon_for(cost)]['cx'] * 74
+                svg.append(f'<text x="{gx:.1f}" y="{(y0 + y1) / 2 + 24 * 0.35}" '
+                           f'text-anchor="middle" font-family="{PT_FONT_FAMILY}" '
+                           f'font-size="24" font-weight="bold" fill="white">{disp}</text>')
     elif card.oracle_text:
         # not actually ability-structured — plain rules text on a light band
         lines, _ = render_rules_text_svg(card.oracle_text, L['text_x'],
@@ -4087,17 +4107,17 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
             for (y0, y1, cost, text) in bands:
                 if not cost:
                     continue
-                cs = cost.replace('−', '-').strip()
-                icon = ('planeswalkerPlus' if cs.startswith('+')
-                        else 'planeswalkerMinus' if cs.startswith('-')
-                        else 'planeswalkerNeutral')
+                icon = _badge_icon_for(cost)
                 img = _load_frame_image(frame_set, icon)
                 if img is not None:
                     bw = 74
                     bh = round(img.height * bw / img.width)
                     img = img.resize((bw, bh), Image.Resampling.LANCZOS)
                     lay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
-                    lay.paste(img, (56, round((y0 + y1) / 2 - bh / 2)))
+                    # anchor the PLATE center (not the image center) on the
+                    # band center — arrows extend the bbox asymmetrically
+                    plate_cy = _BADGE_GEOM[icon]['cy']
+                    lay.paste(img, (56, round((y0 + y1) / 2 - plate_cy * bh)))
                     result = Image.alpha_composite(result, lay)
 
     # Data-driven overlays (crown/stamp/P/T at pack bounds) for the newer

@@ -239,6 +239,49 @@ def check_rules_render_full(card, style):
     return None
 
 
+def check_pw_badge_alignment():
+    """Loyalty badge numbers must sit centered on the badge PLATE (the icons'
+    arrows extend the bounding box asymmetrically, which previously pushed
+    numbers off-plate). Rasterizes each icon with and without its number and
+    asserts the number ink lies inside the plate with a sane center."""
+    import numpy as np
+    issues = []
+    for cost in ['+2', '0', '−12']:
+        badge = cfr._authentic_loyalty_badge_svg(cost, 20, 60, 80, 28)
+        if not badge:
+            return ['pw_badge: badge assets missing']
+        head = ('<svg width="140" height="120" viewBox="0 0 140 120" '
+                'xmlns="http://www.w3.org/2000/svg" '
+                'xmlns:xlink="http://www.w3.org/1999/xlink">')
+        if cfr._FONT_FACE_CSS:
+            head += f'<style>{cfr._FONT_FACE_CSS}</style>'
+        both = cairosvg.svg2png(bytestring=(head + ''.join(badge) + '</svg>').encode(),
+                                output_width=140, output_height=120)
+        only = cairosvg.svg2png(bytestring=(head + badge[0] + '</svg>').encode(),
+                                output_width=140, output_height=120)
+        a = np.array(Image.open(io.BytesIO(both)).convert('RGBA')).astype(int)
+        b = np.array(Image.open(io.BytesIO(only)).convert('RGBA')).astype(int)
+        text_mask = (np.abs(a - b).sum(axis=2) > 40)
+        if not text_mask.any():
+            issues.append(f'pw_badge {cost}: number did not render')
+            continue
+        # plate = wide rows of the badge-only alpha
+        alpha = b[:, :, 3]
+        rows = (alpha > 100).sum(axis=1)
+        plate_rows = np.where(rows > 0.75 * rows.max())[0]
+        ty, tx = np.where(text_mask)
+        if ty.min() < plate_rows.min() - 2 or ty.max() > plate_rows.max() + 2:
+            issues.append(
+                f'pw_badge {cost}: number y{ty.min()}-{ty.max()} outside plate '
+                f'y{plate_rows.min()}-{plate_rows.max()}')
+        else:
+            # center must sit near the plate center
+            off = abs((ty.min() + ty.max()) / 2 - (plate_rows.min() + plate_rows.max()) / 2)
+            if off > (plate_rows.max() - plate_rows.min()) * 0.22:
+                issues.append(f'pw_badge {cost}: number off-center by {off:.0f}px in plate')
+    return issues
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--style', default=None, help='only this style')
@@ -247,6 +290,8 @@ def main():
 
     styles = [args.style] if args.style else list(cfr.FRAME_STYLES.keys())
     grid, failures, total = [], [], 0
+    for iss in check_pw_badge_alignment():
+        failures.append(('(badge geometry)', '-', iss))
     for card in CARDS:
         row = {}
         for st in styles:
