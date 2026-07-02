@@ -201,6 +201,10 @@ def check_rules_render_full(card, style):
             svg = cfr._create_crystal_text_svg(cardobj, fs)
         elif fs.get('frame_set') == 'lotr':
             svg = cfr._create_lotr_text_svg(cardobj, fs)
+        elif fs.get('frame_set') == '8th':
+            svg = cfr._create_8th_text_svg(cardobj, fs)
+        elif fs.get('frame_set') == 'mysticalArchive':
+            svg = cfr._create_msa_text_svg(cardobj, fs)
         elif fs.get('mode') == 'image':
             svg = cfr._create_text_only_svg(cardobj, fs)
         else:

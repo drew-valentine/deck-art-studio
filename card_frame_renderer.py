@@ -325,6 +325,25 @@ FRAME_STYLES = {
         'controls': {'colors': ['textbox', 'border', 'text'],
                      'box_opacity': True, 'showcase': True},
     },
+    '8th': {
+        'label': '8th Edition',
+        'description': 'The iconic 2003-2014 modern border — metallic beveled bars, inset art '
+                       'window, colored land frames. Built from the cardconjurer 8th assets.',
+        'mode': 'image',
+        'frame_set': '8th',
+        'layout': '8th',
+        'controls': {'colors': ['text']},
+    },
+    'msa': {
+        'label': 'Mystical Archive',
+        'description': 'Strixhaven Mystical Archive showcase — ornate color-and-gold arabesque '
+                       'frame over parchment with full-bleed art. Built from the cardconjurer '
+                       'mysticalArchive assets.',
+        'mode': 'image',
+        'frame_set': 'mysticalArchive',
+        'layout': 'msa',
+        'controls': {'colors': ['text']},
+    },
     'lotr': {
         'label': 'LOTR',
         'description': "Tales of Middle-earth 'Ring' showcase — circular ring-inscription art "
@@ -2902,6 +2921,137 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
     return '\n'.join(svg)
 
 
+def _create_bar_box_text_svg(card: CardData, fs: dict, L: dict,
+                             bar_color: str, rules_color: str, pt_color: str,
+                             title_font: int = 40, type_font: int = 34,
+                             pt_font: int = 36) -> str:
+    """Shared text overlay for image frames with the standard bar/box layout:
+    title bar + mana pips, type bar, rules box (fit-to-box with P/T avoid
+    wrap), P/T centered on the style's plate. Colors > Text override applies
+    to all text. Layout dict L needs: title_y0/1, type_y0/1, rules_y0/1,
+    x_margin, x_right, pt_cx, pt_cy, and optionally avoid (y_top, narrow_w)."""
+    W, H = CARD_WIDTH, CARD_HEIGHT
+    mana_pips = parse_mana_cost(card.mana_cost)
+    _ovr = (fs.get('color_overrides', {}) or {}).get('text')
+    bar_col = _ovr or bar_color
+    rules_col = _ovr or rules_color
+    pt_col = _ovr or pt_color
+
+    svg = ['<?xml version="1.0" encoding="UTF-8"?>',
+           f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
+           f'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">']
+    if _FONT_FACE_CSS:
+        svg.append(f'<style type="text/css">\n{_FONT_FACE_CSS}\n</style>')
+
+    tx = L['x_margin']
+    esc_name = card.name.replace('&', '&amp;').replace('<', '&lt;')
+    pip_w = len(mana_pips) * (MANA_PIP_SIZE + MANA_PIP_GAP) + 14 if mana_pips else 0
+    name_avail = (L['x_right'] - tx) - pip_w
+    nf = title_font
+    if len(card.name) * nf * 0.58 > name_avail and name_avail > 0:
+        nf = max(22, int(nf * name_avail / (len(card.name) * nf * 0.58)))
+    ncy = (L['title_y0'] + L['title_y1']) / 2 + nf * 0.35
+    svg.append(f'<text x="{tx}" y="{ncy}" font-family="{NAME_FONT_FAMILY}" '
+               f'font-size="{nf}" font-weight="bold" fill="{bar_col}">{esc_name}</text>')
+
+    if mana_pips:
+        pcy = (L['title_y0'] + L['title_y1']) / 2
+        px = L['x_right']
+        for pip in reversed(mana_pips):
+            pxx = px - MANA_PIP_SIZE
+            svg.append(f'<circle cx="{pxx + MANA_PIP_SIZE/2 + 0.5}" cy="{pcy + 1}" '
+                       f'r="{MANA_PIP_SIZE/2}" fill="rgba(0,0,0,0.3)"/>')
+            svg.append(_pip_image_tag(pip, pxx, pcy - MANA_PIP_SIZE/2, MANA_PIP_SIZE))
+            px -= (MANA_PIP_SIZE + MANA_PIP_GAP)
+
+    esc_type = card.type_line.replace('&', '&amp;').replace('<', '&lt;')
+    type_w_avail = L['x_right'] - tx
+    tf = type_font
+    if len(card.type_line) * tf * 0.50 > type_w_avail and type_w_avail > 0:
+        tf = max(19, int(tf * type_w_avail / (len(card.type_line) * tf * 0.50)))
+    tcy = (L['type_y0'] + L['type_y1']) / 2 + tf * 0.35
+    svg.append(f'<text x="{tx}" y="{tcy}" font-family="{TYPE_FONT_FAMILY}" '
+               f'font-size="{tf}" font-weight="bold" fill="{bar_col}">{esc_type}</text>')
+
+    if card.oracle_text:
+        rbox_w = L['x_right'] - tx
+        rbox_top = L['rules_y0'] + 8
+        rbox_h = (L['rules_y1'] - L['rules_y0']) - 16
+        avoid_abs = None
+        if card.power is not None and card.toughness is not None and 'avoid' in L:
+            avoid_abs = L['avoid']
+        desired = int(fs.get('rules_font_size') or 30)
+
+        def _msr(f):
+            av = ((avoid_abs[0] - (rbox_top + f * 0.8), avoid_abs[1])
+                  if avoid_abs else None)
+            return _measure_rules_text(card.oracle_text, rbox_w, f,
+                                       int(RULES_LINE_H * f / RULES_FONT), avoid=av)
+
+        r_font = _max_fitting_rules_font(_msr, rbox_h, desired)
+        r_line = int(RULES_LINE_H * r_font / RULES_FONT)
+        if _msr(r_font) > rbox_h + 2:  # only possible at the hard floor
+            fs.setdefault('_quality', []).append(
+                f'rules_overflow: needs {_msr(r_font):.0f}px but box is {rbox_h:.0f}px (font {r_font})')
+        rules_lines, _ = render_rules_text_svg(
+            card.oracle_text, tx, rbox_top + r_font * 0.8,
+            rbox_w, rbox_h, r_font, r_line, text_color=rules_col, avoid=avoid_abs)
+        svg.extend(rules_lines)
+
+    if card.power is not None and card.toughness is not None:
+        svg.append(f'<text x="{L["pt_cx"]}" y="{L["pt_cy"] + pt_font * 0.35}" text-anchor="middle" '
+                   f'font-family="{PT_FONT_FAMILY}" font-size="{pt_font}" font-weight="bold" '
+                   f'fill="{pt_col}">{card.power}/{card.toughness}</text>')
+
+    svg.append('</svg>')
+    return '\n'.join(svg)
+
+
+# 8th Edition layout — pixel coords in 750x1050 from pack8th.js, confirmed
+# against asset alpha bounds (title y58.5-118, type y589.5-647, rules
+# y653-943.5). Bright metallic bars + white box -> BLACK text everywhere.
+EIGHTH_LAYOUT = {
+    'title_y0': 58, 'title_y1': 118,
+    'type_y0': 590, 'type_y1': 647,
+    'rules_y0': 659, 'rules_y1': 938,
+    'x_margin': 75, 'x_right': 680,
+    'pt_x': 542, 'pt_y': 924, 'pt_w': 161, 'pt_h': 88,
+    'pt_cx': 626, 'pt_cy': 963,
+    'avoid': (916.0, 457.0),   # P/T box top - pad, narrow line width
+}
+
+
+def _create_8th_text_svg(card: CardData, fs: dict) -> str:
+    """8th Edition text overlay: BLACK text on the bright metallic bars and
+    near-white rules box, black P/T."""
+    ink = '#1a1712'
+    return _create_bar_box_text_svg(card, fs, EIGHTH_LAYOUT,
+                                    bar_color=ink, rules_color=ink, pt_color=ink,
+                                    title_font=42, type_font=36, pt_font=40)
+
+
+# Mystical Archive layout — pixel coords in 750x1050 from
+# packMysticalArchive.js. Parchment banners and panel -> DARK text.
+MSA_LAYOUT = {
+    'title_y0': 55, 'title_y1': 112,
+    'type_y0': 595, 'type_y1': 652,
+    'rules_y0': 662, 'rules_y1': 955,
+    'x_margin': 70, 'x_right': 680,
+    'pt_x': 567, 'pt_y': 924, 'pt_w': 159, 'pt_h': 80,
+    'pt_cx': 646, 'pt_cy': 966,
+    'crown_h': 49,
+    'avoid': (916.0, 487.0),
+}
+
+
+def _create_msa_text_svg(card: CardData, fs: dict) -> str:
+    """Mystical Archive text overlay: dark text on the parchment banners,
+    panel, and P/T plate."""
+    ink = '#211a10'
+    return _create_bar_box_text_svg(card, fs, MSA_LAYOUT,
+                                    bar_color=ink, rules_color=ink, pt_color=ink)
+
+
 # LOTR "Ring" frame layout — pixel coords in 750x1050, from packRing.js bounds
 # confirmed against the assets' alpha bounds (title bar y56-116.5, type bar
 # y590.5-650.5, rules panel y656.5-965.5). Dark bars -> WHITE title/type text;
@@ -3220,6 +3370,18 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     grad_mode = _gradient_mode(card_dict, fs)
     two_keys = _two_color_keys(card_dict) if grad_mode else None
 
+    # 8th Edition ships dedicated COLORED LAND frames (wl/ul/bl/rl/gl/ml):
+    # lands with a color identity use their color's land variant instead of
+    # the plain colored (spell) frame; colorless lands keep 'l'.
+    if frame_set == '8th' and 'Land' in (card_dict.get('type_line') or ''):
+        _land_colors = card_dict.get('color_identity') or card_dict.get('colors') or []
+        if two_keys:
+            two_keys = (two_keys[0] + 'l', two_keys[1] + 'l')
+        elif len(_land_colors) == 1 and color_key in 'wubrg':
+            color_key = color_key + 'l'
+        elif len(_land_colors) >= 2:
+            color_key = 'ml'
+
     # Load main frame PNG (750×1050, RGBA — transparent art window)
     frame_img = None
     if two_keys:
@@ -3418,6 +3580,58 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
                 lay.paste(pt_img, (L['pt_x'], L['pt_y']))
                 result = Image.alpha_composite(result, lay)
 
+    if frame_set == '8th':
+        # P/T box at pack bounds. Land variants ('ul' etc.) have no pt assets —
+        # use the base color key for the plate.
+        if card.power is not None and card.toughness is not None:
+            L = EIGHTH_LAYOUT
+            base_keys = tuple(k.rstrip('l') or 'l' for k in two_keys) if two_keys else None
+            pt_img = None
+            if base_keys:
+                pt_img = _gradient_frame_image(frame_set, base_keys[0], base_keys[1],
+                                               subdir='pt/', blend=grad_mode)
+            if pt_img is None:
+                pt_img = _load_frame_image(frame_set, f'pt/{color_key.rstrip("l") or "l"}')
+            if pt_img is None:
+                pt_img = (_load_frame_image(frame_set, 'pt/a')
+                          or _load_frame_image(frame_set, 'pt/l'))
+            if pt_img is not None:
+                pt_img = pt_img.resize((L['pt_w'], L['pt_h']), Image.Resampling.LANCZOS)
+                lay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+                lay.paste(pt_img, (L['pt_x'], L['pt_y']))
+                result = Image.alpha_composite(result, lay)
+
+    if frame_set == 'mysticalArchive':
+        L = MSA_LAYOUT
+
+        def _msa_piece(subdir, key):
+            img = None
+            if two_keys:
+                img = _gradient_frame_image(frame_set, two_keys[0], two_keys[1],
+                                            subdir=subdir, blend=grad_mode)
+            if img is None:
+                img = _load_frame_image(frame_set, f'{subdir}{key}')
+            if img is None:  # no land assets — colorless 'c' doubles as land
+                img = _load_frame_image(frame_set, f'{subdir}c')
+            return img
+
+        # Arched crown strip across the top, legendary-gated
+        if 'Legendary' in (card.type_line or ''):
+            crown = _msa_piece('crowns/', color_key)
+            if crown is not None:
+                crown = crown.resize((CARD_WIDTH, L['crown_h']), Image.Resampling.LANCZOS)
+                lay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+                lay.paste(crown, (0, 0))
+                result = Image.alpha_composite(result, lay)
+
+        if card.power is not None and card.toughness is not None:
+            pt_img = _msa_piece('pt/', color_key)
+            if pt_img is not None:
+                pt_img = pt_img.resize((L['pt_w'], L['pt_h']), Image.Resampling.LANCZOS)
+                lay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+                lay.paste(pt_img, (L['pt_x'], L['pt_y']))
+                result = Image.alpha_composite(result, lay)
+
     if frame_set == 'crystal' and 'Legendary' in (card.type_line or ''):
         # Legendary crown of ice shards across the very top (separate per-color
         # strip asset, 1500x107; gradient-aware like the main frame).
@@ -3436,9 +3650,9 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
             crown_layer.paste(crown, (0, 0))
             result = Image.alpha_composite(result, crown_layer)
 
-    # Composite P/T box overlay for creatures (lotr draws its own above)
+    # Composite P/T box overlay for creatures (these sets draw their own above)
     has_pt = (card.power is not None and card.toughness is not None
-              and frame_set != 'lotr')
+              and frame_set not in ('lotr', '8th', 'mysticalArchive'))
     if has_pt and frame_set == 'crystal':
         # Crystal's pack defines exact P/T bounds — place the ice box there,
         # no m15-style rescale. Text is drawn by _create_crystal_text_svg.
@@ -3507,6 +3721,10 @@ def _render_image_frame(card_dict: dict, card: CardData, fs: dict) -> Image.Imag
         text_svg = _create_crystal_text_svg(card, fs)
     elif fs.get('layout') == 'lotr' or fs.get('frame_set') == 'lotr':
         text_svg = _create_lotr_text_svg(card, fs)
+    elif fs.get('layout') == '8th' or fs.get('frame_set') == '8th':
+        text_svg = _create_8th_text_svg(card, fs)
+    elif fs.get('layout') == 'msa' or fs.get('frame_set') == 'mysticalArchive':
+        text_svg = _create_msa_text_svg(card, fs)
     elif fs.get('layout') == 'abu' or fs.get('frame_set') == 'abu':
         text_svg = _create_abu_text_svg(card, fs)
     else:
@@ -3572,6 +3790,14 @@ def render_text_overlay(card_dict: dict, frame_settings: dict) -> bytes:
                                     output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
         if fs.get('layout') == 'lotr' or fs.get('frame_set') == 'lotr':
             text_svg = _create_lotr_text_svg(card, fs)
+            return cairosvg.svg2png(bytestring=text_svg.encode('utf-8'),
+                                    output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
+        if fs.get('layout') == '8th' or fs.get('frame_set') == '8th':
+            text_svg = _create_8th_text_svg(card, fs)
+            return cairosvg.svg2png(bytestring=text_svg.encode('utf-8'),
+                                    output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
+        if fs.get('layout') == 'msa' or fs.get('frame_set') == 'mysticalArchive':
+            text_svg = _create_msa_text_svg(card, fs)
             return cairosvg.svg2png(bytestring=text_svg.encode('utf-8'),
                                     output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
         if fs.get('layout') == 'abu' or fs.get('frame_set') == 'abu':
