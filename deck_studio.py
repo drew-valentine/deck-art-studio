@@ -10423,6 +10423,8 @@ async function loadFrameLayerForCanvas() {
 }
 
 function populateTextOverrides(card) {
+  const showcaseEl = document.getElementById('frameOverrideShowcase');
+  if (showcaseEl) showcaseEl.value = '';
   const nameEl = document.getElementById('frameOverrideName');
   const manaEl = document.getElementById('frameOverrideMana');
   const typeEl = document.getElementById('frameOverrideType');
@@ -10438,6 +10440,9 @@ function populateTextOverrides(card) {
 
   const ovr = card.frame_overrides || {};
   const textOvr = ovr.text_overrides || {};
+  // Restore the saved showcase name too — omitting it meant the next save
+  // wholesale-replaced frame_overrides WITHOUT it, silently deleting it.
+  if (textOvr.showcase_name && showcaseEl) showcaseEl.value = textOvr.showcase_name;
   if (textOvr.name && nameEl) nameEl.value = textOvr.name;
   if (textOvr.mana_cost && manaEl) manaEl.value = textOvr.mana_cost;
   if (textOvr.type_line && typeEl) typeEl.value = textOvr.type_line;
@@ -10518,7 +10523,10 @@ function gatherFrameSettings() {
     if (powerVal) textOvr.power = powerVal;
     if (toughVal) textOvr.toughness = toughVal;
     if (showcaseVal) textOvr.showcase_name = showcaseVal;
-    if (Object.keys(textOvr).length) settings.text_overrides = textOvr;
+    // Always attach (even empty): the live designer state is authoritative
+    // for previews — a cleared field must clear, not fall back to the saved
+    // per-card override.
+    settings.text_overrides = textOvr;
   }
 
   return settings;
@@ -10641,8 +10649,12 @@ async function applyFrameToChecked() {
   _frameDeckSettings = settings;
 
   // Persist the selected card's art pan/zoom BEFORE recompositing, so a
-  // repositioned art doesn't silently revert if that card is checked.
-  await persistSelectedCardFrameState(textOverrides);
+  // repositioned art doesn't silently revert if that card is checked — but
+  // ONLY when it IS checked; otherwise an unsaved experiment on the selected
+  // card would be silently made permanent by an unrelated batch apply.
+  if (selectedCard && checkedCards.has(selectedCard)) {
+    await persistSelectedCardFrameState(textOverrides);
+  }
 
   const names = [...checkedCards];
   const resp = await fetch('/api/recomposite-all', {

@@ -501,17 +501,20 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None) -> dict:
     # ── Build layers: start from style defaults (image-based styles have no layers) ──
     layers = copy.deepcopy(style.get('layers', {}))
 
-    # Apply deck-level layer overrides
+    # Apply deck-level layer overrides. setdefault: image-mode styles carry no
+    # layers dict, but legacy decks (e.g. v1 'modern' remapped to m15) may have
+    # saved layer overrides — indexing blind raised KeyError and made the whole
+    # deck unrenderable.
     deck_layers = deck_settings.get('layers', {})
     for key in FRAME_LAYER_ORDER:
         if key in deck_layers:
-            layers[key].update(deck_layers[key])
+            layers.setdefault(key, {}).update(deck_layers[key])
 
     # Apply card-level layer overrides
     card_layers = card_overrides.get('layers', {})
     for key in FRAME_LAYER_ORDER:
         if key in card_layers:
-            layers[key].update(card_layers[key])
+            layers.setdefault(key, {}).update(card_layers[key])
 
     # ── Build render params: start from defaults, apply style overrides ──
     render = dict(DEFAULT_RENDER_PARAMS)
@@ -527,12 +530,14 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None) -> dict:
         'render': render,
         'use_card_colors': deck_settings.get('use_card_colors', True),
         'color_overrides': {},
-        # Merge text overrides: saved per-card first, then the passed (live) settings
-        # on top — so the WYSIWYG preview reflects what's being typed right now,
-        # while final renders (deck settings carry no per-card text) use the saved
-        # card overrides.
-        'text_overrides': {**card_overrides.get('text_overrides', {}),
-                           **deck_settings.get('text_overrides', {})},
+        # Text overrides: when the passed (live designer) settings carry a
+        # text_overrides key, they are AUTHORITATIVE — merging saved values
+        # underneath resurrected fields the user had just cleared in the
+        # designer. Final renders (deck settings never carry per-card text)
+        # use the saved card overrides.
+        'text_overrides': (deck_settings['text_overrides']
+                           if 'text_overrides' in deck_settings
+                           else card_overrides.get('text_overrides', {})),
         'no_frame': style.get('no_frame', False),
         'show_oracle': style.get('show_oracle', True),
         'show_flavor': style.get('show_flavor', True),
@@ -2083,6 +2088,10 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
             if rules_used_h <= rules_max_h or pw_font <= RULES_FONT_FLOOR:
                 break
             pw_font -= 1
+        if rules_used_h > rules_max_h + 2:  # only possible at the hard floor
+            fs.setdefault('_quality', []).append(
+                f'rules_overflow: planeswalker needs {rules_used_h:.0f}px '
+                f'but box is {rules_max_h:.0f}px (font {pw_font})')
     elif show_oracle and rules_max_h > 0:
         oracle = card.oracle_text or ""
         desired = int(fs.get('rules_font_size') or RULES_FONT)
@@ -2666,6 +2675,10 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
             if rules_used_h <= rules_max_h or pw_font <= RULES_FONT_FLOOR:
                 break
             pw_font -= 1
+        if rules_used_h > rules_max_h + 2:  # only possible at the hard floor
+            fs.setdefault('_quality', []).append(
+                f'rules_overflow: planeswalker needs {rules_used_h:.0f}px '
+                f'but box is {rules_max_h:.0f}px (font {pw_font})')
     elif show_oracle and rules_max_h > 0:
         oracle = card.oracle_text or ""
         desired = int(fs.get('rules_font_size') or RULES_FONT)
@@ -2879,12 +2892,23 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
             return max(22, int(base_font * avail / est))
         return base_font
 
-    # ── Title (single line on the plain title bar) — shows the nickname if set,
-    # else the card name; the cardconjurer iko bar is one row (no sub-line). ──
-    bf = fit_font(big, 42)
-    cy = (L['title_y0'] + L['title_y1']) / 2 + bf * 0.35
-    svg.append(f'<text x="{tx}" y="{cy}" font-family="{NAME_FONT_FAMILY}" '
-               f'font-size="{bf}" font-weight="bold" fill="{white}">{big_esc}</text>')
+    # ── Title — the big showcase name, with the REAL card name small beneath
+    # it when a showcase name is set (like the printed Godzilla cards, and as
+    # the style description/tooltip promise). Single centered row otherwise. ──
+    if has_sub:
+        bf = fit_font(big, 34)
+        big_y = L['title_y0'] + bf * 0.92
+        svg.append(f'<text x="{tx}" y="{big_y}" font-family="{NAME_FONT_FAMILY}" '
+                   f'font-size="{bf}" font-weight="bold" fill="{white}">{big_esc}</text>')
+        sf = fit_font(card.name, 16, ratio=0.52)
+        sub_y = L['title_y1'] - 6
+        svg.append(f'<text x="{tx}" y="{sub_y}" font-family="{TYPE_FONT_FAMILY}" '
+                   f'font-size="{sf}" fill="{white}" opacity="0.9">{esc_name}</text>')
+    else:
+        bf = fit_font(big, 42)
+        cy = (L['title_y0'] + L['title_y1']) / 2 + bf * 0.35
+        svg.append(f'<text x="{tx}" y="{cy}" font-family="{NAME_FONT_FAMILY}" '
+                   f'font-size="{bf}" font-weight="bold" fill="{white}">{big_esc}</text>')
 
     # ── Mana pips (right-aligned in the title bar) ──
     if mana_pips:
@@ -3494,9 +3518,11 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     if frame_img is None:
         # Fallback to colorless if specific color not found
         frame_img = _load_frame_image(frame_set, 'c')
-    if frame_img is None and frame_set in ('abu', 'crystal', 'lotr',
+    if frame_img is None and frame_set in ('abu', 'crystal', 'lotr', 'iko',
                                            'sncArtDeco', 'neoSamurai'):
         # These sets have no colorless frame — fall back to artifact then land.
+        # (iko included: colorless non-artifact cards otherwise rendered a
+        # fully transparent frame in the Showcase style.)
         frame_img = _load_frame_image(frame_set, 'a') or _load_frame_image(frame_set, 'l')
         # (sncArtDeco/neoSamurai also have no land frame; artifact covers both.)
     if frame_img is None:
