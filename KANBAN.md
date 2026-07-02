@@ -69,6 +69,15 @@
 
 ## Done
 
+- [x] Planeswalker Frame Support | Priority: P1 | Completed: 2026-07-02 | Owner: drew-valentine
+  - Branch merged via PR #5 (squash-merged to main as commit 4ee9899)
+  - Tagged: v1.35.0 (GitHub release published)
+  - Loyalty rendering across all 12 frame styles with authentic cardconjurer badge art
+  - New dedicated "Planeswalker" frame style with M15 auto-routing
+  - Showcase text area expanded +41% via type-bar relocation
+  - 10 code-review findings fixed: loyalty regex MULTILINE + X costs, font-scaled band minimums, shield occlusion avoid, text color control, overflow flag sync, band truncation, m15 override honoring, gate dispatch consolidation
+  - Quality gate expanded to renderer-declared geometry containment, badge/shield/numeral centering probes, print-safe assertion, and a hostile battery walker (144 renders, 186 unit tests)
+
 - [x] Frame Editor Overhaul — "recreate any MTG frame, beautifully" | Priority: P1 | Completed: 2026-07-02 | Owner: drew-valentine
   - Branch: `feat/frame-editor` merged via PR #3
   - Tagged: v1.34.0
@@ -701,5 +710,7 @@ The project now supports completely local operation on Apple Silicon devices, re
 - v1.13.2: Persist model selection and add API key removal (#85) — model selection persists across reloads/restarts via backend_config.json, local models auto-load on startup, API key removal button added to UI.
 - v1.14.0: Frame Designer (#86) — new Frame tab in right sidebar with 6 presets (Classic, Borderless, Full Art, Minimal, Vintage, No Frame), opacity sliders, custom color controls with MTG quick-pick swatches, per-card text overrides, live preview, deck-level and per-card persistence, batch apply to checked cards.
 - v1.15.0: Frame Designer v2: WYSIWYG Canvas Editor (#88) — complete rewrite of frame editing with canvas-based compositor (FrameCompositor class, 3 layers: art/chrome/text), art panning via drag and zoom via scroll/slider, 5 frame styles (M15, Classic, Borderless, Full Art, Clean), per-card art offset/zoom persistence, new API endpoints (/api/frame-asset, /api/render-frame-layer, /api/render-text-overlay, /api/cards/art-position), intensity master slider, collapsible sections, sticky action bar. Also subsumes the Art Repositioning backlog item.
+
+- v1.35.0 (PR #5): Planeswalker frame support — loyalty rendering across all 12 frame styles with authentic cardconjurer badge art, new dedicated "Planeswalker" frame style with M15 auto-routing, Showcase text area expanded +41% via type-bar relocation, 10 code-review findings fixed (loyalty regex MULTILINE + X costs, font-scaled band minimums, shield occlusion avoid, text color control, overflow flag sync, band truncation, m15 override honoring, gate dispatch consolidation). Quality gate expanded to renderer-declared geometry containment, badge/shield/numeral centering probes, print-safe assertion, and a hostile battery walker (144 renders, 186 unit tests).
 
 All stale feature/fix branches have been purged. Only `main` and active PR branches remain.
