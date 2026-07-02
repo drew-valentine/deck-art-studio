@@ -3070,7 +3070,8 @@ def _is_planeswalker(card: CardData) -> bool:
 
 
 def _render_pw_content_svg(card: CardData, fs: dict, x0: float, y0: float,
-                           x1: float, y1: float, text_color: str) -> list:
+                           x1: float, y1: float, text_color: str,
+                           shield_center=None) -> list:
     """ALL planeswalker content for a badge-treatment style — ability badges,
     ability text, and the starting-loyalty shield — laid out to fit strictly
     INSIDE the content rect (x0,y0)-(x1,y1). The invariants, for any style:
@@ -3084,13 +3085,19 @@ def _render_pw_content_svg(card: CardData, fs: dict, x0: float, y0: float,
       fits the rect (content never truncates and never crosses y1)
     """
     rect_h = y1 - y0
-    # Starting-loyalty shield, fully inside the bottom-right corner
+    # Starting-loyalty shield: anchored ON the rect's bottom-right corner
+    # (straddling the box padding like a P/T plate), or at an explicit
+    # per-style anchor (e.g. lotr's P/T zone, clear of its holo stamp).
+    SHIELD_OVERHANG = 8
     shield = None
     if card.loyalty:
         sw = min(88.0, rect_h * 0.45)
         sh = sw * _LOYALTY_SHIELD_GEOM['aspect']
-        s_cx = x1 - sw * (1 - _LOYALTY_SHIELD_GEOM['cx']) - 3
-        s_cy = y1 - sh * (1 - _LOYALTY_SHIELD_GEOM['cy']) - 3
+        if shield_center is not None:
+            s_cx, s_cy = shield_center
+        else:
+            s_cx = x1 + SHIELD_OVERHANG - sw * (1 - _LOYALTY_SHIELD_GEOM['cx'])
+            s_cy = y1 + SHIELD_OVERHANG - sh * (1 - _LOYALTY_SHIELD_GEOM['cy'])
         shield = (s_cx, s_cy, sw, sh)
 
     pw_font = int(RULES_FONT * 0.82)
@@ -3590,7 +3597,8 @@ def _create_lotr_text_svg(card: CardData, fs: dict) -> str:
     # ── Rules text (DARK on the parchment panel) ──
     if card.oracle_text and _is_planeswalker(card):
         svg.extend(_render_pw_content_svg(card, fs, tx, L['rules_y0'] + 8,
-                                          L['x_right'], L['rules_y1'] - 8, dark))
+                                          L['x_right'], L['rules_y1'] - 8, dark,
+                                          shield_center=(L['pt_cx'], L['pt_cy'])))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8

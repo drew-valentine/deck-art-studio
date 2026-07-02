@@ -290,11 +290,29 @@ def _pw_rects():
     LC, LL = cfr.CRYSTAL_LAYOUT, cfr.LOTR_LAYOUT
     def bar(L):
         return (L['x_margin'], L['rules_y0'] + 8, L['x_right'], L['rules_y1'] - 8)
+    # (rect, shield_center override or None — must mirror the renderer's calls)
     return {
-        'godzilla': (cfr.IKO_LAYOUT['x_margin'], 788, cfr.IKO_LAYOUT['x_right'], 996),
-        'crystal': bar(LC), 'lotr': bar(LL), '8th': bar(L8), 'msa': bar(LM),
-        'artdeco': bar(LA), 'samurai': bar(LS), 'etched': bar(LE),
+        'godzilla': ((cfr.IKO_LAYOUT['x_margin'], 788, cfr.IKO_LAYOUT['x_right'], 996), None),
+        'crystal': (bar(LC), None), 'lotr': (bar(LL), (LL['pt_cx'], LL['pt_cy'])),
+        '8th': (bar(L8), None), 'msa': (bar(LM), None),
+        'artdeco': (bar(LA), None), 'samurai': (bar(LS), None),
+        'etched': (bar(LE), None),
     }
+
+
+def _shield_bbox(rect, shield_center):
+    """Mirror _render_pw_content_svg's shield placement exactly."""
+    x0, y0, x1, y1 = rect
+    g = cfr._LOYALTY_SHIELD_GEOM
+    sw = min(88.0, (y1 - y0) * 0.45)
+    sh = sw * g['aspect']
+    if shield_center is not None:
+        cx, cy = shield_center
+    else:
+        cx = x1 + 8 - sw * (1 - g['cx'])
+        cy = y1 + 8 - sh * (1 - g['cy'])
+    return (cx - g['cx'] * sw, cy - g['cy'] * sh,
+            cx + (1 - g['cx']) * sw, cy + (1 - g['cy']) * sh)
 
 
 def check_pw_content_in_rect():
@@ -306,7 +324,7 @@ def check_pw_content_in_rect():
     import copy as _copy
     jace = next(c for c in CARDS if c.get('loyalty'))
     issues = []
-    for style, (x0, y0, x1, y1) in _pw_rects().items():
+    for style, ((x0, y0, x1, y1), shield_center) in _pw_rects().items():
         fs = cfr.resolve_frame_settings(jace, {'style': style})
         full = cfr._build_card_data(jace, fs)
         blank_dict = dict(jace)
@@ -325,8 +343,19 @@ def check_pw_content_in_rect():
         if not ink.any():
             issues.append((style, 'pw_rect: no planeswalker ink rendered'))
             continue
-        ys, xs = np.where(ink)
+        # the shield legitimately straddles the corner — mask its expected
+        # bbox (+tolerance) out of the containment assertion, then assert
+        # the shield ink itself stays within that bbox
+        sb = _shield_bbox((x0, y0, x1, y1), shield_center)
         TOL = 3
+        in_shield = ((np.arange(ink.shape[1])[None, :] >= sb[0] - TOL) &
+                     (np.arange(ink.shape[1])[None, :] <= sb[2] + TOL) &
+                     (np.arange(ink.shape[0])[:, None] >= sb[1] - TOL) &
+                     (np.arange(ink.shape[0])[:, None] <= sb[3] + TOL))
+        body_ink = ink & ~in_shield
+        if not body_ink.any():
+            continue
+        ys, xs = np.where(body_ink)
         out = []
         if xs.min() < x0 - TOL: out.append(f'left {x0 - xs.min():.0f}px')
         if xs.max() > x1 + TOL: out.append(f'right {xs.max() - x1:.0f}px')
