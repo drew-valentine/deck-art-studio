@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 try:
     import cairosvg
-    from PIL import Image, ImageChops, ImageDraw
+    from PIL import Image, ImageDraw
     import xml.etree.ElementTree as ET
 except ImportError as e:
     raise ImportError(f"Required package missing: {e}. Install with: pip install cairosvg pillow")
@@ -276,12 +276,17 @@ DEFAULT_RENDER_PARAMS = {
 # The 'render' dict controls *how* visible layers look (shape, size, texture).
 # The 'layers' dict controls *which* layers are visible and their opacity.
 # ===========================================================================
+# Per-style designer controls: which settings the renderer actually honors.
+# 'colors': color_overrides keys that have an effect. 'box_opacity': rules-box
+# transparency slider. 'showcase': the big showcase-name field. The UI hides
+# anything not listed so no dead controls are shown.
 FRAME_STYLES = {
     'm15': {
         'label': 'M15',
         'description': 'Authentic M15 card frame from CardConjurer assets',
         'mode': 'image',
         'frame_set': 'm15',
+        'controls': {'colors': ['text']},
     },
     'classic': {
         'label': 'Classic',
@@ -344,6 +349,8 @@ FRAME_STYLES = {
         'mode': 'image',
         'frame_set': 'iko',
         'layout': 'iko',
+        'controls': {'colors': ['textbox', 'border', 'text'],
+                     'box_opacity': True, 'showcase': True},
     },
     'crystal': {
         'label': 'Crystal',
@@ -354,6 +361,7 @@ FRAME_STYLES = {
         'frame_set': 'crystal',
         'layout': 'crystal',
         'rules_text': 'light',   # light text on the dark stone box (quality gate inverts)
+        'controls': {'colors': ['text'], 'box_opacity': True},
     },
     'clean': {
         'label': 'Clean',
@@ -498,9 +506,6 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None) -> dict:
         # blend for 2-color cards), 'gradient', 'split', or 'off'/False (flat gold).
         'frame_gradient': card_overrides.get(
             'frame_gradient', deck_settings.get('frame_gradient', 'auto')),
-        # Godzilla/iko ornate nameplate toggle (card > deck > default on).
-        'ornate_nameplate': card_overrides.get(
-            'ornate_nameplate', deck_settings.get('ornate_nameplate', True)),
         # Godzilla/iko rules-box opacity 0..1 (transparency); card > deck.
         'box_opacity': card_overrides.get(
             'box_opacity', deck_settings.get('box_opacity', None)),
@@ -2495,7 +2500,8 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
     """
     layout = fs.get('layout') or M15_LAYOUT
     theme = dict(get_color_theme(card))
-    text_color = theme['text']
+    # Colors > Text override applies to all card text on image frames
+    text_color = (fs.get('color_overrides', {}) or {}).get('text') or theme['text']
     mana_pips = parse_mana_cost(card.mana_cost)
 
     # Layout positions from M15 layout
@@ -3187,15 +3193,22 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         # bleeding through washes out the LIGHT rules text (the old Godzilla box
         # defect). Self-composite the frame's own box region (selected by the
         # rules.png mask) to deepen opacity while keeping the stone texture.
+        # 'box_opacity' (0..1) sets the target; default 0.84 = the approved look.
+        # Floor is the asset's own ~0.45 (can't make the baked box thinner).
         rules_mask = _load_frame_image(frame_set, 'rules')
         if rules_mask is not None:
             if rules_mask.size != (CARD_WIDTH, CARD_HEIGHT):
                 rules_mask = rules_mask.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
-            box_layer = result.copy()
-            box_layer.putalpha(ImageChops.multiply(result.getchannel('A'),
-                                                   rules_mask.getchannel('A')))
-            result = Image.alpha_composite(result, box_layer)
-            result = Image.alpha_composite(result, box_layer)
+            a0 = 116 / 255.0  # measured alpha of the asset's stone box
+            bop = fs.get('box_opacity')
+            target = max(a0, min(0.98, bop)) if bop is not None else 0.84
+            # out = k + a0*(1-k) = target  ->  k = (target - a0) / (1 - a0)
+            k = max(0.0, min(1.0, (target - a0) / (1.0 - a0)))
+            if k > 0:
+                box_layer = result.copy()
+                box_layer.putalpha(rules_mask.getchannel('A').point(
+                    lambda v: int(v * k)))
+                result = Image.alpha_composite(result, box_layer)
 
     if frame_set == 'crystal' and 'Legendary' in (card.type_line or ''):
         # Legendary crown of ice shards across the very top (separate per-color

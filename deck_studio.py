@@ -4662,6 +4662,7 @@ def get_frame_styles():
             'layers': val.get('layers', {}),
             'no_frame': val.get('no_frame', False),
             'mode': val.get('mode', 'svg'),
+            'controls': val.get('controls', {}),
         }
     return jsonify({
         'styles': styles,
@@ -7406,27 +7407,27 @@ header .separator {
               </div>
               <div id="frameQuickSwatches" class="frame-quick-swatches" style="display:none;"></div>
               <div id="frameColorInputs" class="frame-color-inputs" style="display:none;">
-                <div class="frame-color-row">
+                <div class="frame-color-row" id="frameColorRowBg">
                   <span class="frame-color-label">Frame</span>
                   <input type="color" class="frame-color-picker" id="frameColorBg" value="#3B90B9">
                   <input type="text" class="frame-color-hex" id="frameColorBgHex" value="#3B90B9" maxlength="7">
                 </div>
-                <div class="frame-color-row">
+                <div class="frame-color-row" id="frameColorRowField">
                   <span class="frame-color-label">Fields</span>
                   <input type="color" class="frame-color-picker" id="frameColorField" value="#A9CCE5">
                   <input type="text" class="frame-color-hex" id="frameColorFieldHex" value="#A9CCE5" maxlength="7">
                 </div>
-                <div class="frame-color-row">
+                <div class="frame-color-row" id="frameColorRowTextbox">
                   <span class="frame-color-label">Textbox</span>
                   <input type="color" class="frame-color-picker" id="frameColorTextbox" value="#D2E4F4">
                   <input type="text" class="frame-color-hex" id="frameColorTextboxHex" value="#D2E4F4" maxlength="7">
                 </div>
-                <div class="frame-color-row">
+                <div class="frame-color-row" id="frameColorRowBorder">
                   <span class="frame-color-label">Border</span>
                   <input type="color" class="frame-color-picker" id="frameColorBorder" value="#1971CE">
                   <input type="text" class="frame-color-hex" id="frameColorBorderHex" value="#1971CE" maxlength="7">
                 </div>
-                <div class="frame-color-row">
+                <div class="frame-color-row" id="frameColorRowText">
                   <span class="frame-color-label">Text</span>
                   <input type="color" class="frame-color-picker" id="frameColorText" value="#000000">
                   <input type="text" class="frame-color-hex" id="frameColorTextHex" value="#000000" maxlength="7">
@@ -7445,13 +7446,6 @@ header .separator {
               <div class="frame-text-row" id="frameShowcaseRow" style="display:none;">
                 <label class="frame-text-label">Showcase Name</label>
                 <input type="text" class="frame-text-input" id="frameOverrideShowcase" placeholder="e.g. GODZILLA, KING OF THE MONSTERS" title="Big title for the Godzilla/showcase frame; the card's real name renders small beneath it.">
-              </div>
-              <div class="frame-text-row" id="frameOrnateRow" style="display:none;">
-                <label class="frame-text-label">Ornate Nameplate</label>
-                <label class="frame-auto-toggle" title="Use the ornate gold banner nameplate (as on the real Godzilla cards). Off = plain gold bar.">
-                  <input type="checkbox" id="frameOrnateNameplate" checked onchange="scheduleFramePreview()">
-                  <span>Gold banner ends</span>
-                </label>
               </div>
               <div class="frame-text-row" id="frameBoxOpacityRow" style="display:none;">
                 <label class="frame-text-label">Box Transparency</label>
@@ -9999,13 +9993,20 @@ function selectFrameStyle(key) {
     if (colorSection) colorSection.style.display = '';
   }
 
-  // Showcase-name field + ornate nameplate toggle: only for the Godzilla style.
+  // Per-style controls (from FRAME_STYLES metadata): only show settings the
+  // renderer actually honors for this style — no dead controls.
+  const controls = style.controls || {};
+  // SVG styles honor all five color overrides; image styles declare a subset.
+  const colorKeys = controls.colors ||
+    (style.mode === 'image' ? [] : ['bg', 'field', 'textbox', 'border', 'text']);
+  for (const suffix of ['Bg', 'Field', 'Textbox', 'Border', 'Text']) {
+    const row = document.getElementById('frameColorRow' + suffix);
+    if (row) row.style.display = colorKeys.includes(suffix.toLowerCase()) ? '' : 'none';
+  }
   const showcaseRow = document.getElementById('frameShowcaseRow');
-  if (showcaseRow) showcaseRow.style.display = (key === 'godzilla') ? '' : 'none';
-  const ornateRow = document.getElementById('frameOrnateRow');
-  if (ornateRow) ornateRow.style.display = (key === 'godzilla') ? '' : 'none';
+  if (showcaseRow) showcaseRow.style.display = controls.showcase ? '' : 'none';
   const boxOpRow = document.getElementById('frameBoxOpacityRow');
-  if (boxOpRow) boxOpRow.style.display = (key === 'godzilla') ? '' : 'none';
+  if (boxOpRow) boxOpRow.style.display = controls.box_opacity ? '' : 'none';
   // Rules Text Size applies to every frame style (they all have rules text).
   const rulesSizeRow = document.getElementById('frameRulesSizeRow');
   if (rulesSizeRow) rulesSizeRow.style.display = style.no_frame ? 'none' : '';
@@ -10053,10 +10054,13 @@ function populateFrameFromSettings(settings) {
   }
 
   setFrameGradient(settings.frame_gradient || 'auto');
-  const ornateEl = document.getElementById('frameOrnateNameplate');
-  if (ornateEl) ornateEl.checked = settings.ornate_nameplate !== false;  // default on
   const boxOpEl = document.getElementById('frameBoxOpacity');
-  if (boxOpEl) boxOpEl.value = Math.round((settings.box_opacity != null ? settings.box_opacity : 0.93) * 100);
+  if (boxOpEl) {
+    // Per-style defaults when unset: crystal deepens its stone box to 0.84,
+    // godzilla's approved cream box is ~0.93.
+    const defOp = _activeFrameStyle === 'crystal' ? 0.84 : 0.93;
+    boxOpEl.value = Math.round((settings.box_opacity != null ? settings.box_opacity : defOp) * 100);
+  }
   const rulesSzEl = document.getElementById('frameRulesSize');
   if (rulesSzEl) {
     rulesSzEl.value = settings.rules_font_size != null ? settings.rules_font_size : 30;
@@ -10411,14 +10415,16 @@ function gatherFrameSettings() {
     style: _activeFrameStyle,
     frame_gradient: _frameGradient,
   };
-  const ornateEl = document.getElementById('frameOrnateNameplate');
-  if (ornateEl) settings.ornate_nameplate = ornateEl.checked;
+  const style = _frameStyles[_activeFrameStyle];
+  // Box transparency: only persisted for styles whose renderer honors it
+  // (godzilla, crystal) — avoids polluting other styles' settings.
   const boxOpEl = document.getElementById('frameBoxOpacity');
-  if (boxOpEl) settings.box_opacity = parseInt(boxOpEl.value) / 100;
+  if (boxOpEl && style && style.controls && style.controls.box_opacity) {
+    settings.box_opacity = parseInt(boxOpEl.value) / 100;
+  }
   const rulesSzEl = document.getElementById('frameRulesSize');
   if (rulesSzEl) settings.rules_font_size = parseInt(rulesSzEl.value);
 
-  const style = _frameStyles[_activeFrameStyle];
   if (style && style.mode !== 'image') {
     settings.layers = {};
     for (const key of _frameLayerOrder) {
@@ -10437,10 +10443,14 @@ function gatherFrameSettings() {
 
   if (!useCardColors) {
     settings.color_overrides = {};
+    // Only persist color keys this style's renderer actually honors.
+    const styleControls = (style && style.controls) || {};
+    const supported = styleControls.colors ||
+      (style && style.mode === 'image' ? [] : ['bg', 'field', 'textbox', 'border', 'text']);
     const pairs = [['Bg','bg'],['Field','field'],['Textbox','textbox'],['Border','border'],['Text','text']];
     for (const [suffix, key] of pairs) {
       const picker = document.getElementById('frameColor' + suffix);
-      if (picker) settings.color_overrides[key] = picker.value;
+      if (picker && supported.includes(key)) settings.color_overrides[key] = picker.value;
     }
   }
 
@@ -10488,7 +10498,7 @@ function updateFrameTab() {
 }
 
 function resetTextOverrides() {
-  ['frameOverrideName','frameOverrideMana','frameOverrideType',
+  ['frameOverrideShowcase','frameOverrideName','frameOverrideMana','frameOverrideType',
    'frameOverrideOracle','frameOverridePower','frameOverrideToughness'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
