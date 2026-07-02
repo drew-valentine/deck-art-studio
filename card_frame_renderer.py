@@ -1791,7 +1791,7 @@ def render_planeswalker_abilities(card_oracle: str,
     badge_h = round(font_size * 2.96)       # height (shapes pad in 32×32 viewBox)
     badge_margin = round(font_size * 0.52)  # gap between badge and ability text
     text_indent = badge_w + badge_margin
-    badge_font_size = round(font_size * 1.22)  # bold cost text inside badge
+    badge_font_size = round(font_size * 1.02)  # bold cost text, breathing room in plate
 
     border_color = theme['border'] if theme else '#DAA520'
 
@@ -3321,9 +3321,9 @@ def _create_pw_frame_text_svg(card: CardData, fs: dict) -> str:
                 # plate center on the band center at x56 w74)
                 disp = cost.replace('−', '-')
                 gx = 56 + _BADGE_GEOM[_badge_icon_for(cost)]['cx'] * 74
-                svg.append(f'<text x="{gx:.1f}" y="{(y0 + y1) / 2 + 24 * 0.35}" '
+                svg.append(f'<text x="{gx:.1f}" y="{(y0 + y1) / 2 + 21 * 0.35}" '
                            f'text-anchor="middle" font-family="{PT_FONT_FAMILY}" '
-                           f'font-size="24" font-weight="bold" fill="white">{disp}</text>')
+                           f'font-size="21" font-weight="bold" fill="white">{disp}</text>')
     elif card.oracle_text:
         # not actually ability-structured — plain rules text on a light band
         lines, _ = render_rules_text_svg(card.oracle_text, L['text_x'],
