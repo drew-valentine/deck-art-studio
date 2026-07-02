@@ -205,6 +205,12 @@ def check_rules_render_full(card, style):
             svg = cfr._create_8th_text_svg(cardobj, fs)
         elif fs.get('frame_set') == 'mysticalArchive':
             svg = cfr._create_msa_text_svg(cardobj, fs)
+        elif fs.get('frame_set') == 'sncArtDeco':
+            svg = cfr._create_artdeco_text_svg(cardobj, fs)
+        elif fs.get('frame_set') == 'neoSamurai':
+            svg = cfr._create_samurai_text_svg(cardobj, fs)
+        elif fs.get('frame_set') == 'etched':
+            svg = cfr._create_etched_text_svg(cardobj, fs)
         elif fs.get('mode') == 'image':
             svg = cfr._create_text_only_svg(cardobj, fs)
         else:

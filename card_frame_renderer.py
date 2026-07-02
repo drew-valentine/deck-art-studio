@@ -325,6 +325,36 @@ FRAME_STYLES = {
         'controls': {'colors': ['textbox', 'border', 'text'],
                      'box_opacity': True, 'showcase': True},
     },
+    'artdeco': {
+        'label': 'Art Deco',
+        'description': 'New Capenna Art Deco showcase — geometric gilded frame, dark bars with '
+                       'light title, parchment rules panel. Built from the cardconjurer '
+                       'snc/artDeco assets.',
+        'mode': 'image',
+        'frame_set': 'sncArtDeco',
+        'layout': 'artdeco',
+        'controls': {'colors': ['text']},
+    },
+    'samurai': {
+        'label': 'Samurai',
+        'description': 'Kamigawa Neon Dynasty samurai showcase — brushed dark frame with light '
+                       'text and a rare stamp. Built from the cardconjurer neo/samurai assets.',
+        'mode': 'image',
+        'frame_set': 'neoSamurai',
+        'layout': 'samurai',
+        'rules_text': 'light',
+        'controls': {'colors': ['text']},
+    },
+    'etched': {
+        'label': 'Etched',
+        'description': 'Commander etched-foil frame — dark engraved metal with light text and a '
+                       'holo stamp. Built from the cardconjurer etched assets.',
+        'mode': 'image',
+        'frame_set': 'etched',
+        'layout': 'etched',
+        'rules_text': 'light',
+        'controls': {'colors': ['text']},
+    },
     '8th': {
         'label': '8th Edition',
         'description': 'The iconic 2003-2014 modern border — metallic beveled bars, inset art '
@@ -3007,6 +3037,72 @@ def _create_bar_box_text_svg(card: CardData, fs: dict, L: dict,
     return '\n'.join(svg)
 
 
+# New Capenna Art Deco — pack SNCArtDeco.js bounds in 750x1050. Dark bars ->
+# white title/type; light geometric rules panel -> dark rules text.
+ARTDECO_LAYOUT = {
+    'title_y0': 55, 'title_y1': 112,
+    'type_y0': 595, 'type_y1': 652,
+    'rules_y0': 662, 'rules_y1': 946,
+    'x_margin': 64, 'x_right': 690,
+    'pt_x': 576, 'pt_y': 930, 'pt_w': 145, 'pt_h': 61,
+    'pt_cx': 648, 'pt_cy': 964,
+    'crown': (21, 21, 708, 102),
+    'avoid': (922.0, 502.0),
+}
+
+
+def _create_artdeco_text_svg(card: CardData, fs: dict) -> str:
+    """Art Deco: white title/type on the dark bars, dark rules on the light
+    panel, white P/T."""
+    return _create_bar_box_text_svg(card, fs, ARTDECO_LAYOUT,
+                                    bar_color='#f6f1e6', rules_color='#1a1712',
+                                    pt_color='#f6f1e6')
+
+
+# Kamigawa Samurai showcase — packNeoSamurai.js bounds. Dark brushed frame ->
+# LIGHT text everywhere.
+SAMURAI_LAYOUT = {
+    'title_y0': 72, 'title_y1': 129,
+    'type_y0': 595, 'type_y1': 652,
+    'rules_y0': 662, 'rules_y1': 946,
+    'x_margin': 64, 'x_right': 690,
+    'pt_x': 573, 'pt_y': 930, 'pt_w': 147, 'pt_h': 71,
+    'pt_cx': 646, 'pt_cy': 971,
+    'crown': (22, 17, 707, 79),
+    'stamp': (326, 952, 97, 44),
+    'avoid': (922.0, 499.0),
+}
+
+
+def _create_samurai_text_svg(card: CardData, fs: dict) -> str:
+    """Samurai: light text everywhere on the dark brushed frame."""
+    w = '#f2f3f5'
+    return _create_bar_box_text_svg(card, fs, SAMURAI_LAYOUT,
+                                    bar_color=w, rules_color=w, pt_color=w)
+
+
+# Commander Etched foil — packEtched.js bounds. Dark engraved metal -> LIGHT
+# text everywhere.
+ETCHED_LAYOUT = {
+    'title_y0': 55, 'title_y1': 112,
+    'type_y0': 595, 'type_y1': 652,
+    'rules_y0': 662, 'rules_y1': 955,
+    'x_margin': 70, 'x_right': 685,
+    'pt_x': 568, 'pt_y': 929, 'pt_w': 141, 'pt_h': 77,
+    'pt_cx': 646, 'pt_cy': 966,
+    'crown': (23, 20, 704, 97),
+    'stamp': (315, 951, 120, 48),
+    'avoid': (921.0, 488.0),
+}
+
+
+def _create_etched_text_svg(card: CardData, fs: dict) -> str:
+    """Etched: light text everywhere on the dark engraved frame."""
+    w = '#f2f3f5'
+    return _create_bar_box_text_svg(card, fs, ETCHED_LAYOUT,
+                                    bar_color=w, rules_color=w, pt_color=w)
+
+
 # 8th Edition layout — pixel coords in 750x1050 from pack8th.js, confirmed
 # against asset alpha bounds (title y58.5-118, type y589.5-647, rules
 # y653-943.5). Bright metallic bars + white box -> BLACK text everywhere.
@@ -3370,6 +3466,12 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     grad_mode = _gradient_mode(card_dict, fs)
     two_keys = _two_color_keys(card_dict) if grad_mode else None
 
+    # Samurai's artifact frame is a borderless variant with a TRANSPARENT
+    # rules region — light rules text over arbitrary art is illegible. Route
+    # artifact/colorless/land to the opaque gold frame instead.
+    if frame_set == 'neoSamurai' and color_key in ('a', 'c', 'l'):
+        color_key = 'm'
+
     # 8th Edition ships dedicated COLORED LAND frames (wl/ul/bl/rl/gl/ml):
     # lands with a color identity use their color's land variant instead of
     # the plain colored (spell) frame; colorless lands keep 'l'.
@@ -3392,9 +3494,11 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     if frame_img is None:
         # Fallback to colorless if specific color not found
         frame_img = _load_frame_image(frame_set, 'c')
-    if frame_img is None and frame_set in ('abu', 'crystal', 'lotr'):
+    if frame_img is None and frame_set in ('abu', 'crystal', 'lotr',
+                                           'sncArtDeco', 'neoSamurai'):
         # These sets have no colorless frame — fall back to artifact then land.
         frame_img = _load_frame_image(frame_set, 'a') or _load_frame_image(frame_set, 'l')
+        # (sncArtDeco/neoSamurai also have no land frame; artifact covers both.)
     if frame_img is None:
         # No frame images available — return empty
         return Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
@@ -3632,6 +3736,53 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
                 lay.paste(pt_img, (L['pt_x'], L['pt_y']))
                 result = Image.alpha_composite(result, lay)
 
+    # Data-driven overlays (crown/stamp/P/T at pack bounds) for the newer
+    # image sets that all share the same structure. 'crown_dir' pieces are
+    # legendary-gated; 'stamp' composites always; all gradient-aware.
+    _OVERLAY_SETS = {
+        'sncArtDeco': {'crown_dir': 'crowns/', 'layout': ARTDECO_LAYOUT},
+        'neoSamurai': {'crown_dir': 'crown/', 'layout': SAMURAI_LAYOUT,
+                       'stamp_flat': 'stamp'},
+        'etched': {'crown_dir': 'crowns/', 'layout': ETCHED_LAYOUT,
+                   'stamp_dir': 'holo/'},
+    }
+    if frame_set in _OVERLAY_SETS:
+        spec = _OVERLAY_SETS[frame_set]
+        L = spec['layout']
+
+        def _set_piece(subdir, key):
+            img = None
+            if two_keys:
+                img = _gradient_frame_image(frame_set, two_keys[0], two_keys[1],
+                                            subdir=subdir, blend=grad_mode)
+            if img is None:
+                img = _load_frame_image(frame_set, f'{subdir}{key}')
+            if img is None:  # per-set gaps (e.g. samurai has no artifact crown)
+                img = (_load_frame_image(frame_set, f'{subdir}m')
+                       or _load_frame_image(frame_set, f'{subdir}a'))
+            return img
+
+        def _paste(img, box):
+            x, y, w, h = box
+            img = img.resize((w, h), Image.Resampling.LANCZOS)
+            lay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+            lay.paste(img, (x, y))
+            return Image.alpha_composite(result, lay)
+
+        if 'crown' in L and 'Legendary' in (card.type_line or ''):
+            crown = _set_piece(spec['crown_dir'], color_key)
+            if crown is not None:
+                result = _paste(crown, L['crown'])
+        if 'stamp' in L:
+            stamp = (_load_frame_image(frame_set, spec['stamp_flat'])
+                     if 'stamp_flat' in spec else _set_piece(spec['stamp_dir'], color_key))
+            if stamp is not None:
+                result = _paste(stamp, L['stamp'])
+        if card.power is not None and card.toughness is not None:
+            pt_img = _set_piece('pt/', color_key)
+            if pt_img is not None:
+                result = _paste(pt_img, (L['pt_x'], L['pt_y'], L['pt_w'], L['pt_h']))
+
     if frame_set == 'crystal' and 'Legendary' in (card.type_line or ''):
         # Legendary crown of ice shards across the very top (separate per-color
         # strip asset, 1500x107; gradient-aware like the main frame).
@@ -3652,7 +3803,8 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
 
     # Composite P/T box overlay for creatures (these sets draw their own above)
     has_pt = (card.power is not None and card.toughness is not None
-              and frame_set not in ('lotr', '8th', 'mysticalArchive'))
+              and frame_set not in ('lotr', '8th', 'mysticalArchive',
+                                    'sncArtDeco', 'neoSamurai', 'etched'))
     if has_pt and frame_set == 'crystal':
         # Crystal's pack defines exact P/T bounds — place the ice box there,
         # no m15-style rescale. Text is drawn by _create_crystal_text_svg.
@@ -3725,6 +3877,12 @@ def _render_image_frame(card_dict: dict, card: CardData, fs: dict) -> Image.Imag
         text_svg = _create_8th_text_svg(card, fs)
     elif fs.get('layout') == 'msa' or fs.get('frame_set') == 'mysticalArchive':
         text_svg = _create_msa_text_svg(card, fs)
+    elif fs.get('layout') == 'artdeco' or fs.get('frame_set') == 'sncArtDeco':
+        text_svg = _create_artdeco_text_svg(card, fs)
+    elif fs.get('layout') == 'samurai' or fs.get('frame_set') == 'neoSamurai':
+        text_svg = _create_samurai_text_svg(card, fs)
+    elif fs.get('layout') == 'etched' or fs.get('frame_set') == 'etched':
+        text_svg = _create_etched_text_svg(card, fs)
     elif fs.get('layout') == 'abu' or fs.get('frame_set') == 'abu':
         text_svg = _create_abu_text_svg(card, fs)
     else:
@@ -3798,6 +3956,14 @@ def render_text_overlay(card_dict: dict, frame_settings: dict) -> bytes:
                                     output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
         if fs.get('layout') == 'msa' or fs.get('frame_set') == 'mysticalArchive':
             text_svg = _create_msa_text_svg(card, fs)
+            return cairosvg.svg2png(bytestring=text_svg.encode('utf-8'),
+                                    output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
+        _new_sets = {'artdeco': _create_artdeco_text_svg, 'sncArtDeco': _create_artdeco_text_svg,
+                     'samurai': _create_samurai_text_svg, 'neoSamurai': _create_samurai_text_svg,
+                     'etched': _create_etched_text_svg}
+        _fn = _new_sets.get(fs.get('layout')) or _new_sets.get(fs.get('frame_set'))
+        if _fn:
+            text_svg = _fn(card, fs)
             return cairosvg.svg2png(bytestring=text_svg.encode('utf-8'),
                                     output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
         if fs.get('layout') == 'abu' or fs.get('frame_set') == 'abu':
