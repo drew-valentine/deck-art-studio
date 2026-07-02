@@ -2889,12 +2889,12 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
 # must stay above that or it spills below the box onto the art).
 IKO_LAYOUT = {  # measured from the cardconjurer iko asset's real boxes
     'title_y0': 43, 'title_y1': 117,
-    'type_y0': 726, 'type_y1': 803,
-    # Tall cream box drawn over the rules area. Text band expanded vs the
-    # original 818-998: tighter top padding under the type bar, deeper bottom.
-    # Bottom is capped by the 3mm print-safe zone (36px at 11.9px/mm) so the
-    # box border and P/T plate survive proxy cutting tolerances.
-    'rules_y0': 800, 'rules_y1': 996,
+    'type_y0': 644, 'type_y1': 721,   # relocated type bar (was 726-803)
+    # Type bar is RELOCATED 82px up at composite time (see the iko branch of
+    # _compose_image_frame_base) and the cream box fills the vacated space —
+    # the text band is ~277px, in parity with the other styles. Bottom is
+    # capped by the 3mm print-safe zone (36px at 11.9px/mm).
+    'rules_y0': 719, 'rules_y1': 996,
     'x_margin': 62, 'x_right': 690,
     'pt_y': 1012,
 }
@@ -2982,9 +2982,8 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
     # font 29), not a small gap — passing a tiny value crams every line on top
     # of the next. Use the real line height and shrink the font for long oracles.
     if card.oracle_text and _is_planeswalker(card):
-        # box top moves up to 780 for planeswalkers (see _compose_image_frame_base)
-        svg.extend(_render_pw_content_svg(card, fs, tx, 788,
-                                          L['x_right'], 996, dark))
+        svg.extend(_render_pw_content_svg(card, fs, tx, L['rules_y0'] + 8,
+                                          L['x_right'], L['rules_y1'], dark))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8
@@ -3877,6 +3876,18 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     # the user approved ("much much better").
     if frame_set == 'iko':
         import numpy as np
+        # Taller text area (user request: parity with the other styles): the
+        # asset's baked type bar (y726-804) is relocated 82px up over the art
+        # and the cream box extends into the vacated space — text band grows
+        # from 196px to ~277px. Same cut-and-move technique as LOTR's bottom
+        # mask; works for gradient frames since it operates on the loaded
+        # (possibly blended) frame.
+        _TYPE_SHIFT = 82
+        _strip = result.crop((0, 726, CARD_WIDTH, 804))
+        _ra = np.array(result)
+        _ra[726:804, :, 3] = 0
+        result = Image.fromarray(_ra, 'RGBA')
+        result.paste(_strip, (0, 726 - _TYPE_SHIFT), _strip)
         # Accent sampled from BOTH sides of the frame: on a two-color gradient
         # frame the left and right accents differ (e.g. blue|red), and the box
         # border / P/T plate outline must follow — a single left-side sample
@@ -3904,12 +3915,10 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         bop = fs.get('box_opacity')
         box_alpha = int(round(max(0.0, min(1.0, bop)) * 255)) if bop is not None else 236
 
-        # by0 raised to meet the type bar bottom so there's no transparent art gap
-        # (seam) between the type bar and the cream rules box. by1 keeps the box
-        # border ~4mm inside the cut line for print-safe proxy trimming.
-        # Planeswalkers get every available pixel (box hugs the type bar).
-        _pw_card = card.loyalty is not None and _LOYALTY_RE.search(card.oracle_text or '')
-        bx0, by0, bx1, by1, rad = 47, (780 if _pw_card else 792), 703, 1004, 22
+        # by0 meets the RELOCATED type bar bottom (722) with the same 11px
+        # seam overlap the approved design had; by1 keeps the box border
+        # ~4mm inside the cut line for print-safe proxy trimming.
+        bx0, by0, bx1, by1, rad = 47, 711, 703, 1004, 22
         SS = 4
         big = Image.new('RGBA', (CARD_WIDTH * SS, CARD_HEIGHT * SS), (0, 0, 0, 0))
         bd = ImageDraw.Draw(big)
