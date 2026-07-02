@@ -2298,10 +2298,13 @@ def _cover_crop(img, target_w, target_h):
 def _cover_crop_with_offset(img, target_w, target_h, offset_x=0, offset_y=0, zoom=1.0):
     """Scale image with user pan/zoom, place on target canvas.
 
-    Matches the Frame Designer's canvas rendering:
-    - At zoom >= 1.0: art covers the canvas, excess is cropped
-    - At zoom < 1.0: art is smaller than canvas, placed centered with
-      dark background behind it (matching the WYSIWYG preview)
+    Mirrors the Frame Designer canvas EXACTLY (dx = (W - sw)/2 + offset):
+    the scaled art is pasted at the precise pan position over a dark
+    background, with NO clamping. If the user drags the art past the cover
+    boundary in the editor, the final composite shows the same dark gap the
+    WYSIWYG preview showed — the editor is the single source of truth.
+    (The old version clamped the crop to keep art covering the card, which
+    made saved positions silently snap back in the composite.)
 
     offset_x, offset_y: pixel offsets at the target resolution (+ = right/down)
     zoom: multiplier on top of the base cover-fit scale (1.0 = no extra zoom)
@@ -2312,23 +2315,12 @@ def _cover_crop_with_offset(img, target_w, target_h, offset_x=0, offset_y=0, zoo
     scaled_h = round(img.height * scale)
     img = img.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
 
-    covers_w = scaled_w >= target_w
-    covers_h = scaled_h >= target_h
-
-    if covers_w and covers_h:
-        # Art covers canvas — crop to target
-        cx = (scaled_w - target_w) / 2 - offset_x
-        cy = (scaled_h - target_h) / 2 - offset_y
-        cx = max(0, min(cx, scaled_w - target_w))
-        cy = max(0, min(cy, scaled_h - target_h))
-        return img.crop((int(cx), int(cy), int(cx) + target_w, int(cy) + target_h))
-    else:
-        # Art smaller than canvas — place centered on dark background
-        canvas = Image.new('RGB', (target_w, target_h), (10, 10, 10))
-        dx = (target_w - scaled_w) // 2 + int(offset_x)
-        dy = (target_h - scaled_h) // 2 + int(offset_y)
-        canvas.paste(img, (dx, dy))
-        return canvas
+    # Same math as FrameCompositor.render(): center, then apply user offset.
+    canvas = Image.new('RGB', (target_w, target_h), (10, 10, 10))
+    dx = round((target_w - scaled_w) / 2 + offset_x)
+    dy = round((target_h - scaled_h) / 2 + offset_y)
+    canvas.paste(img, (dx, dy))
+    return canvas
 
 
 def _build_card_data(card_dict: dict, frame_settings: dict = None) -> CardData:
