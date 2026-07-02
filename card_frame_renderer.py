@@ -325,6 +325,16 @@ FRAME_STYLES = {
         'controls': {'colors': ['textbox', 'border', 'text'],
                      'box_opacity': True, 'showcase': True},
     },
+    'lotr': {
+        'label': 'LOTR',
+        'description': "Tales of Middle-earth 'Ring' showcase — circular ring-inscription art "
+                       'window, wavy legendary crown, parchment rules panel and holo stamp. '
+                       'Built from the cardconjurer LOTR frame assets.',
+        'mode': 'image',
+        'frame_set': 'lotr',
+        'layout': 'lotr',
+        'controls': {'colors': ['text']},
+    },
     'crystal': {
         'label': 'Crystal',
         'description': 'Shattered-ice showcase — crystalline border with a legendary crown of '
@@ -2889,6 +2899,114 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
     return '\n'.join(svg)
 
 
+# LOTR "Ring" frame layout — pixel coords in 750x1050, from packRing.js bounds
+# confirmed against the assets' alpha bounds (title bar y56-116.5, type bar
+# y590.5-650.5, rules panel y656.5-965.5). Dark bars -> WHITE title/type text;
+# light parchment panel -> DARK rules text. The holo stamp sits bottom-center
+# INSIDE the panel footprint, so the text band ends above it (y940).
+LOTR_LAYOUT = {
+    'title_y0': 56, 'title_y1': 117,
+    'type_y0': 590, 'type_y1': 650,
+    'rules_y0': 662, 'rules_y1': 940,
+    'x_margin': 64, 'x_right': 690,
+    # P/T plate (packRing.js: 1148,1857 268x134 at 1500x2100)
+    'pt_x': 574, 'pt_y': 928, 'pt_w': 134, 'pt_h': 67,
+    'pt_cx': 643, 'pt_cy': 963,          # P/T text center (pack pt bounds)
+    # holo stamp (packRing.js: 644,1893 212x95)
+    'stamp_x': 322, 'stamp_y': 946, 'stamp_w': 106, 'stamp_h': 48,
+    'crown_h': 136,                       # wavy legendary crown (1500x272)
+}
+
+
+def _create_lotr_text_svg(card: CardData, fs: dict) -> str:
+    """Text overlay for the LOTR "Ring" frame: white beleren title/type on the
+    dark blue bars, DARK rules text on the light parchment panel, white P/T.
+    Rendered in 750x1050 pixel space to match the measured frame."""
+    L = LOTR_LAYOUT
+    W, H = CARD_WIDTH, CARD_HEIGHT
+    mana_pips = parse_mana_cost(card.mana_cost)
+    # Colors > Text override applies to ALL card text, like the other styles.
+    _ovr = (fs.get('color_overrides', {}) or {}).get('text')
+    white = _ovr or '#f6f1e6'
+    dark = _ovr or '#1a1712'
+
+    svg = ['<?xml version="1.0" encoding="UTF-8"?>',
+           f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
+           f'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">']
+    if _FONT_FACE_CSS:
+        svg.append(f'<style type="text/css">\n{_FONT_FACE_CSS}\n</style>')
+
+    tx = L['x_margin']
+    esc_name = card.name.replace('&', '&amp;').replace('<', '&lt;')
+    pip_w = len(mana_pips) * (MANA_PIP_SIZE + MANA_PIP_GAP) + 14 if mana_pips else 0
+    name_avail = (L['x_right'] - tx) - pip_w
+    nf = 40  # packRing.js title size 0.0381 * 1050
+    if len(card.name) * nf * 0.58 > name_avail and name_avail > 0:
+        nf = max(22, int(nf * name_avail / (len(card.name) * nf * 0.58)))
+    ncy = (L['title_y0'] + L['title_y1']) / 2 + nf * 0.35
+    svg.append(f'<text x="{tx}" y="{ncy}" font-family="{NAME_FONT_FAMILY}" '
+               f'font-size="{nf}" font-weight="bold" fill="{white}">{esc_name}</text>')
+
+    # ── Mana pips (right-aligned in the title bar) ──
+    if mana_pips:
+        pcy = (L['title_y0'] + L['title_y1']) / 2
+        px = L['x_right']
+        for pip in reversed(mana_pips):
+            pxx = px - MANA_PIP_SIZE
+            svg.append(f'<circle cx="{pxx + MANA_PIP_SIZE/2 + 0.5}" cy="{pcy + 1}" '
+                       f'r="{MANA_PIP_SIZE/2}" fill="rgba(0,0,0,0.3)"/>')
+            svg.append(_pip_image_tag(pip, pxx, pcy - MANA_PIP_SIZE/2, MANA_PIP_SIZE))
+            px -= (MANA_PIP_SIZE + MANA_PIP_GAP)
+
+    # ── Type line (white on the dark type bar), fit to width ──
+    esc_type = card.type_line.replace('&', '&amp;').replace('<', '&lt;')
+    type_w_avail = L['x_right'] - tx
+    tf = 34  # packRing.js type size 0.0324 * 1050
+    if len(card.type_line) * tf * 0.50 > type_w_avail and type_w_avail > 0:
+        tf = max(19, int(tf * type_w_avail / (len(card.type_line) * tf * 0.50)))
+    tcy = (L['type_y0'] + L['type_y1']) / 2 + tf * 0.35
+    svg.append(f'<text x="{tx}" y="{tcy}" font-family="{TYPE_FONT_FAMILY}" '
+               f'font-size="{tf}" font-weight="bold" fill="{white}">{esc_type}</text>')
+
+    # ── Rules text (DARK on the parchment panel) ──
+    if card.oracle_text:
+        rbox_w = L['x_right'] - tx
+        rbox_top = L['rules_y0'] + 8
+        rbox_h = (L['rules_y1'] - L['rules_y0']) - 16
+        # Creatures: wrap bottom lines narrower around the P/T plate (x574, y928).
+        avoid_abs = None
+        if card.power is not None and card.toughness is not None:
+            avoid_abs = (920.0, 502.0)  # (plate top - pad, narrow line width)
+        # Rules Text Size is a CEILING: find the max font that fits so text
+        # always renders completely and can never overflow the box.
+        desired = int(fs.get('rules_font_size') or 30)
+
+        def _msr(f):
+            av = ((avoid_abs[0] - (rbox_top + f * 0.8), avoid_abs[1])
+                  if avoid_abs else None)
+            return _measure_rules_text(card.oracle_text, rbox_w, f,
+                                       int(RULES_LINE_H * f / RULES_FONT), avoid=av)
+
+        r_font = _max_fitting_rules_font(_msr, rbox_h, desired)
+        r_line = int(RULES_LINE_H * r_font / RULES_FONT)
+        if _msr(r_font) > rbox_h + 2:  # only possible at the hard floor
+            fs.setdefault('_quality', []).append(
+                f'rules_overflow: needs {_msr(r_font):.0f}px but box is {rbox_h:.0f}px (font {r_font})')
+        rules_lines, _ = render_rules_text_svg(
+            card.oracle_text, tx, rbox_top + r_font * 0.8,
+            rbox_w, rbox_h, r_font, r_line, text_color=dark, avoid=avoid_abs)
+        svg.extend(rules_lines)
+
+    # ── P/T (white, centered on the plate drawn by the frame compositor) ──
+    if card.power is not None and card.toughness is not None:
+        svg.append(f'<text x="{L["pt_cx"]}" y="{L["pt_cy"] + 36 * 0.35}" text-anchor="middle" '
+                   f'font-family="{PT_FONT_FAMILY}" font-size="36" font-weight="bold" '
+                   f'fill="{white}">{card.power}/{card.toughness}</text>')
+
+    svg.append('</svg>')
+    return '\n'.join(svg)
+
+
 # Crystal frame layout — pixel coords in 750x1050, converted from cardconjurer's
 # packCrystal.js bounds (fractions of 1500x2100) and confirmed against the
 # assets' alpha bounds. All bars and the rules box are dark stone -> LIGHT text.
@@ -3109,7 +3227,7 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     if frame_img is None:
         # Fallback to colorless if specific color not found
         frame_img = _load_frame_image(frame_set, 'c')
-    if frame_img is None and frame_set in ('abu', 'crystal'):
+    if frame_img is None and frame_set in ('abu', 'crystal', 'lotr'):
         # These sets have no colorless frame — fall back to artifact then land.
         frame_img = _load_frame_image(frame_set, 'a') or _load_frame_image(frame_set, 'l')
     if frame_img is None:
@@ -3238,6 +3356,48 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
                     lambda v: int(v * k)))
                 result = Image.alpha_composite(result, box_layer)
 
+    if frame_set == 'lotr':
+        L = LOTR_LAYOUT
+
+        def _lotr_piece(subdir, key):
+            """Load a lotr sub-asset, gradient-aware for two-color cards."""
+            img = None
+            if two_keys:
+                img = _gradient_frame_image(frame_set, two_keys[0], two_keys[1],
+                                            subdir=subdir, blend=grad_mode)
+            if img is None:
+                img = _load_frame_image(frame_set, f'{subdir}{key}')
+            if img is None:  # colorless fallback mirrors the base frame's
+                img = (_load_frame_image(frame_set, f'{subdir}a')
+                       or _load_frame_image(frame_set, f'{subdir}m'))
+            return img
+
+        # Wavy legendary crown across the very top
+        if 'Legendary' in (card.type_line or ''):
+            crown = _lotr_piece('crown/', color_key)
+            if crown is not None:
+                crown = crown.resize((CARD_WIDTH, L['crown_h']), Image.Resampling.LANCZOS)
+                lay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+                lay.paste(crown, (0, 0))
+                result = Image.alpha_composite(result, lay)
+
+        # Holo stamp, bottom center (always — per-color foil triangle)
+        stamp = _lotr_piece('stamp/', color_key)
+        if stamp is not None:
+            stamp = stamp.resize((L['stamp_w'], L['stamp_h']), Image.Resampling.LANCZOS)
+            lay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+            lay.paste(stamp, (L['stamp_x'], L['stamp_y']))
+            result = Image.alpha_composite(result, lay)
+
+        # P/T plate at pack bounds (text drawn by _create_lotr_text_svg)
+        if card.power is not None and card.toughness is not None:
+            pt_img = _lotr_piece('pt/', color_key)
+            if pt_img is not None:
+                pt_img = pt_img.resize((L['pt_w'], L['pt_h']), Image.Resampling.LANCZOS)
+                lay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+                lay.paste(pt_img, (L['pt_x'], L['pt_y']))
+                result = Image.alpha_composite(result, lay)
+
     if frame_set == 'crystal' and 'Legendary' in (card.type_line or ''):
         # Legendary crown of ice shards across the very top (separate per-color
         # strip asset, 1500x107; gradient-aware like the main frame).
@@ -3256,8 +3416,9 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
             crown_layer.paste(crown, (0, 0))
             result = Image.alpha_composite(result, crown_layer)
 
-    # Composite P/T box overlay for creatures
-    has_pt = card.power is not None and card.toughness is not None
+    # Composite P/T box overlay for creatures (lotr draws its own above)
+    has_pt = (card.power is not None and card.toughness is not None
+              and frame_set != 'lotr')
     if has_pt and frame_set == 'crystal':
         # Crystal's pack defines exact P/T bounds — place the ice box there,
         # no m15-style rescale. Text is drawn by _create_crystal_text_svg.
@@ -3324,6 +3485,8 @@ def _render_image_frame(card_dict: dict, card: CardData, fs: dict) -> Image.Imag
         text_svg = _create_iko_text_svg(card, fs)
     elif fs.get('layout') == 'crystal' or fs.get('frame_set') == 'crystal':
         text_svg = _create_crystal_text_svg(card, fs)
+    elif fs.get('layout') == 'lotr' or fs.get('frame_set') == 'lotr':
+        text_svg = _create_lotr_text_svg(card, fs)
     elif fs.get('layout') == 'abu' or fs.get('frame_set') == 'abu':
         text_svg = _create_abu_text_svg(card, fs)
     else:
@@ -3385,6 +3548,10 @@ def render_text_overlay(card_dict: dict, frame_settings: dict) -> bytes:
                                     output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
         if fs.get('layout') == 'crystal' or fs.get('frame_set') == 'crystal':
             text_svg = _create_crystal_text_svg(card, fs)
+            return cairosvg.svg2png(bytestring=text_svg.encode('utf-8'),
+                                    output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
+        if fs.get('layout') == 'lotr' or fs.get('frame_set') == 'lotr':
+            text_svg = _create_lotr_text_svg(card, fs)
             return cairosvg.svg2png(bytestring=text_svg.encode('utf-8'),
                                     output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
         if fs.get('layout') == 'abu' or fs.get('frame_set') == 'abu':

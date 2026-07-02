@@ -199,6 +199,8 @@ def check_rules_render_full(card, style):
             svg = cfr._create_iko_text_svg(cardobj, fs)
         elif fs.get('frame_set') == 'crystal':
             svg = cfr._create_crystal_text_svg(cardobj, fs)
+        elif fs.get('frame_set') == 'lotr':
+            svg = cfr._create_lotr_text_svg(cardobj, fs)
         elif fs.get('mode') == 'image':
             svg = cfr._create_text_only_svg(cardobj, fs)
         else:
