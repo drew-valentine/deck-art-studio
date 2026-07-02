@@ -2316,7 +2316,11 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
         loy_size = 96
         g = _LOYALTY_SHIELD_GEOM
         loy_cx = (VB_W - art_m) + 8 - loy_size * (1 - g['cx'])
-        loy_cy = rules_bottom + 8 - (loy_size * g['aspect']) * (1 - g['cy'])
+        # center ON the textbox bottom edge (straddle, like the pw frame's
+        # baked plate), print-safe capped (1014px scaled to VB units)
+        _limit_vb = 1014 * VB_H / CARD_HEIGHT
+        loy_cy = min(rules_bottom + 8,
+                     _limit_vb - (loy_size * g['aspect']) * (1 - g['cy']))
         _sx, _sy = CARD_WIDTH / VB_W, CARD_HEIGHT / VB_H
         fs['_pw_shield_bbox'] = ((loy_cx - g['cx'] * loy_size) * _sx,
                                  (loy_cy - g['cy'] * loy_size * g['aspect']) * _sy,
@@ -3048,15 +3052,23 @@ def _render_pw_content_svg(card: CardData, fs: dict, x0: float, y0: float,
     # (straddling the box padding like a P/T plate), or at an explicit
     # per-style anchor (e.g. lotr's P/T zone, clear of its holo stamp).
     SHIELD_OVERHANG = 8
+    # Consistent rule across ALL styles (matches the Planeswalker frame's
+    # baked plate): the shield's vertical CENTER sits on the visual box
+    # bottom edge (rect y1 + inset), straddling half-in/half-out, with the
+    # right edge kissing the box border. Deep boxes are capped so the shield
+    # bottom stays inside the 3mm print-safe zone (y<=1014, like P/T plates).
+    SHIELD_PRINT_LIMIT = 1014
     shield = None
     if card.loyalty:
+        g = _LOYALTY_SHIELD_GEOM
         sw = min(88.0, rect_h * 0.45)
-        sh = sw * _LOYALTY_SHIELD_GEOM['aspect']
+        sh = sw * g['aspect']
         if shield_center is not None:
             s_cx, s_cy = shield_center
         else:
-            s_cx = x1 + SHIELD_OVERHANG - sw * (1 - _LOYALTY_SHIELD_GEOM['cx'])
-            s_cy = y1 + SHIELD_OVERHANG - sh * (1 - _LOYALTY_SHIELD_GEOM['cy'])
+            s_cx = x1 + SHIELD_OVERHANG - sw * (1 - g['cx'])
+            s_cy = min(y1 + SHIELD_OVERHANG,
+                       SHIELD_PRINT_LIMIT - sh * (1 - g['cy']))
         shield = (s_cx, s_cy, sw, sh)
         g = _LOYALTY_SHIELD_GEOM
         fs['_pw_shield_bbox'] = (s_cx - g['cx'] * sw, s_cy - g['cy'] * sh,

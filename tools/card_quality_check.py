@@ -338,6 +338,9 @@ def check_pw_content_in_rect():
             body_ink = ink & ~in_shield
         else:
             body_ink = ink
+        if sb is not None and sb[3] > 1015:
+            issues.append((style, f'pw_shield_print_unsafe: bottom y{sb[3]:.0f} '
+                                  f'past the 3mm limit (1014)'))
         if not body_ink.any():
             continue
         ys, xs = np.where(body_ink)
