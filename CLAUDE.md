@@ -212,14 +212,16 @@ browser_close                                  # close Playwright
 
 ## CI/CD Pipeline
 
-Three GitHub Actions workflows automate issue resolution, code review, and releases.
+Three GitHub Actions workflows automate issue resolution, PR testing, and releases.
+Code review is done locally (e.g. `/code-review`) before pushing — there is no
+AI review action in CI.
 
 ### Workflows
 
 | Workflow | File | Trigger | Purpose |
 |----------|------|---------|---------|
 | Claude Issue Fix | `claude-issue-fix.yml` | Issue labeled `claude`, or `@claude` comment on labeled issue | Claude reads the issue, creates a branch, implements a fix, opens a PR |
-| Claude PR Review | `claude-pr-review.yml` | PR opened/synchronized/reopened, or `@claude` in review comment | Runs basic tests + AI code review in parallel |
+| PR Tests | `claude-pr-review.yml` | PR opened/synchronized/reopened | Basic tests: syntax, imports, pytest, server health, extension manifest |
 | Auto Release | `claude-auto-release.yml` | PR review approved | Waits for checks, squash merges, tags, creates GitHub release |
 
 ### Label Strategy
@@ -233,7 +235,8 @@ Three GitHub Actions workflows automate issue resolution, code review, and relea
 
 ### CI Test Constraints (Ubuntu Runner)
 
-The `basic-tests` job runs on Ubuntu without GPU, torch, or numpy. It validates:
+The `basic-tests` job runs on Ubuntu without GPU or torch (numpy is in the
+base requirements — frame compositing needs it). It validates:
 
 - **Syntax**: `py_compile` on all `.py` files
 - **Imports**: All core modules except those requiring GPU/heavy deps

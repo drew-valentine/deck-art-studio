@@ -599,7 +599,7 @@ def create_deck(deck_name: str, cards: list = None, prompts: list = None,
         'inspiration_image': None,           # filename in deck dir
         'inspiration_style_description': '',  # from GPT-4o vision analysis
         'cards': cards or [],
-        'frame_settings': {'style': 'classic'},
+        'frame_settings': {'style': 'basic'},
         'art_orientation': 'portrait',
     }
     with open(deck_dir / "deck.json", 'w') as f:
@@ -4662,6 +4662,7 @@ def get_frame_styles():
             'layers': val.get('layers', {}),
             'no_frame': val.get('no_frame', False),
             'mode': val.get('mode', 'svg'),
+            'controls': val.get('controls', {}),
         }
     return jsonify({
         'styles': styles,
@@ -5836,6 +5837,17 @@ button:active, .btn:active { transform: scale(0.97); }
 }
 .frame-auto-toggle input { accent-color: var(--gold); }
 .frame-quick-swatches { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+/* Two-color frame (gradient/split/gold) segmented control */
+.fd-gradient-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.fd-gradient-label { font-size: 0.78em; color: var(--text-dim); white-space: nowrap; }
+.fd-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.fd-seg-btn {
+  background: var(--surface); color: var(--text-dim); border: none;
+  padding: 4px 9px; font-size: 0.74em; cursor: pointer; border-right: 1px solid var(--border);
+}
+.fd-seg-btn:last-child { border-right: none; }
+.fd-seg-btn:hover { color: var(--text); }
+.fd-seg-btn.active { background: var(--gold); color: #1a1a1a; font-weight: 600; }
 .frame-swatch {
   width: 32px; height: 32px; border-radius: 50%; cursor: pointer;
   border: 2px solid transparent; transition: all var(--transition);
@@ -7383,29 +7395,39 @@ header .separator {
                 <input type="checkbox" id="frameAutoColors" checked onchange="toggleFrameAutoColors()">
                 <span>Auto (from card colors)</span>
               </label>
+              <!-- Two-color (multi-type land / gold) frame mode -->
+              <div class="fd-gradient-row" id="fdGradientRow">
+                <span class="fd-gradient-label">Two-color frame</span>
+                <div class="fd-seg" id="fdGradientSeg">
+                  <button type="button" data-grad="auto" class="fd-seg-btn active" onclick="setFrameGradient('auto')" title="Smooth gradient for 2-color cards (default)">Auto</button>
+                  <button type="button" data-grad="gradient" class="fd-seg-btn" onclick="setFrameGradient('gradient')" title="Force a smooth left→right color blend">Blend</button>
+                  <button type="button" data-grad="split" class="fd-seg-btn" onclick="setFrameGradient('split')" title="Hard left/right color split down the middle">Split</button>
+                  <button type="button" data-grad="off" class="fd-seg-btn" onclick="setFrameGradient('off')" title="Flat gold multicolor frame (no gradient)">Gold</button>
+                </div>
+              </div>
               <div id="frameQuickSwatches" class="frame-quick-swatches" style="display:none;"></div>
               <div id="frameColorInputs" class="frame-color-inputs" style="display:none;">
-                <div class="frame-color-row">
+                <div class="frame-color-row" id="frameColorRowBg">
                   <span class="frame-color-label">Frame</span>
                   <input type="color" class="frame-color-picker" id="frameColorBg" value="#3B90B9">
                   <input type="text" class="frame-color-hex" id="frameColorBgHex" value="#3B90B9" maxlength="7">
                 </div>
-                <div class="frame-color-row">
+                <div class="frame-color-row" id="frameColorRowField">
                   <span class="frame-color-label">Fields</span>
                   <input type="color" class="frame-color-picker" id="frameColorField" value="#A9CCE5">
                   <input type="text" class="frame-color-hex" id="frameColorFieldHex" value="#A9CCE5" maxlength="7">
                 </div>
-                <div class="frame-color-row">
+                <div class="frame-color-row" id="frameColorRowTextbox">
                   <span class="frame-color-label">Textbox</span>
                   <input type="color" class="frame-color-picker" id="frameColorTextbox" value="#D2E4F4">
                   <input type="text" class="frame-color-hex" id="frameColorTextboxHex" value="#D2E4F4" maxlength="7">
                 </div>
-                <div class="frame-color-row">
+                <div class="frame-color-row" id="frameColorRowBorder">
                   <span class="frame-color-label">Border</span>
                   <input type="color" class="frame-color-picker" id="frameColorBorder" value="#1971CE">
                   <input type="text" class="frame-color-hex" id="frameColorBorderHex" value="#1971CE" maxlength="7">
                 </div>
-                <div class="frame-color-row">
+                <div class="frame-color-row" id="frameColorRowText">
                   <span class="frame-color-label">Text</span>
                   <input type="color" class="frame-color-picker" id="frameColorText" value="#000000">
                   <input type="text" class="frame-color-hex" id="frameColorTextHex" value="#000000" maxlength="7">
@@ -7421,6 +7443,28 @@ header .separator {
               <span class="fd-section-arrow" id="fdTextContentArrow">&#9656;</span>
             </div>
             <div class="fd-section-body" id="fdTextContent" style="display:none;">
+              <div class="frame-text-row" id="frameShowcaseRow" style="display:none;">
+                <label class="frame-text-label">Showcase Name</label>
+                <input type="text" class="frame-text-input" id="frameOverrideShowcase" placeholder="e.g. GODZILLA, KING OF THE MONSTERS" title="Big title for the Godzilla/showcase frame; the card's real name renders small beneath it.">
+              </div>
+              <div class="frame-text-row" id="frameBottomMaskRow" style="display:none;">
+                <label class="frame-text-label">Bottom Mask</label>
+                <label class="frame-auto-toggle" title="The rounded black mask across the card bottom. Off = art runs to the bottom edge.">
+                  <input type="checkbox" id="frameBottomMask" checked onchange="scheduleFramePreview()">
+                  <span>Show rounded bottom</span>
+                </label>
+              </div>
+              <div class="frame-text-row" id="frameBoxOpacityRow" style="display:none;">
+                <label class="frame-text-label">Box Transparency</label>
+                <input type="range" class="frame-layer-slider" id="frameBoxOpacity" min="30" max="100" step="1" value="93"
+                       oninput="scheduleFramePreview()" title="Rules-box opacity — lower lets more art show through.">
+              </div>
+              <div class="frame-text-row" id="frameRulesSizeRow" style="display:none;">
+                <label class="frame-text-label">Rules Text Size</label>
+                <input type="range" class="frame-layer-slider" id="frameRulesSize" min="16" max="60" step="1" value="30"
+                       oninput="document.getElementById('frameRulesSizeVal').textContent=this.value+'pt'; scheduleFramePreview()" title="Rules text point size (long oracles still shrink to fit).">
+                <span id="frameRulesSizeVal" class="frame-layer-val" style="width:auto;">30pt</span>
+              </div>
               <div class="frame-text-row">
                 <label class="frame-text-label">Card Name</label>
                 <input type="text" class="frame-text-input" id="frameOverrideName" placeholder="">
@@ -9653,7 +9697,7 @@ let _frameLayerOrder = [];
 let _frameLayerMeta = {};
 let _frameDeckSettings = {};
 let _framePreviewTimer = null;
-let _activeFrameStyle = 'classic';
+let _activeFrameStyle = 'basic';
 let _fdCompositor = null;  // FrameCompositor instance
 
 const SWATCH_COLORS = {
@@ -9925,6 +9969,37 @@ function setColorInputs(theme) {
   }
 }
 
+// Which frame layer(s) each color picker actually drives (SVG styles).
+// A picker row only shows while at least one of its layers is visible, so
+// users never see a control that does nothing (e.g. classic hides its Frame
+// layer by default -> no Frame picker until the layer is enabled).
+// Border also drives the P/T box fill, so it stays while pt_box is visible.
+const COLOR_ROW_LAYERS = {
+  Bg: ['frame'],
+  Field: ['title_bar', 'type_bar'],
+  Textbox: ['text_box'],
+  Border: ['border', 'pt_box'],
+  Text: [],  // text always renders
+};
+
+function updateColorRowVisibility() {
+  const style = _frameStyles[_activeFrameStyle] || {};
+  for (const [suffix, layerKeys] of Object.entries(COLOR_ROW_LAYERS)) {
+    const row = document.getElementById('frameColorRow' + suffix);
+    if (!row) continue;
+    let show;
+    if (style.mode === 'image') {
+      show = ((style.controls || {}).colors || []).includes(suffix.toLowerCase());
+    } else {
+      show = layerKeys.length === 0 || layerKeys.some(lk => {
+        const vis = document.getElementById('frameVis_' + lk);
+        return vis ? vis.checked : false;
+      });
+    }
+    row.style.display = show ? '' : 'none';
+  }
+}
+
 function selectFrameStyle(key) {
   _activeFrameStyle = key;
 
@@ -9956,6 +10031,20 @@ function selectFrameStyle(key) {
     if (colorSection) colorSection.style.display = '';
   }
 
+  // Per-style controls (from FRAME_STYLES metadata): only show settings the
+  // renderer actually honors for this style — no dead controls.
+  const controls = style.controls || {};
+  updateColorRowVisibility();
+  const showcaseRow = document.getElementById('frameShowcaseRow');
+  if (showcaseRow) showcaseRow.style.display = controls.showcase ? '' : 'none';
+  const boxOpRow = document.getElementById('frameBoxOpacityRow');
+  if (boxOpRow) boxOpRow.style.display = controls.box_opacity ? '' : 'none';
+  const bottomMaskRow = document.getElementById('frameBottomMaskRow');
+  if (bottomMaskRow) bottomMaskRow.style.display = controls.bottom_mask ? '' : 'none';
+  // Rules Text Size applies to every frame style (they all have rules text).
+  const rulesSizeRow = document.getElementById('frameRulesSizeRow');
+  if (rulesSizeRow) rulesSizeRow.style.display = style.no_frame ? 'none' : '';
+
   // Reload frame layer on canvas
   loadFrameLayerForCanvas();
 }
@@ -9972,14 +10061,14 @@ function setLayerControls(key, visible, opacity) {
 }
 
 function populateFrameFromSettings(settings) {
-  const styleMap = {classic:'classic', modern:'m15', borderless:'classic',
-                    minimal:'classic', 'full-art':'full-art', nyx:'m15',
+  const styleMap = {classic:'basic', basic:'basic', modern:'m15', borderless:'basic',
+                    minimal:'basic', 'full-art':'clean', nyx:'m15',
                     vintage:'m15', retro:'m15', frameless:'clean', clean:'clean',
                     m15:'m15'};
   if (settings.preset && !settings.style) {
-    selectFrameStyle(styleMap[settings.preset] || 'classic');
+    selectFrameStyle(styleMap[settings.preset] || 'basic');
   } else {
-    const rawStyle = settings.style || 'classic';
+    const rawStyle = settings.style || 'basic';
     selectFrameStyle(styleMap[rawStyle] || rawStyle);
   }
 
@@ -9987,6 +10076,7 @@ function populateFrameFromSettings(settings) {
     for (const [key, cfg] of Object.entries(settings.layers)) {
       setLayerControls(key, cfg.visible || false, cfg.opacity || 0);
     }
+    updateColorRowVisibility();  // saved layer visibility gates the pickers
   }
 
   const autoColors = settings.use_card_colors !== false;
@@ -9997,6 +10087,23 @@ function populateFrameFromSettings(settings) {
   if (settings.color_overrides && Object.keys(settings.color_overrides).length) {
     setColorInputs(settings.color_overrides);
   }
+
+  setFrameGradient(settings.frame_gradient || 'auto');
+  const boxOpEl = document.getElementById('frameBoxOpacity');
+  if (boxOpEl) {
+    // Per-style defaults when unset: crystal deepens its stone box to 0.84,
+    // godzilla's approved cream box is ~0.93.
+    const defOp = _activeFrameStyle === 'crystal' ? 0.84 : 0.93;
+    boxOpEl.value = Math.round((settings.box_opacity != null ? settings.box_opacity : defOp) * 100);
+  }
+  const rulesSzEl = document.getElementById('frameRulesSize');
+  if (rulesSzEl) {
+    rulesSzEl.value = settings.rules_font_size != null ? settings.rules_font_size : 30;
+    const rulesSzVal = document.getElementById('frameRulesSizeVal');
+    if (rulesSzVal) rulesSzVal.textContent = rulesSzEl.value + 'pt';
+  }
+  const bottomMaskEl = document.getElementById('frameBottomMask');
+  if (bottomMaskEl) bottomMaskEl.checked = settings.bottom_mask !== false;  // default on
 }
 
 function wireFrameInputs() {
@@ -10006,6 +10113,7 @@ function wireFrameInputs() {
     if (vis) vis.addEventListener('change', () => {
       const row = document.getElementById('frameLayer_' + key);
       if (row) row.classList.toggle('disabled', !vis.checked);
+      updateColorRowVisibility();  // color pickers follow their layer
       scheduleFramePreview();
     });
     if (slider) slider.addEventListener('input', () => {
@@ -10026,7 +10134,7 @@ function wireFrameInputs() {
     }
   }
   // Text override inputs → debounced preview
-  ['frameOverrideName','frameOverrideMana','frameOverrideType',
+  ['frameOverrideShowcase','frameOverrideName','frameOverrideMana','frameOverrideType',
    'frameOverrideOracle','frameOverridePower','frameOverrideToughness'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', () => scheduleFramePreview());
@@ -10265,6 +10373,12 @@ async function loadFrameDesignerForCard(cardName) {
   // Load frame + text layers
   await loadFrameLayerForCanvas();
   if (loading) loading.classList.remove('visible');
+
+  // If nothing loaded, the canvas is a silent black box — say what happened
+  // (most often the Flask server isn't running / was restarted).
+  if (!_fdCompositor.artImage && !_fdCompositor.frameImage) {
+    showToast('Frame preview failed to load — is the server running? Try refreshing.', 'error');
+  }
 }
 
 async function loadFrameLayerForCanvas() {
@@ -10309,6 +10423,8 @@ async function loadFrameLayerForCanvas() {
 }
 
 function populateTextOverrides(card) {
+  const showcaseEl = document.getElementById('frameOverrideShowcase');
+  if (showcaseEl) showcaseEl.value = '';
   const nameEl = document.getElementById('frameOverrideName');
   const manaEl = document.getElementById('frameOverrideMana');
   const typeEl = document.getElementById('frameOverrideType');
@@ -10324,6 +10440,9 @@ function populateTextOverrides(card) {
 
   const ovr = card.frame_overrides || {};
   const textOvr = ovr.text_overrides || {};
+  // Restore the saved showcase name too — omitting it meant the next save
+  // wholesale-replaced frame_overrides WITHOUT it, silently deleting it.
+  if (textOvr.showcase_name && showcaseEl) showcaseEl.value = textOvr.showcase_name;
   if (textOvr.name && nameEl) nameEl.value = textOvr.name;
   if (textOvr.mana_cost && manaEl) manaEl.value = textOvr.mana_cost;
   if (textOvr.type_line && typeEl) typeEl.value = textOvr.type_line;
@@ -10332,12 +10451,33 @@ function populateTextOverrides(card) {
   if (textOvr.toughness && toughEl) toughEl.value = textOvr.toughness;
 }
 
+let _frameGradient = 'auto';
+function setFrameGradient(mode) {
+  _frameGradient = mode;
+  document.querySelectorAll('#fdGradientSeg .fd-seg-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.grad === mode));
+  scheduleFramePreview();
+}
+
 function gatherFrameSettings() {
   const settings = {
     style: _activeFrameStyle,
+    frame_gradient: _frameGradient,
   };
-
   const style = _frameStyles[_activeFrameStyle];
+  // Box transparency: only persisted for styles whose renderer honors it
+  // (godzilla, crystal) — avoids polluting other styles' settings.
+  const boxOpEl = document.getElementById('frameBoxOpacity');
+  if (boxOpEl && style && style.controls && style.controls.box_opacity) {
+    settings.box_opacity = parseInt(boxOpEl.value) / 100;
+  }
+  const bottomMaskEl = document.getElementById('frameBottomMask');
+  if (bottomMaskEl && style && style.controls && style.controls.bottom_mask) {
+    settings.bottom_mask = bottomMaskEl.checked;
+  }
+  const rulesSzEl = document.getElementById('frameRulesSize');
+  if (rulesSzEl) settings.rules_font_size = parseInt(rulesSzEl.value);
+
   if (style && style.mode !== 'image') {
     settings.layers = {};
     for (const key of _frameLayerOrder) {
@@ -10356,10 +10496,14 @@ function gatherFrameSettings() {
 
   if (!useCardColors) {
     settings.color_overrides = {};
+    // Only persist color keys this style's renderer actually honors.
+    const styleControls = (style && style.controls) || {};
+    const supported = styleControls.colors ||
+      (style && style.mode === 'image' ? [] : ['bg', 'field', 'textbox', 'border', 'text']);
     const pairs = [['Bg','bg'],['Field','field'],['Textbox','textbox'],['Border','border'],['Text','text']];
     for (const [suffix, key] of pairs) {
       const picker = document.getElementById('frameColor' + suffix);
-      if (picker) settings.color_overrides[key] = picker.value;
+      if (picker && supported.includes(key)) settings.color_overrides[key] = picker.value;
     }
   }
 
@@ -10371,13 +10515,18 @@ function gatherFrameSettings() {
     const oracleVal = document.getElementById('frameOverrideOracle')?.value?.trim();
     const powerVal = document.getElementById('frameOverridePower')?.value?.trim();
     const toughVal = document.getElementById('frameOverrideToughness')?.value?.trim();
+    const showcaseVal = document.getElementById('frameOverrideShowcase')?.value?.trim();
     if (nameVal) textOvr.name = nameVal;
     if (manaVal) textOvr.mana_cost = manaVal;
     if (typeVal) textOvr.type_line = typeVal;
     if (oracleVal) textOvr.oracle_text = oracleVal;
     if (powerVal) textOvr.power = powerVal;
     if (toughVal) textOvr.toughness = toughVal;
-    if (Object.keys(textOvr).length) settings.text_overrides = textOvr;
+    if (showcaseVal) textOvr.showcase_name = showcaseVal;
+    // Always attach (even empty): the live designer state is authoritative
+    // for previews — a cleared field must clear, not fall back to the saved
+    // per-card override.
+    settings.text_overrides = textOvr;
   }
 
   return settings;
@@ -10405,12 +10554,38 @@ function updateFrameTab() {
 }
 
 function resetTextOverrides() {
-  ['frameOverrideName','frameOverrideMana','frameOverrideType',
+  ['frameOverrideShowcase','frameOverrideName','frameOverrideMana','frameOverrideType',
    'frameOverrideOracle','frameOverridePower','frameOverrideToughness'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
   scheduleFramePreview();
+}
+
+// Persist the selected card's WYSIWYG state (art pan/zoom + text overrides).
+// Shared by Save Frame and Apply to Checked so a repositioned art never
+// silently reverts when the composite re-renders.
+async function persistSelectedCardFrameState(textOverrides) {
+  if (!selectedCard) return;
+  const cardOverrides = {};
+  if (textOverrides && Object.keys(textOverrides).length) {
+    cardOverrides.text_overrides = textOverrides;
+  }
+  if (_fdCompositor) {
+    const artState = _fdCompositor.getArtState();
+    cardOverrides.art_offset = artState.offset;
+    cardOverrides.art_zoom = artState.zoom;
+  }
+  if (Object.keys(cardOverrides).length) {
+    await fetch('/api/cards/frame-overrides', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        card_name: selectedCard,
+        frame_overrides: cardOverrides,
+      }),
+    });
+  }
 }
 
 async function saveFrameSettings() {
@@ -10428,40 +10603,7 @@ async function saveFrameSettings() {
     _frameDeckSettings = settings;
 
     if (selectedCard) {
-      // Save per-card overrides (text + art position)
-      const cardOverrides = {};
-      if (textOverrides && Object.keys(textOverrides).length) {
-        cardOverrides.text_overrides = textOverrides;
-      }
-      // Save art position from compositor
-      if (_fdCompositor) {
-        const artState = _fdCompositor.getArtState();
-        cardOverrides.art_offset = artState.offset;
-        cardOverrides.art_zoom = artState.zoom;
-      }
-      if (Object.keys(cardOverrides).length) {
-        await fetch('/api/cards/frame-overrides', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            card_name: selectedCard,
-            frame_overrides: cardOverrides,
-          }),
-        });
-      }
-      // Also save art position to dedicated endpoint
-      if (_fdCompositor) {
-        const artState = _fdCompositor.getArtState();
-        await fetch('/api/cards/art-position', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            card_name: selectedCard,
-            art_offset: artState.offset,
-            art_zoom: artState.zoom,
-          }),
-        });
-      }
+      await persistSelectedCardFrameState(textOverrides);
 
       // Re-render composite on server (archive previous as version)
       const resp = await fetch('/api/recomposite', {
@@ -10472,6 +10614,10 @@ async function saveFrameSettings() {
       const data = await resp.json();
       if (data.success) {
         showToast('Frame saved', 'success');
+      } else {
+        // Settings persisted but the composite didn't re-render — say so
+        // instead of failing silently (looks like "my changes didn't save").
+        showToast('Frame saved, but re-render failed: ' + (data.error || 'unknown error'), 'error');
       }
     } else {
       showToast('Frame settings saved', 'success');
@@ -10492,6 +10638,7 @@ async function applyFrameToChecked() {
     return;
   }
   const settings = gatherFrameSettings();
+  const textOverrides = settings.text_overrides;
   delete settings.text_overrides;
 
   await fetch(`/api/decks/${document.getElementById('deckSelect').value}/frame-settings`, {
@@ -10500,6 +10647,14 @@ async function applyFrameToChecked() {
     body: JSON.stringify(settings),
   });
   _frameDeckSettings = settings;
+
+  // Persist the selected card's art pan/zoom BEFORE recompositing, so a
+  // repositioned art doesn't silently revert if that card is checked — but
+  // ONLY when it IS checked; otherwise an unsaved experiment on the selected
+  // card would be silently made permanent by an unrelated batch apply.
+  if (selectedCard && checkedCards.has(selectedCard)) {
+    await persistSelectedCardFrameState(textOverrides);
+  }
 
   const names = [...checkedCards];
   const resp = await fetch('/api/recomposite-all', {

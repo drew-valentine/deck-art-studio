@@ -75,6 +75,35 @@
     - [x] Stage 5: Tests + full Playwright/local-FLUX validation — DONE (tests 185/185 pass, full Playwright + local-FLUX validation done)
     - [ ] Merge to main + semantic version tag — PENDING (awaiting user go-ahead to commit)
 
+- [ ] Frame Editor Overhaul — "recreate any MTG frame, beautifully" | Priority: P1 | Created: 2026-07-01 | Owner: drew-valentine
+  - Goal: The frame editing UI is a joy to use — intuitive and easy to understand. Supports multiple frame styles including a NEW Godzilla-style showcase frame. Supports left/right color gradients for multi-type lands. Able to recreate any frame style from MTG history and produce beautiful proxies.
+  - Long-term goal: Reproduce the most popular MTG frames over time using cardconjurer's open-source frame assets (https://github.com/Investigamer/cardconjurer/tree/master/img/frames).
+  - Foundation: Stands on cardconjurer's frame-asset model (layered color PNGs + region/half masks), building on the existing `card_frame_renderer.py` (FRAME_STYLES / FRAME_LAYERS / FRAME_LAYER_ORDER, SVG vs PNG-layer modes) and `shared/frames/m15` assets.
+  - Branch: `feat/frame-editor`
+  - Status: item 4 COMPLETE — 11-style library (Basic, Clean, Crystal, Showcase, LOTR, 8th Edition, Mystical Archive, Art Deco, Samurai, Etched, M15); remaining work items 5 (Designer UX overhaul) and 6 (validation harness).
+  - Work items (roughly in order):
+    - [x] 1. Codebase map & foundation review — understand `card_frame_renderer.py` (FRAME_STYLES/FRAME_LAYERS/FRAME_LAYER_ORDER, SVG vs PNG-layer modes), the Frame Designer UI, and `shared/frames/m15` assets — DONE
+    - [x] 2. Left/right color gradient frames for multi-type / multicolor lands — composite two color frames via left/right half-masks (hard split) plus a smooth alpha-gradient blend across the middle, using the existing m15 color layers — DONE (commit 6c58ce3 "feat(frames): left→right color gradients for SVG frames (classic/retro)" plus earlier image-mode gradient support via `_gradient_frame_image` for m15/showcase)
+    - [x] 3. Showcase (Godzilla) frame style — a new FRAME_STYLE: larger/full-bleed art window, two-line title (big monster/showcase name + small original card name beneath), dark cinematic type/rules treatment — DONE (shipped as the 'showcase' FRAME_STYLE built on Ikoria (iko) cardconjurer assets, plus rules-text-size slider work). Showcase rules box later expanded +26% taller with text wrapping around an offset P/T plate at 3mm print-safe margins (commits 276d422, 360f5cd, 965ae08).
+    - [x] Frame Designer controls audit — DONE — per-style controls metadata added, dead controls removed/wired (commit 1804e04); two-color Blend/Split fixed to apply card-wide (1bd8688); rules text now always renders with size-as-ceiling (0a4096b); art-position WYSIWYG parity between browser canvas and Python composite fixed (ddb8fb1, 134f158)
+    - [x] Style cleanup — DONE (commit c7c3802) — Full Art removed, Classic renamed to Basic, Godzilla renamed to Showcase
+    - [x] 4. Frame-style library expansion — add more historical MTG frame styles via the layered-PNG model, so users can recreate frames across MTG history — DONE
+      - Note: A 1993/ABU "Retro" style was built then REMOVED for failing fidelity (commit 5b9a689 "chore(frames): remove 1993/ABU 'Retro' style + add frame-editing retro"). A retrospective playbook capturing the lessons was written at `docs/frame-editing-retro.md`.
+      - [x] Crystal frame (crowned shattered-ice style) — DONE (commit 8c82ce2 "feat(frames): Crystal frame style — crowned shattered-ice showcase"), assets + reference + SPEC pinned in commit 117c009 (`shared/frames/crystal/`, `docs/frame-refs/crystal/SPEC.md`), shipped with fidelity proof
+      - [x] LOTR "Ring" showcase frame — DONE (commit 1e3a1eb; user signed off; bottom-mask toggle added commits f4edca5/ad1d063 — native geometry default, toggle to remove)
+      - [x] 8th Edition frame — DONE (commit e937622; colored land variants wl/ul/bl/rl/gl/ml supported; 0.000% chrome parity)
+      - [x] Mystical Archive frame — DONE (commit e937622; style key 'msa'; full-bleed art, legendary crown strip; 0.000% chrome parity)
+      - [x] Art Deco (New Capenna snc/artDeco) — DONE (commit 9ae3caa; assets + SPEC pinned in same commit); 0.000% chrome parity
+      - [x] Samurai (Kamigawa neo/samurai) — DONE (commit 9ae3caa; assets + SPEC pinned in same commit); light-text style; artifact/colorless/land route to gold frame (set's artifact frame has a transparent rules region)
+      - [x] Etched (Commander etched foil) — DONE (commit 9ae3caa; assets + SPEC pinned in same commit); full color coverage incl. land/colorless, holo stamps
+      - Note: shared `_create_bar_box_text_svg` text engine + data-driven `_OVERLAY_SETS` compositor block now power new image frames (marginal cost of a new frame is a layout dict + colors).
+      - Note: CardConjurer attribution added to NOTICE/README/shared-frames README (commit c25d197); rules text now always renders with size-as-ceiling everywhere (commit 0a4096b).
+    - [ ] 5. Frame Designer UX overhaul — style gallery with live thumbnails, WYSIWYG preview that matches the final Python composite (CLAUDE.md warns these are separate code paths — must stay in sync), intuitive color + gradient controls, art pan/zoom, per-card and apply-to-all. — NOT STARTED
+    - [ ] 6. Visual validation harness — screenshot-based checks across styles × colors, browser-vs-Python-composite parity, per CLAUDE.md's mandate to validate frame changes in the actual browser. — NOT STARTED
+      - Note: `docs/frame-editing-retro.md` calls for adding an objective resemblance/fidelity check to `tools/card_quality_check.py`.
+  - Follow-ups / cleanup:
+    - [ ] Cleanup: prune dead ABU code (`ABU_LAYOUT`, `_create_abu_text_svg`, `frame_set=='abu'` branches) — dedicated commit (per the retro's follow-ups)
+
 ## In Review
 
 ## Done

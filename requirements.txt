@@ -5,5 +5,6 @@
 flask>=3.0
 Pillow>=10.0
 cairosvg>=2.7
+numpy>=1.26  # frame compositing (Showcase/LOTR masks) + color_transfer
 pytest>=8.0
 pytest-timeout>=2.0

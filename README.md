@@ -398,6 +398,10 @@ Deck Art Studio is unofficial Fan Content permitted under the [Fan Content Polic
 
 This tool generates **original AI artwork** — it does not reproduce, copy, or distribute official Wizards of the Coast art or card designs. Magic: The Gathering is a trademark of Wizards of the Coast LLC.
 
+### Credits
+
+Card frame artwork is composited from the open-source **[CardConjurer](https://github.com/ImKyle4815/cardconjurer)** project (© Kyle Burton and contributors, GPL-3.0), via the [maintained fork](https://github.com/Investigamer/cardconjurer). Mana symbols are from [Mana](https://github.com/andrewgioia/mana) by Andrew Gioia. See [NOTICE](NOTICE) for full third-party attributions.
+
 ## Support
 
 Deck Art Studio is free and open source. If you enjoy the tool, consider buying me a coffee:

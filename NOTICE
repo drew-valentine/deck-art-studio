@@ -36,6 +36,16 @@ This project includes the following bundled third-party components:
     License: SIL OFL 1.1 (font), MIT (CSS/LESS/Sass)
     https://github.com/andrewgioia/mana
 
+  CardConjurer (card frame assets in shared/frames/)
+    Copyright (c) Kyle Burton and CardConjurer contributors
+    License: GPL-3.0
+    https://github.com/ImKyle4815/cardconjurer (original project)
+    https://github.com/Investigamer/cardconjurer (maintained fork; asset source)
+    The pre-rendered card frame images (m15, iko, crystal, lotr, 8th,
+    mysticalArchive, abu) are from the CardConjurer open-source project.
+    Frame layouts in card_frame_renderer.py are derived from measurements of
+    these assets and CardConjurer's frame pack definitions.
+
 This project also depends on the following open-source libraries (installed
 via pip, not bundled):
 

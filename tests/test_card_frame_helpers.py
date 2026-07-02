@@ -203,4 +203,4 @@ class TestResolveFrameSettings:
     def test_style_key_propagated(self):
         card = {'name': 'Test', 'frame_overrides': {}}
         result = resolve_frame_settings(card)
-        assert result['style'] == 'classic'
+        assert result['style'] == 'basic'

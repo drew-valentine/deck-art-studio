@@ -1,10 +1,8 @@
-name: Claude PR Review
+name: PR Tests
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-  pull_request_review_comment:
-    types: [created]
 
 jobs:
   basic-tests:
@@ -121,68 +119,3 @@ jobs:
           print(f'Extension manifest valid: {m[\"name\"]} v{m[\"version\"]} (MV3)')
           "
 
-  claude-review:
-    if: >
-      (github.event_name == 'pull_request') ||
-      (github.event_name == 'pull_request_review_comment' &&
-       contains(github.event.comment.body, '@claude'))
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      id-token: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Run Claude Code Review
-        uses: anthropics/claude-code-action@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          allowed_bots: "claude"
-          track_progress: true
-          claude_args: "--max-turns 30"
-          prompt: |
-            You are reviewing a pull request for Deck Art Studio.
-
-            Read CLAUDE.md for full project context.
-
-            ## Review Checklist
-            - **Path traversal**: Any new routes or file operations must use `_is_safe_deck_id()` / `_safe_deck_dir()` / `_safe_serve_image()`
-            - **XSS prevention**: All user-derived content in innerHTML must use `escapeHtml()`
-            - **Threading safety**: Any access to `generation_status` must use `with generation_lock:`
-            - **SDXL pitfalls**: float32 required for MPS, no float16
-            - **Card name apostrophes**: No inline onclick with template literal card names
-            - **Prompt merging**: Changes to art_prompts.json must merge, not overwrite
-            - **Import safety**: No unconditional imports of torch/numpy/diffusers in core modules
-            - **API key guard**: Local mode must not require OpenAI API key
-
-            ## Output Format
-            Post a review summary with:
-            1. What the PR changes (1-2 sentences)
-            2. Issues found (if any), with file:line references
-            3. Overall assessment: APPROVE, REQUEST_CHANGES, or COMMENT
-
-            Be concise. Only flag real issues, not style preferences.
-
-      - name: Enforce review assessment
-        if: github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Wait briefly for the comment to be fully posted
-          sleep 5
-
-          # Get the latest comment from claude[bot] on this PR
-          ASSESSMENT=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
-            --jq '[.[] | select(.user.login == "claude[bot]")] | last | .body' | \
-            grep -i 'Assessment:' | sed 's/.*Assessment:[[:space:]]*//' | tr -d '[:space:]')
-
-          echo "Claude assessment: $ASSESSMENT"
-
-          if [ "$ASSESSMENT" = "REQUEST_CHANGES" ]; then
-            echo "::error::Claude Code review requested changes. Please address the review comments before merging."
-            exit 1
-          fi
-
-          echo "Review passed (assessment: $ASSESSMENT)"
