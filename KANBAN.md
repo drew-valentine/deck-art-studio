@@ -2,6 +2,21 @@
 
 ## Backlog
 
+- [ ] EPIC: Support Alternative Card Layouts (Scryfall multi-face / non-portrait) | Priority: P2 | Created: 2026-07-02 | Owner: unassigned
+  - Requested by external user. Generally support all Scryfall alternative `layout` values: double-faced (transform / modal DFC, e.g. "Accursed Witch // Infectious Curse"), adventure (e.g. "Murderous Rider // Swift End"), rooms (e.g. "Smoky Lounge // Misty Salon"), horizontal/landscape (battles, split cards), and "PIP cards" (requester's ambiguous term — see open question).
+  - **Current state (research findings):**
+    - Ingestion (`scryfall_client.py:259` `scryfall_to_card_entry`): multi-face cards are flattened to front-face data (oracle_text/mana_cost/type_line/P/T from `card_faces[0]`, front-face art_crop). Scryfall `layout` field and `card_faces` array are NOT stored. Name keeps "A // B" form (reversible dupes deduped).
+    - File naming: `name_to_slug()` already sanitizes "/" (" // " -> "__"), so "A // B" names work for raw_art/composites/status keys.
+    - Frame renderer (`card_frame_renderer.py`): fixed 750x1050 portrait canvas, 11 frame styles, planeswalker layout supported. No landscape orientation, no split/adventure/room/flip text-box layouts, no back-face rendering.
+    - Generation: one art image per card name. FLUX accepts arbitrary width/height; deck-level `art_orientation` (portrait/landscape) already exists for art aspect.
+    - Extension (`extension/content.js`): replaces edhplay.com images by Scryfall UUID from image URL. DFC front and back share the same UUID (URLs differ by /front/ vs /back/), so back faces would currently be replaced with front art.
+  - **Phasing (subtasks):**
+    - [ ] Phase 0 — Data foundation: store `layout` + per-face data (name, mana_cost, type_line, oracle_text, P/T, art_crop per face) in card entries; migration/backfill for existing decks; single-face cards unchanged.
+    - [ ] Phase 1 — Double-faced cards (transform / MDFC): generate art per face; render both faces as composites (front + back frame variants incl. transform indicator pips); UI face toggle in card detail + grid badge; extension distinguishes /front/ vs /back/ URLs; export-manifest includes both faces.
+    - [ ] Phase 2 — Adventure + Room text layouts: portrait, single art, split text-box rendering in `card_frame_renderer` (adventure: left sub-frame; room: two side-by-side door halves). Authentic/m15 style first, other styles later.
+    - [ ] Phase 3 — Landscape cards (battles, split cards): landscape frame rendering (new canvas orientation 1050x750); battle defense counter; split cards = two halves each with own art; extension/print output rotation handling.
+  - **Open question:** clarify with requester what "PIP cards" means (likely Kamigawa flip cards). Blocks scoping any flip-layout work.
+
 - [ ] Frame Designer UX polish + validation harness | Priority: P2
   - Carries forward the two unfinished work items from the Frame Editor Overhaul (merged as v1.34.0)
   - (a) Frame Designer UX overhaul: style gallery with live thumbnails, intuitive color + gradient controls, art pan/zoom, per-card and apply-to-all UX
