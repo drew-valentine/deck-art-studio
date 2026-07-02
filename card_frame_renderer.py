@@ -3286,10 +3286,11 @@ PW_FRAME_LAYOUT = {
     'title_y0': 39, 'title_y1': 96,
     'type_y0': 591, 'type_y1': 648,
     'x_margin': 65, 'x_right': 690,
-    'band_x0': 87, 'band_x1': 694,     # ability band span
+    'band_x0': 90, 'band_x1': 691,     # ability band span (frame window x)
     'text_x': 135, 'text_w': 545,      # ability text (indented past badges)
-    'area_y0': 655, 'area_y1': 990,    # ability area
-    'loy_cx': 657, 'loy_cy': 966,      # starting loyalty (baked shield)
+    'area_y0': 655, 'area_y1': 920,    # text-safe ability area (above the plate)
+    'band_draw_y1': 962,               # bands visually extend behind the plate
+    'loy_cx': 642, 'loy_cy': 961,      # baked loyalty plate center (measured)
 }
 
 
@@ -4142,33 +4143,33 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         # the left. Layout shared with the text overlay via
         # _pw_frame_band_layout so chrome and text always agree.
         _pw = _pw_frame_band_layout(card)
+        Lp = PW_FRAME_LAYOUT
+        # Bands (and their transition strips) composite UNDER the frame: the
+        # frame's opaque pixels (borders, baked loyalty plate, bottom bar)
+        # mask them cleanly, so bands can extend behind the plate like real
+        # cards without ever washing over the frame art.
+        under = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
+        drw = ImageDraw.Draw(under)
+        x0, x1 = Lp['band_x0'], Lp['band_x1']
         if _pw is None:
             # Non-planeswalker card in this frame: one light band across the
             # whole ability area so plain rules text stays legible.
-            Lp = PW_FRAME_LAYOUT
-            overlay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
-            ImageDraw.Draw(overlay).rectangle(
-                [Lp['band_x0'], Lp['area_y0'], Lp['band_x1'], Lp['area_y1']],
-                fill=(255, 255, 255, 214))
-            result = Image.alpha_composite(result, overlay)
-        if _pw:
-            Lp = PW_FRAME_LAYOUT
+            drw.rectangle([x0, Lp['area_y0'], x1, Lp['band_draw_y1']],
+                          fill=(255, 255, 255, 224))
+        else:
             _font, _line_h, bands = _pw
-            x0, x1 = Lp['band_x0'], Lp['band_x1']
-            overlay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
-            drw = ImageDraw.Draw(overlay)
             for i, (y0, y1, cost, text) in enumerate(bands):
-                fill = (255, 255, 255, 214) if i % 2 == 0 else (201, 201, 201, 214)
-                drw.rectangle([x0, round(y0), x1, round(y1)], fill=fill)
-            result = Image.alpha_composite(result, overlay)
+                y1d = Lp['band_draw_y1'] if i == len(bands) - 1 else y1
+                fill = (255, 255, 255, 224) if i % 2 == 0 else (203, 203, 203, 224)
+                drw.rectangle([x0, round(y0), x1, round(y1d)], fill=fill)
             for i in range(1, len(bands)):
                 strip = _load_frame_image(
                     frame_set, 'abilityLineEven' if i % 2 == 0 else 'abilityLineOdd')
                 if strip is not None:
                     strip = strip.resize((x1 - x0, 13), Image.Resampling.LANCZOS)
-                    lay = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0))
-                    lay.paste(strip, (x0, round(bands[i][0]) - 6))
-                    result = Image.alpha_composite(result, lay)
+                    under.paste(strip, (x0, round(bands[i][0]) - 6), strip)
+        result = Image.alpha_composite(under, result)
+        if _pw:
             for (y0, y1, cost, text) in bands:
                 if not cost:
                     continue
