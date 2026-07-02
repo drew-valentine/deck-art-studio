@@ -2313,7 +2313,7 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
     # Same helper/geometry as the image styles so the number is always
     # plate-centered; vector fallback lives inside the helper. ──
     if card.loyalty:
-        loy_size = 96
+        loy_size = 102  # 114px (pw frame plate width) in VB units
         g = _LOYALTY_SHIELD_GEOM
         loy_cx = (VB_W - art_m) + 8 - loy_size * (1 - g['cx'])
         # center ON the textbox bottom edge (straddle, like the pw frame's
@@ -3061,7 +3061,7 @@ def _render_pw_content_svg(card: CardData, fs: dict, x0: float, y0: float,
     shield = None
     if card.loyalty:
         g = _LOYALTY_SHIELD_GEOM
-        sw = min(88.0, rect_h * 0.45)
+        sw = 114.0  # match the pw frame's baked plate width (113.75px)
         sh = sw * g['aspect']
         if shield_center is not None:
             s_cx, s_cy = shield_center
