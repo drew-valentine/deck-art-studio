@@ -66,6 +66,13 @@ CARDS = [
     {'name': 'Aurelia, Exemplar of Justice and the Boros Legion Forever', 'type_line': 'Legendary Creature — Angel',
      'mana_cost': '{2}{R}{W}', 'colors': ['R', 'W'], 'color_identity': ['R', 'W'],
      'oracle_text': 'Flying\nMentor', 'power': '2', 'toughness': '5'},
+    {'name': 'Jace, the Mind Sculptor', 'type_line': 'Legendary Planeswalker — Jace',
+     'mana_cost': '{2}{U}{U}', 'colors': ['U'], 'color_identity': ['U'], 'loyalty': '3',
+     'oracle_text': '+2: Look at the top card of target player’s library. You may put that card '
+                    'on the bottom of that player’s library.\n0: Draw three cards, then put two '
+                    'cards from your hand on top of your library in any order.\n−1: Return target '
+                    'creature to its owner’s hand.\n−12: Exile all cards from target player’s '
+                    'library, then that player shuffles their hand into their library.'},
 ]
 
 
