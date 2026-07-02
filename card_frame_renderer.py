@@ -1442,6 +1442,25 @@ def _measure_rules_text(oracle_text: str, max_width: float,
     return current_y
 
 
+# Rules text must ALWAYS render completely and can never overflow its box.
+# The user's Rules Text Size is a CEILING, not an absolute: the renderer finds
+# the largest font <= desired that fits this card's box and uses that.
+RULES_FONT_FLOOR = 8  # absolute last resort — real cards never get near it
+
+
+def _max_fitting_rules_font(measure, box_h: float, desired: int,
+                            floor: int = RULES_FONT_FLOOR) -> int:
+    """Largest font size <= desired whose measured rules text fits box_h.
+
+    `measure(font)` returns the needed height at that font size (including
+    any flavor reserve / P/T avoid-region wrapping the caller bakes in).
+    """
+    f = max(int(desired), floor)
+    while f > floor and measure(f) > box_h:
+        f -= 1
+    return f
+
+
 # ===========================================================================
 # Planeswalker loyalty ability renderer
 # ===========================================================================
@@ -1658,8 +1677,8 @@ def render_planeswalker_abilities(card_oracle: str,
     border_color = theme['border'] if theme else '#DAA520'
 
     for i, ability in enumerate(abilities):
-        if current_y + line_spacing > y_start + max_height:
-            break
+        # NOTE: no truncation — every ability always renders. The caller
+        # fits the font so the returned used_height <= max_height.
 
         # ── Draw horizontal divider BEFORE each ability (except the first) ──
         if i > 0:
@@ -1713,11 +1732,12 @@ def render_planeswalker_abilities(card_oracle: str,
             ability_x = x_start
             ability_w = max_width
 
-        # Render the ability text
+        # Render the ability text (unbounded height — the caller's fitting
+        # loop guarantees the total fits, so no inner truncation either)
         text_svg, text_h = render_rules_text_svg(
             ability['text'],
             ability_x, current_y,
-            ability_w, max_height - (current_y - y_start),
+            ability_w, 100000,
             font_size, line_spacing,
             text_color=text_color,
         )
@@ -2007,45 +2027,45 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
     # Use planeswalker-specific renderer for loyalty abilities
     is_planeswalker = card.loyalty is not None and _LOYALTY_RE.search(card.oracle_text or '')
     if show_oracle and rules_max_h > 0 and is_planeswalker:
-        # Smaller font & tighter line spacing for planeswalkers
-        # to fit loyalty badges + longer ability text in the textbox
+        # Smaller font & tighter line spacing for planeswalkers to fit loyalty
+        # badges + longer ability text. Fitting loop: shrink until every
+        # ability renders inside the box (abilities must never truncate).
         pw_font = int(RULES_FONT * 0.82)
-        pw_line_h = int(RULES_LINE_H * 0.82)
-        rules_text_y_start = rules_y + RULES_PADDING + pw_font * 0.8
-        rules_svg, rules_used_h = render_planeswalker_abilities(
-            card.oracle_text or "",
-            fx + RULES_PADDING, rules_text_y_start,
-            rules_inner_w, rules_max_h,
-            pw_font, pw_line_h,
-            text_color=text_color,
-            theme=theme,
-        )
+        while True:
+            pw_line_h = int(RULES_LINE_H * pw_font / RULES_FONT)
+            rules_text_y_start = rules_y + RULES_PADDING + pw_font * 0.8
+            rules_svg, rules_used_h = render_planeswalker_abilities(
+                card.oracle_text or "",
+                fx + RULES_PADDING, rules_text_y_start,
+                rules_inner_w, rules_max_h,
+                pw_font, pw_line_h,
+                text_color=text_color,
+                theme=theme,
+            )
+            if rules_used_h <= rules_max_h or pw_font <= RULES_FONT_FLOOR:
+                break
+            pw_font -= 1
     elif show_oracle and rules_max_h > 0:
-        # Auto-shrink font if oracle text overflows the textbox
         oracle = card.oracle_text or ""
-        r_font = int(fs.get('rules_font_size') or RULES_FONT)
-        r_line_h = int(RULES_LINE_H * r_font / RULES_FONT)
-        MIN_RULES_FONT = 16  # floor to keep text readable
-
-        needed_h = _measure_rules_text(oracle, rules_inner_w, r_font, r_line_h)
-        # Also account for flavor text height if present
+        desired = int(fs.get('rules_font_size') or RULES_FONT)
+        # Account for flavor text height if present
         flavor_reserve = 0
         if card.flavor_text and card.flavor_text.strip():
             flavor_reserve = _measure_rules_text(
                 card.flavor_text.strip(), rules_inner_w, FLAVOR_FONT, FLAVOR_LINE_H
             ) + FLAVOR_LINE_H  # extra for divider gap
 
-        # Auto mode (no explicit size) shrinks text to fit the box. When the user
-        # sets a size in the frame editor, honor it exactly (WYSIWYG) — overflowing
-        # lines are clipped at the box bottom rather than silently shrunk.
-        while (not fs.get('rules_font_size')) and needed_h + flavor_reserve > rules_max_h and r_font > MIN_RULES_FONT:
-            r_font -= 1
-            r_line_h = int(RULES_LINE_H * r_font / RULES_FONT)
-            needed_h = _measure_rules_text(oracle, rules_inner_w, r_font, r_line_h)
+        # Rules Text Size is a CEILING: find the max font that fits so text
+        # always renders completely and can never overflow the box.
+        def _msr(f):
+            return _measure_rules_text(oracle, rules_inner_w, f,
+                                       int(RULES_LINE_H * f / RULES_FONT)) + flavor_reserve
 
-        if needed_h + flavor_reserve > rules_max_h + 2:  # overflows even at min font
+        r_font = _max_fitting_rules_font(_msr, rules_max_h, desired)
+        r_line_h = int(RULES_LINE_H * r_font / RULES_FONT)
+        if _msr(r_font) > rules_max_h + 2:  # only possible at the hard floor
             fs.setdefault('_quality', []).append(
-                f'rules_overflow: needs {needed_h:.0f}px but box is {rules_max_h:.0f}px (font {r_font})')
+                f'rules_overflow: needs {_msr(r_font):.0f}px but box is {rules_max_h:.0f}px (font {r_font})')
 
         rules_text_y_start = rules_y + RULES_PADDING + r_font * 0.8
         rules_svg, rules_used_h = render_rules_text_svg(
@@ -2591,41 +2611,43 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
 
     is_planeswalker = card.loyalty is not None and _LOYALTY_RE.search(card.oracle_text or '')
     if show_oracle and rules_max_h > 0 and is_planeswalker:
+        # Fitting loop: shrink until every ability renders inside the box
+        # (abilities must never truncate).
         pw_font = int(RULES_FONT * 0.82)
-        pw_line_h = int(RULES_LINE_H * 0.82)
-        rules_text_y_start = rules_y + RULES_PADDING + pw_font * 0.8
-        rules_svg, rules_used_h = render_planeswalker_abilities(
-            card.oracle_text or "",
-            art_m + RULES_PADDING, rules_text_y_start,
-            rules_inner_w, rules_max_h,
-            pw_font, pw_line_h,
-            text_color=text_color,
-            theme=theme,
-        )
+        while True:
+            pw_line_h = int(RULES_LINE_H * pw_font / RULES_FONT)
+            rules_text_y_start = rules_y + RULES_PADDING + pw_font * 0.8
+            rules_svg, rules_used_h = render_planeswalker_abilities(
+                card.oracle_text or "",
+                art_m + RULES_PADDING, rules_text_y_start,
+                rules_inner_w, rules_max_h,
+                pw_font, pw_line_h,
+                text_color=text_color,
+                theme=theme,
+            )
+            if rules_used_h <= rules_max_h or pw_font <= RULES_FONT_FLOOR:
+                break
+            pw_font -= 1
     elif show_oracle and rules_max_h > 0:
         oracle = card.oracle_text or ""
-        r_font = int(fs.get('rules_font_size') or RULES_FONT)
-        r_line_h = int(RULES_LINE_H * r_font / RULES_FONT)
-        MIN_RULES_FONT = 16
-
-        needed_h = _measure_rules_text(oracle, rules_inner_w, r_font, r_line_h)
+        desired = int(fs.get('rules_font_size') or RULES_FONT)
         flavor_reserve = 0
         if card.flavor_text and card.flavor_text.strip():
             flavor_reserve = _measure_rules_text(
                 card.flavor_text.strip(), rules_inner_w, FLAVOR_FONT, FLAVOR_LINE_H
             ) + FLAVOR_LINE_H
 
-        # Auto mode (no explicit size) shrinks text to fit the box. When the user
-        # sets a size in the frame editor, honor it exactly (WYSIWYG) — overflowing
-        # lines are clipped at the box bottom rather than silently shrunk.
-        while (not fs.get('rules_font_size')) and needed_h + flavor_reserve > rules_max_h and r_font > MIN_RULES_FONT:
-            r_font -= 1
-            r_line_h = int(RULES_LINE_H * r_font / RULES_FONT)
-            needed_h = _measure_rules_text(oracle, rules_inner_w, r_font, r_line_h)
+        # Rules Text Size is a CEILING: find the max font that fits so text
+        # always renders completely and can never overflow the box.
+        def _msr(f):
+            return _measure_rules_text(oracle, rules_inner_w, f,
+                                       int(RULES_LINE_H * f / RULES_FONT)) + flavor_reserve
 
-        if needed_h + flavor_reserve > rules_max_h + 2:  # overflows even at min font
+        r_font = _max_fitting_rules_font(_msr, rules_max_h, desired)
+        r_line_h = int(RULES_LINE_H * r_font / RULES_FONT)
+        if _msr(r_font) > rules_max_h + 2:  # only possible at the hard floor
             fs.setdefault('_quality', []).append(
-                f'rules_overflow: needs {needed_h:.0f}px but box is {rules_max_h:.0f}px (font {r_font})')
+                f'rules_overflow: needs {_msr(r_font):.0f}px but box is {rules_max_h:.0f}px (font {r_font})')
 
         rules_text_y_start = rules_y + RULES_PADDING + r_font * 0.8
         rules_svg, rules_used_h = render_rules_text_svg(
@@ -2861,27 +2883,21 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
         avoid_abs = None
         if card.power is not None and card.toughness is not None:
             avoid_abs = (956.0, 532.0)  # (plate top - pad, narrow line width)
-        # Rules text size: user-tunable via the frame editor ('rules_font_size',
-        # default 30pt), consistent across cards. Shrink-to-fit still applies below
-        # for very long oracles. Only the RULES text is affected.
-        r_font = int(fs.get('rules_font_size') or 30)
-        r_line = int(RULES_LINE_H * r_font / RULES_FONT)
-        MIN_R = 16
+        # Rules Text Size is a CEILING: find the max font that fits so text
+        # always renders completely and can never overflow the box.
+        desired = int(fs.get('rules_font_size') or 30)
 
-        def _measure(font, line):
-            av = ((avoid_abs[0] - (rbox_top + font * 0.8), avoid_abs[1])
+        def _msr(f):
+            av = ((avoid_abs[0] - (rbox_top + f * 0.8), avoid_abs[1])
                   if avoid_abs else None)
-            return _measure_rules_text(card.oracle_text, rbox_w, font, line, avoid=av)
+            return _measure_rules_text(card.oracle_text, rbox_w, f,
+                                       int(RULES_LINE_H * f / RULES_FONT), avoid=av)
 
-        needed = _measure(r_font, r_line)
-        # Auto only shrinks when no explicit size is set; honor the user's size exactly.
-        while (not fs.get('rules_font_size')) and needed > rbox_h and r_font > MIN_R:
-            r_font -= 1
-            r_line = int(RULES_LINE_H * r_font / RULES_FONT)
-            needed = _measure(r_font, r_line)
-        if needed > rbox_h + 2:  # still overflows even at the minimum font
+        r_font = _max_fitting_rules_font(_msr, rbox_h, desired)
+        r_line = int(RULES_LINE_H * r_font / RULES_FONT)
+        if _msr(r_font) > rbox_h + 2:  # only possible at the hard floor
             fs.setdefault('_quality', []).append(
-                f'rules_overflow: needs {needed:.0f}px but box is {rbox_h:.0f}px (font {r_font})')
+                f'rules_overflow: needs {_msr(r_font):.0f}px but box is {rbox_h:.0f}px (font {r_font})')
         rules_lines, _ = render_rules_text_svg(
             card.oracle_text, tx, rbox_top + r_font * 0.8,
             rbox_w, rbox_h, r_font, r_line, text_color=dark, avoid=avoid_abs)
@@ -2973,24 +2989,21 @@ def _create_crystal_text_svg(card: CardData, fs: dict) -> str:
         avoid_abs = None
         if card.power is not None and card.toughness is not None:
             avoid_abs = (915.0, 506.0)  # (P/T box top - pad, narrow line width)
-        r_font = int(fs.get('rules_font_size') or 30)
-        r_line = int(RULES_LINE_H * r_font / RULES_FONT)
-        MIN_R = 16
+        # Rules Text Size is a CEILING: find the max font that fits so text
+        # always renders completely and can never overflow the box.
+        desired = int(fs.get('rules_font_size') or 30)
 
-        def _measure(font, line):
-            av = ((avoid_abs[0] - (rbox_top + font * 0.8), avoid_abs[1])
+        def _msr(f):
+            av = ((avoid_abs[0] - (rbox_top + f * 0.8), avoid_abs[1])
                   if avoid_abs else None)
-            return _measure_rules_text(card.oracle_text, rbox_w, font, line, avoid=av)
+            return _measure_rules_text(card.oracle_text, rbox_w, f,
+                                       int(RULES_LINE_H * f / RULES_FONT), avoid=av)
 
-        needed = _measure(r_font, r_line)
-        # Auto only shrinks when no explicit size is set; honor the user's size exactly.
-        while (not fs.get('rules_font_size')) and needed > rbox_h and r_font > MIN_R:
-            r_font -= 1
-            r_line = int(RULES_LINE_H * r_font / RULES_FONT)
-            needed = _measure(r_font, r_line)
-        if needed > rbox_h + 2:
+        r_font = _max_fitting_rules_font(_msr, rbox_h, desired)
+        r_line = int(RULES_LINE_H * r_font / RULES_FONT)
+        if _msr(r_font) > rbox_h + 2:  # only possible at the hard floor
             fs.setdefault('_quality', []).append(
-                f'rules_overflow: needs {needed:.0f}px but box is {rbox_h:.0f}px (font {r_font})')
+                f'rules_overflow: needs {_msr(r_font):.0f}px but box is {rbox_h:.0f}px (font {r_font})')
         rules_lines, _ = render_rules_text_svg(
             card.oracle_text, tx, rbox_top + r_font * 0.8,
             rbox_w, rbox_h, r_font, r_line, text_color=rules_col, avoid=avoid_abs)
@@ -3067,16 +3080,17 @@ def _create_abu_text_svg(card: CardData, fs: dict) -> str:
     if card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_h = (L['rules_y1'] - L['rules_y0']) - 12
-        r_font, r_line, MIN_R = RULES_FONT, RULES_LINE_H, 16
-        needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
-        # Auto only shrinks when no explicit size is set; honor the user's size exactly.
-        while (not fs.get('rules_font_size')) and needed > rbox_h and r_font > MIN_R:
-            r_font -= 1
-            r_line = int(RULES_LINE_H * r_font / RULES_FONT)
-            needed = _measure_rules_text(card.oracle_text, rbox_w, r_font, r_line)
-        if needed > rbox_h + 2:
+        desired = int(fs.get('rules_font_size') or RULES_FONT)
+
+        def _msr(f):
+            return _measure_rules_text(card.oracle_text, rbox_w, f,
+                                       int(RULES_LINE_H * f / RULES_FONT))
+
+        r_font = _max_fitting_rules_font(_msr, rbox_h, desired)
+        r_line = int(RULES_LINE_H * r_font / RULES_FONT)
+        if _msr(r_font) > rbox_h + 2:  # only possible at the hard floor
             fs.setdefault('_quality', []).append(
-                f'rules_overflow: needs {needed:.0f}px but box is {rbox_h:.0f}px (font {r_font})')
+                f'rules_overflow: needs {_msr(r_font):.0f}px but box is {rbox_h:.0f}px (font {r_font})')
         rules_lines, _ = render_rules_text_svg(
             card.oracle_text, tx, L['rules_y0'] + 8 + r_font * 0.8,
             rbox_w, rbox_h, r_font, r_line, text_color=ink)

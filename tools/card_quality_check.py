@@ -182,6 +182,42 @@ def contact_sheet(grid, styles, out_path):
     return out_path
 
 
+def check_rules_render_full(card, style):
+    """Rules text must ALWAYS render completely and never overflow — even at
+    the slider's maximum (60pt), the renderer must clamp to the max fitting
+    size. Renders the style's real text path and asserts (a) no overflow
+    quality note, (b) the oracle's final word made it into the output."""
+    oracle = card.get('oracle_text') or ''
+    if not oracle.strip():
+        return None
+    fs = cfr.resolve_frame_settings(card, {'style': style, 'rules_font_size': 60})
+    if fs.get('no_frame') or not fs.get('show_oracle', True):
+        return None
+    cardobj = cfr._build_card_data(card, fs)
+    try:
+        if fs.get('frame_set') == 'iko':
+            svg = cfr._create_iko_text_svg(cardobj, fs)
+        elif fs.get('frame_set') == 'crystal':
+            svg = cfr._create_crystal_text_svg(cardobj, fs)
+        elif fs.get('mode') == 'image':
+            svg = cfr._create_text_only_svg(cardobj, fs)
+        else:
+            svg = cfr.create_card_frame_svg(cardobj, fs)
+    except Exception as e:
+        return f'rules_fit_render_error: {type(e).__name__}: {e}'
+    overflow = [n for n in fs.get('_quality', []) if 'overflow' in n]
+    if overflow:
+        return f'rules_fit@60pt: {overflow[0]}'
+    # Last plain word of the oracle (mana symbols render as pip images, not text)
+    import re as _re
+    words = _re.sub(r'\{[^}]+\}', ' ', oracle).replace(')', ' ').replace('.', ' ').split()
+    if words:
+        last_word = words[-1]
+        if len(last_word) > 2 and last_word not in svg:
+            return f'rules_truncated@60pt: final word "{last_word}" missing from render'
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--style', default=None, help='only this style')
@@ -199,6 +235,9 @@ def main():
             opacity_issue = check_textbox_legible(card, st)
             if opacity_issue:
                 issues.append(opacity_issue)
+            fit_issue = check_rules_render_full(card, st)
+            if fit_issue:
+                issues.append(fit_issue)
             for iss in issues:
                 failures.append((card['name'], st, iss))
         grid.append((card['name'], row))
