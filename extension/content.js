@@ -86,20 +86,25 @@
     const uuid = extractUUID(src);
     if (!uuid || !cardMap) return;
 
-    if (cardMap.has(uuid)) {
+    // Double-faced cards share one UUID; the back face's image URL contains
+    // "/back/" and its art is stored under "<uuid>:back" in the manifest.
+    const isBack = src.includes('/back/');
+    const key = isBack ? `${uuid}:back` : uuid;
+
+    if (cardMap.has(key)) {
       // Direct UUID match
-      const blobUrl = getBlobUrl(uuid);
+      const blobUrl = getBlobUrl(key);
       if (!blobUrl) return;
       originalSrcCache.set(img, src);
-      img.setAttribute(ATTR, uuid);
+      img.setAttribute(ATTR, key);
       img.src = blobUrl;
-    } else if (!resolvedUUIDs.has(uuid)) {
+    } else if (!resolvedUUIDs.has(key)) {
       // UUID not in our map — ask background to resolve via Scryfall API
-      resolvedUUIDs.add(uuid);
-      browser.runtime.sendMessage({ type: 'resolve-uuid', uuid }).then(resp => {
+      resolvedUUIDs.add(key);
+      browser.runtime.sendMessage({ type: 'resolve-uuid', uuid, face: isBack ? 'back' : 'front' }).then(resp => {
         if (resp && resp.dataUrl) {
           // Add to our local map so future hits are instant
-          cardMap.set(uuid, resp.dataUrl);
+          cardMap.set(key, resp.dataUrl);
           console.log(`[Deck Art Studio] Resolved ${resp.name} (alternate printing)`);
           // Replace this image and re-scan for others with same UUID
           scanAll();

@@ -1,7 +1,8 @@
 """Tests for slug generation and path traversal security."""
 
 import pytest
-from deck_studio import name_to_slug, deck_id_from_name, _is_safe_deck_id, _safe_inspiration_path
+from deck_studio import (name_to_slug, deck_id_from_name, _is_safe_deck_id,
+                         _safe_inspiration_path, face_key, is_dfc, back_face_card)
 from pathlib import Path
 
 
@@ -38,6 +39,67 @@ class TestNameToSlug:
 
     def test_lowercase(self):
         assert name_to_slug('AETHERFLUX RESERVOIR') == 'aetherflux_reservoir'
+
+    def test_back_face_suffix(self):
+        assert (name_to_slug('Accursed Witch // Infectious Curse [back]')
+                == 'accursed_witch__infectious_curse__back')
+
+
+# ---------------------------------------------------------------------------
+# Double-faced card helpers
+# ---------------------------------------------------------------------------
+class TestDfcHelpers:
+    TRANSFORM_CARD = {
+        'name': 'Accursed Witch // Infectious Curse',
+        'layout': 'transform',
+        'mana_cost': '{3}{B}',
+        'type_line': 'Creature — Human Shaman',
+        'oracle_text': 'Spells your opponents cast...',
+        'power': '4', 'toughness': '2',
+        'colors': ['B'],
+        'color_identity': ['B'],
+        'frame_overrides': {'frame_set': 'm15',
+                            'text_overrides': {'name': 'Front Name'},
+                            'art_offset': {'x': 0, 'y': -176}, 'art_zoom': 0.5},
+        'card_faces': [
+            {'name': 'Accursed Witch', 'mana_cost': '{3}{B}',
+             'type_line': 'Creature — Human Shaman',
+             'oracle_text': 'Spells your opponents cast...',
+             'power': '4', 'toughness': '2', 'colors': ['B'],
+             'card_type': 'creature', 'flavor_text': '', 'art_crop_url': 'f'},
+            {'name': 'Infectious Curse', 'mana_cost': '',
+             'type_line': 'Enchantment — Aura Curse',
+             'oracle_text': 'Enchant player', 'power': None, 'toughness': None,
+             'colors': ['B'], 'card_type': 'enchantment',
+             'flavor_text': 'flavor', 'art_crop_url': 'b'},
+        ],
+    }
+
+    def test_face_key(self):
+        assert face_key('Sol Ring') == 'Sol Ring'
+        assert face_key('Sol Ring', 'front') == 'Sol Ring'
+        assert face_key('A // B', 'back') == 'A // B [back]'
+
+    def test_is_dfc(self):
+        assert is_dfc(self.TRANSFORM_CARD) is True
+        assert is_dfc({'name': 'Sol Ring'}) is False
+        # Adventures have faces but a single shared art — not DFC
+        assert is_dfc({'name': 'X // Y', 'layout': 'adventure',
+                       'card_faces': [{}, {}]}) is False
+
+    def test_back_face_card_merges_face_over_card(self):
+        back = back_face_card(self.TRANSFORM_CARD)
+        assert back['name'] == 'Infectious Curse'
+        assert back['type_line'] == 'Enchantment — Aura Curse'
+        assert back['card_type'] == 'enchantment'
+        assert back['power'] is None
+        assert back['colors'] == ['B']
+        # Style-level overrides inherited; front-face-specific ones stripped
+        assert back['frame_overrides'] == {'frame_set': 'm15'}
+        assert back['color_identity'] == ['B']
+
+    def test_back_face_card_none_for_single_faced(self):
+        assert back_face_card({'name': 'Sol Ring'}) is None
 
 
 # ---------------------------------------------------------------------------

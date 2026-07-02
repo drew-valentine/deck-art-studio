@@ -192,6 +192,82 @@ class TestScryfallToCardEntry:
         entry = scryfall_to_card_entry(sf)
         assert entry['name'] == 'Okaun, Eye of Chaos'
 
+    def test_transform_card_stores_layout_and_faces(self):
+        sf = {
+            'name': 'Accursed Witch // Infectious Curse',
+            'layout': 'transform',
+            'mana_cost': '',
+            'type_line': '',
+            'colors': ['B'],
+            'color_identity': ['B'],
+            'card_faces': [
+                {
+                    'name': 'Accursed Witch',
+                    'mana_cost': '{3}{B}',
+                    'type_line': 'Creature — Human Shaman',
+                    'oracle_text': 'Spells your opponents cast...',
+                    'power': '4', 'toughness': '2',
+                    'image_uris': {'art_crop': 'https://cards.scryfall.io/art_crop/front/x.jpg'},
+                },
+                {
+                    'name': 'Infectious Curse',
+                    'mana_cost': '',
+                    'type_line': 'Enchantment — Aura Curse',
+                    'oracle_text': 'Enchant player',
+                    'color_indicator': ['B'],
+                    'image_uris': {'art_crop': 'https://cards.scryfall.io/art_crop/back/x.jpg'},
+                },
+            ],
+        }
+        entry = scryfall_to_card_entry(sf)
+        assert entry['layout'] == 'transform'
+        assert len(entry['card_faces']) == 2
+        back = entry['card_faces'][1]
+        assert back['name'] == 'Infectious Curse'
+        assert back['card_type'] == 'enchantment'
+        # Back face colors fall back to the color_indicator
+        assert back['colors'] == ['B']
+        assert back['art_crop_url'].endswith('back/x.jpg')
+
+    def test_single_face_card_has_no_faces(self):
+        sf = {
+            'name': 'Sol Ring',
+            'layout': 'normal',
+            'mana_cost': '{1}',
+            'type_line': 'Artifact',
+            'oracle_text': '{T}: Add {C}{C}.',
+            'colors': [],
+            'color_identity': [],
+        }
+        entry = scryfall_to_card_entry(sf)
+        assert 'layout' not in entry
+        assert 'card_faces' not in entry
+
+    def test_adventure_card_stores_faces_but_shared_art(self):
+        sf = {
+            'name': 'Murderous Rider // Swift End',
+            'layout': 'adventure',
+            'mana_cost': '{2}{B}{B}',
+            'type_line': 'Creature — Zombie Knight // Instant — Adventure',
+            'colors': ['B'],
+            'color_identity': ['B'],
+            'image_uris': {'art_crop': 'https://cards.scryfall.io/art_crop/front/m.jpg'},
+            'card_faces': [
+                {'name': 'Murderous Rider', 'mana_cost': '{2}{B}{B}',
+                 'type_line': 'Creature — Zombie Knight',
+                 'oracle_text': 'Lifelink', 'power': '2', 'toughness': '3'},
+                {'name': 'Swift End', 'mana_cost': '{1}{B}{B}',
+                 'type_line': 'Instant — Adventure',
+                 'oracle_text': 'Destroy target creature or planeswalker.'},
+            ],
+        }
+        entry = scryfall_to_card_entry(sf)
+        assert entry['layout'] == 'adventure'
+        assert len(entry['card_faces']) == 2
+        # Adventure faces share one art — no per-face art_crop
+        assert entry['card_faces'][1]['art_crop_url'] == ''
+        assert entry['art_crop_url'].endswith('front/m.jpg')
+
     def test_commander_flag(self):
         sf = {
             'name': 'Kenrith',

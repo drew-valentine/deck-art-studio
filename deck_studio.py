@@ -410,8 +410,39 @@ def load_data():
                         uuid_backfilled += 1
                 except Exception:
                     pass
-    if uuid_backfilled:
-        print(f"  Backfilled {uuid_backfilled} cards with Scryfall UUIDs")
+    # Backfill: layout + card_faces for multi-face cards imported before
+    # alternative-layout support. Scryfall cache first, live API as fallback
+    # (10s socket timeout so an offline start never hangs).
+    faces_backfilled = 0
+    _multiface = [c for c in cards_db
+                  if ' // ' in c.get('name', '') and not c.get('layout')]
+    if _multiface:
+        import socket
+        from scryfall_client import fetch_card, scryfall_to_card_entry
+        _old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(10)
+        try:
+            for card in _multiface:
+                try:
+                    sf = fetch_card(card['name'], set_code=card.get('set_code'),
+                                    collector_number=card.get('collector_number'))
+                    if not sf:
+                        continue
+                    fresh = scryfall_to_card_entry(sf)
+                    if fresh.get('layout'):
+                        card['layout'] = fresh['layout']
+                    if fresh.get('card_faces'):
+                        card['card_faces'] = fresh['card_faces']
+                    if fresh.get('layout') or fresh.get('card_faces'):
+                        faces_backfilled += 1
+                except Exception as e:
+                    print(f"  [backfill] Faces failed for {card['name']}: {e}")
+        finally:
+            socket.setdefaulttimeout(_old_timeout)
+        if faces_backfilled:
+            print(f"  Backfilled {faces_backfilled} multi-face cards with layout/face data")
+
+    if uuid_backfilled or faces_backfilled:
         # Persist updated cards to disk
         if CARD_DB_PATH.exists():
             with open(CARD_DB_PATH) as f:
@@ -422,6 +453,53 @@ def load_data():
                 deck_data = cards_db
             with open(CARD_DB_PATH, 'w') as f:
                 json.dump(deck_data, f, indent=2)
+
+    # Backfill: Scryfall back-face art + composites for double-faced cards,
+    # mirroring the front-face behavior (original art shows until generated)
+    if scryfall_dir:
+        import urllib.request as _urlreq
+        back_backfilled = 0
+        for card in cards_db:
+            if not is_dfc(card):
+                continue
+            name = card['name']
+            bslug = name_to_slug(face_key(name, 'back'))
+            braw = RAW_ART_DIR / f"{bslug}.png"
+            bcomp = COMPOSITE_DIR / f"{bslug}.png"
+
+            # Download the back face's Scryfall art crop once
+            back_url = card['card_faces'][1].get('art_crop_url', '')
+            dest = scryfall_dir / f"{bslug}.jpg"
+            if back_url and not dest.exists():
+                try:
+                    scryfall_dir.mkdir(exist_ok=True)
+                    req = _urlreq.Request(back_url, headers={
+                        "User-Agent": "MTGProxyDeckGen/1.0"})
+                    with _urlreq.urlopen(req, timeout=10) as resp:
+                        dest.write_bytes(resp.read())
+                except Exception as e:
+                    print(f"  [backfill] Back art failed for {name}: {e}")
+
+            if braw.exists() and bcomp.exists():
+                continue
+            sf_path = next((scryfall_dir / f"{bslug}{ext}"
+                            for ext in ('.jpg', '.png', '.jpeg')
+                            if (scryfall_dir / f"{bslug}{ext}").exists()), None)
+            if not sf_path:
+                continue
+            try:
+                if not braw.exists():
+                    img = Image.open(sf_path).convert('RGB')
+                    RAW_ART_DIR.mkdir(parents=True, exist_ok=True)
+                    img.save(braw, 'PNG')
+                COMPOSITE_DIR.mkdir(parents=True, exist_ok=True)
+                render_composite(back_face_card(card), str(braw), None, str(bcomp),
+                                 deck_frame_settings=active_deck_meta.get('frame_settings'))
+                back_backfilled += 1
+            except Exception as e:
+                print(f"  [backfill] Back composite failed for {name}: {e}")
+        if back_backfilled:
+            print(f"  Backfilled {back_backfilled} DFC back faces with Scryfall art composites")
 
     print(f"Loaded {len(cards_db)} cards, {len(prompts_map)} prompts")
 
@@ -443,6 +521,7 @@ def _safe_deck_dir(deck_id: str):
 
 def name_to_slug(name):
     slug = (name.lower()
+            .replace(BACK_FACE_SUFFIX.lower(), '__back')  # Back face of a DFC
             .replace(' // ', '__')   # Adventure / DFC split names
             .replace('/', '_')       # Any remaining slashes
             .replace(' ', '_')
@@ -451,6 +530,54 @@ def name_to_slug(name):
             .replace('-', '_'))
     # Strip any path traversal attempts
     return slug.replace('..', '').strip('.')
+
+
+# ---------------------------------------------------------------------------
+# Double-faced cards (transform / modal DFC)
+# ---------------------------------------------------------------------------
+# The card NAME stays the unit of work ("Accursed Witch // Infectious Curse"):
+# one status entry, one grid tile. The back face piggybacks with a " [back]"
+# suffix on prompt keys / version names, and a "__back" suffix on file slugs.
+BACK_FACE_SUFFIX = ' [back]'
+DFC_LAYOUTS = {'transform', 'modal_dfc'}
+
+
+def is_dfc(card) -> bool:
+    """True when this card has a distinct back face with its own art."""
+    return (card.get('layout') in DFC_LAYOUTS
+            and len(card.get('card_faces') or []) >= 2)
+
+
+def face_key(card_name, face='front'):
+    """Prompt/version key for one face of a card."""
+    return card_name + BACK_FACE_SUFFIX if face == 'back' else card_name
+
+
+def back_face_card(card):
+    """Merged card dict for the BACK face — face fields over card-level fields.
+
+    Card-level extras (frame_overrides, is_commander, color_identity, ...) are
+    inherited so frame rendering behaves like the front face.
+    """
+    faces = card.get('card_faces') or []
+    if len(faces) < 2:
+        return None
+    face = faces[1]
+    merged = dict(card)
+    for k in ('name', 'mana_cost', 'type_line', 'oracle_text',
+              'power', 'toughness', 'loyalty', 'flavor_text', 'card_type'):
+        merged[k] = face.get(k)
+    merged['colors'] = face.get('colors') or card.get('colors', [])
+    if not merged.get('card_type'):
+        from scryfall_client import normalize_card_type
+        merged['card_type'] = normalize_card_type(merged.get('type_line') or '')
+    # Frame overrides authored for the FRONT face (text overrides, art
+    # pan/zoom) must not leak onto the back; keep only style-level overrides.
+    overrides = dict(card.get('frame_overrides') or {})
+    for k in ('text_overrides', 'art_offset', 'art_zoom'):
+        overrides.pop(k, None)
+    merged['frame_overrides'] = overrides
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -1468,10 +1595,41 @@ def _archive_art(card_name, raw_art_dir=None, composite_dir=None, versions_dir=N
     return version_info
 
 
+def generate_card_all_faces(card_name, custom_prompt=None, feedback=None,
+                            face='all', **ctx):
+    """Generate art for a card, covering both faces of a double-faced card.
+
+    face: 'front' | 'back' | 'all'. For single-faced cards only the front
+    exists. custom_prompt applies to the face being generated; with face='all'
+    it applies to the front only (it came from the front prompt editor).
+    """
+    _cards_db = ctx.get('cards_db_snapshot') if ctx.get('cards_db_snapshot') is not None else cards_db
+    card = next((c for c in _cards_db if c['name'] == card_name), None)
+    if not card:
+        return False, f"Card '{card_name}' not found"
+
+    if face == 'all':
+        faces = ['front', 'back'] if is_dfc(card) else ['front']
+    else:
+        faces = [face]
+
+    ok, msg = True, "Success"
+    in_batch = ctx.get('status_dict') is not None
+    for i, f in enumerate(faces):
+        if card_name in _cancel_single or (in_batch and not is_generating):
+            return True, "Cancelled"
+        f_prompt = custom_prompt if (face != 'all' or f == 'front') else None
+        ok, msg = generate_art_for_card(card_name, custom_prompt=f_prompt,
+                                        feedback=feedback, face=f, **ctx)
+        if not ok:
+            return ok, msg
+    return ok, msg
+
+
 def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                           status_dict=None, raw_art_dir=None, composite_dir=None,
-                          versions_dir=None, cards_db_snapshot=None):
-    """Generate art for a single card using the active model config.
+                          versions_dir=None, cards_db_snapshot=None, face='front'):
+    """Generate art for ONE face of a card using the active model config.
 
     Optional params allow batch worker to pass captured deck context,
     so file I/O targets the correct deck even if the user switches decks.
@@ -1522,8 +1680,26 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
     if not card:
         return False, f"Card '{card_name}' not found"
 
-    # Build prompt
-    base_prompt = custom_prompt or prompts_map.get(card_name, card_name)
+    # Face-specific context: the back face of a DFC has its own prompt key,
+    # file slug, and card data for frame rendering.
+    fkey = face_key(card_name, face)
+    face_label = ''
+    composite_card_dict = card
+    if face == 'back':
+        composite_card_dict = back_face_card(card)
+        if not composite_card_dict:
+            return False, f"Card '{card_name}' has no back face"
+        face_label = f" (back: {composite_card_dict.get('name', '')})"
+    elif is_dfc(card):
+        face_label = ' (front)'
+
+    # Build prompt — back faces fall back to a scene built from the face name
+    # and type line when no back prompt has been generated yet.
+    default_prompt = card_name
+    if face == 'back':
+        default_prompt = (f"{composite_card_dict.get('name', '')}, "
+                          f"{composite_card_dict.get('type_line', '')}")
+    base_prompt = custom_prompt or prompts_map.get(fkey, default_prompt)
 
     if feedback:
         # Insert feedback BEFORE the --- delimiter so local models (CLIP)
@@ -1539,7 +1715,7 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
     else:
         full_prompt = base_prompt
 
-    slug = name_to_slug(card_name)
+    slug = name_to_slug(fkey)
     raw_path = _raw_art_dir / f"{slug}.png"
     comp_path = _composite_dir / f"{slug}.png"
 
@@ -1549,15 +1725,15 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
 
     # Archive existing art before overwriting
     if raw_path.exists():
-        archived = _archive_art(card_name, _raw_art_dir, _composite_dir, _versions_dir)
+        archived = _archive_art(fkey, _raw_art_dir, _composite_dir, _versions_dir)
         if archived:
-            print(f"  [{card_name}] Archived as v{archived['version']}")
+            print(f"  [{fkey}] Archived as v{archived['version']}")
 
     try:
         with generation_lock:
             _status[card_name] = {
                 'status': 'generating',
-                'message': f'Calling {model_name} ({quality})...',
+                'message': f'Calling {model_name} ({quality}){face_label}...',
                 'has_raw_art': raw_path.exists(),
                 'has_composite': comp_path.exists(),
             }
@@ -1580,7 +1756,8 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
         meta_path = raw_path.with_suffix('.meta.json')
         with open(meta_path, 'w') as f:
             json.dump({
-                'card': card_name,
+                'card': fkey,
+                'face': face,
                 'model': model_name,
                 'quality': quality,
                 'size': actual_size,
@@ -1595,9 +1772,9 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
 
         # Composite art with card frame using SVG renderer
         with generation_lock:
-            _status[card_name]['message'] = 'Compositing card frame...'
+            _status[card_name]['message'] = f'Compositing card frame{face_label}...'
 
-        render_composite(card, str(raw_path), None, str(comp_path),
+        render_composite(composite_card_dict, str(raw_path), None, str(comp_path),
                                  deck_frame_settings=active_deck_meta.get('frame_settings'))
 
         # Don't overwrite 'cancelled' status if user cancelled during generation
@@ -1705,7 +1882,7 @@ def batch_generate_worker(card_names, feedback_map=None):
             if not is_generating:
                 return
             feedback = feedback_map.get(name)
-            generate_art_for_card(
+            generate_card_all_faces(
                 name, feedback=feedback,
                 status_dict=_batch_generation_status,
                 raw_art_dir=_raw_art_dir,
@@ -1874,15 +2051,18 @@ def api_export_deck(deck_id):
     comp_dir = deck_dir / "composites"
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         for card in deck_cards:
-            slug = name_to_slug(card['name'])
-            comp = comp_dir / f"{slug}.png"
-            if comp.exists():
-                qty = card.get('quantity', 1)
-                if qty == 1:
-                    zf.write(str(comp), f"{slug}.png")
-                else:
-                    for i in range(qty):
-                        zf.write(str(comp), f"{slug}_{i+1}.png")
+            slugs = [name_to_slug(card['name'])]
+            if is_dfc(card):
+                slugs.append(name_to_slug(face_key(card['name'], 'back')))
+            for slug in slugs:
+                comp = comp_dir / f"{slug}.png"
+                if comp.exists():
+                    qty = card.get('quantity', 1)
+                    if qty == 1:
+                        zf.write(str(comp), f"{slug}.png")
+                    else:
+                        for i in range(qty):
+                            zf.write(str(comp), f"{slug}_{i+1}.png")
 
     buf.seek(0)
     registry = _load_deck_registry()
@@ -1999,6 +2179,14 @@ def api_export_manifest(deck_id):
     cards_manifest = {}
     skipped = 0
 
+    def _encode_composite(comp_path):
+        img = Image.open(comp_path).convert('RGB')
+        img = img.resize((375, 525), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=80)
+        b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+        return f'data:image/jpeg;base64,{b64}'
+
     for card in deck_cards:
         scryfall_id = card.get('scryfall_id', '')
         if not scryfall_id:
@@ -2012,18 +2200,28 @@ def api_export_manifest(deck_id):
             continue
 
         try:
-            img = Image.open(comp_path).convert('RGB')
-            img = img.resize((375, 525), Image.LANCZOS)
-            buf = io.BytesIO()
-            img.save(buf, format='JPEG', quality=80)
-            b64 = base64.b64encode(buf.getvalue()).decode('ascii')
             cards_manifest[scryfall_id] = {
                 'name': card['name'],
-                'image': f'data:image/jpeg;base64,{b64}',
+                'image': _encode_composite(comp_path),
             }
         except Exception as e:
             print(f"  [export-manifest] Failed for {card['name']}: {e}")
             skipped += 1
+            continue
+
+        # Double-faced cards: the back face rides under "<uuid>:back", which
+        # the extension looks up for /back/ Scryfall image URLs.
+        if is_dfc(card):
+            bslug = name_to_slug(face_key(card['name'], 'back'))
+            bcomp = comp_dir / f"{bslug}.png"
+            if bcomp.exists():
+                try:
+                    cards_manifest[f'{scryfall_id}:back'] = {
+                        'name': card['name'],
+                        'image': _encode_composite(bcomp),
+                    }
+                except Exception as e:
+                    print(f"  [export-manifest] Back face failed for {card['name']}: {e}")
 
     # Include custom card back if it exists
     card_back_path = comp_dir / "card_back.png"
@@ -2196,25 +2394,28 @@ def api_import_create():
             scryfall_dir.mkdir(exist_ok=True)
             art_done = [0]
 
+            def _download_art(url, dest):
+                if dest.exists() or not url:
+                    return
+                try:
+                    req = _urlreq.Request(url, headers={
+                        "User-Agent": "MTGProxyDeckGen/1.0"
+                    })
+                    with _urlreq.urlopen(req) as resp:
+                        with open(dest, 'wb') as f:
+                            f.write(resp.read())
+                except Exception:
+                    pass
+
             def fetch_art(card):
                 slug = name_to_slug(card['name'])
-                dest = scryfall_dir / f"{slug}.jpg"
-                if dest.exists():
-                    with sf_lock:
-                        art_done[0] += 1
-                        prog['step'] = art_done[0]
-                    return
-                art_url = card.get('art_crop_url', '')
-                if art_url:
-                    try:
-                        req = _urlreq.Request(art_url, headers={
-                            "User-Agent": "MTGProxyDeckGen/1.0"
-                        })
-                        with _urlreq.urlopen(req) as resp:
-                            with open(dest, 'wb') as f:
-                                f.write(resp.read())
-                    except Exception:
-                        pass
+                _download_art(card.get('art_crop_url', ''),
+                              scryfall_dir / f"{slug}.jpg")
+                # Double-faced cards: also fetch the back face's art
+                if is_dfc(card):
+                    bslug = name_to_slug(face_key(card['name'], 'back'))
+                    _download_art(card['card_faces'][1].get('art_crop_url', ''),
+                                  scryfall_dir / f"{bslug}.jpg")
                 with sf_lock:
                     art_done[0] += 1
                     prog['step'] = art_done[0]
@@ -2237,20 +2438,26 @@ def api_import_create():
 
             composited = 0
             for i, card in enumerate(cards):
-                slug = name_to_slug(card['name'])
-                sf_path = scryfall_dir / f"{slug}.jpg"
-                raw_path = deck_raw_dir / f"{slug}.png"
-                comp_path = deck_comp_dir / f"{slug}.png"
+                # Front face (or the whole card for single-faced cards),
+                # plus the back face for double-faced cards.
+                faces = [(name_to_slug(card['name']), card)]
+                if is_dfc(card):
+                    faces.append((name_to_slug(face_key(card['name'], 'back')),
+                                  back_face_card(card)))
+                for slug, face_card in faces:
+                    sf_path = scryfall_dir / f"{slug}.jpg"
+                    raw_path = deck_raw_dir / f"{slug}.png"
+                    comp_path = deck_comp_dir / f"{slug}.png"
 
-                if sf_path.exists() and not raw_path.exists():
-                    try:
-                        img = Image.open(sf_path).convert('RGB')
-                        img.save(raw_path, 'PNG')
-                        render_composite(card, str(raw_path), None, str(comp_path),
-                                 deck_frame_settings=active_deck_meta.get('frame_settings'))
-                        composited += 1
-                    except Exception as e:
-                        print(f"  [import] Composite failed for {card['name']}: {e}")
+                    if sf_path.exists() and not raw_path.exists():
+                        try:
+                            img = Image.open(sf_path).convert('RGB')
+                            img.save(raw_path, 'PNG')
+                            render_composite(face_card, str(raw_path), None, str(comp_path),
+                                     deck_frame_settings=active_deck_meta.get('frame_settings'))
+                            composited += 1
+                        except Exception as e:
+                            print(f"  [import] Composite failed for {card['name']}: {e}")
 
                 prog['step'] = i + 1
                 prog['message'] = f'Compositing: {i+1}/{len(cards)}'
@@ -3275,11 +3482,21 @@ def regenerate_prompts_from_inspiration(deck_id):
     card_names = req_data.get('card_names')
     steer = (req_data.get('steer') or '').strip()  # optional free-text direction
 
-    # If specific card names requested, filter to just those cards
+    # Expand cards into per-face prompt units. A double-faced card gets a
+    # second unit keyed "<full name> [back]" whose card data is the back face,
+    # so the LLM describes the actual back-face scene.
+    units = []
+    for c in cards:
+        units.append((c['name'], c))
+        if is_dfc(c):
+            units.append((face_key(c['name'], 'back'), back_face_card(c)))
+
+    # If specific unit keys requested, filter to just those. Plain names mean
+    # the front face; "<name> [back]" targets the back face.
     if card_names:
-        card_name_set = set(card_names)
-        cards = [c for c in cards if c['name'] in card_name_set]
-        if not cards:
+        requested = set(card_names)
+        units = [(k, c) for k, c in units if k in requested]
+        if not units:
             return jsonify({'error': 'No matching cards found'}), 400
 
     # Build style preamble from inspiration analysis + manual source
@@ -3292,7 +3509,7 @@ def regenerate_prompts_from_inspiration(deck_id):
     job_id = f"regen_{int(time.time() * 1000)}"
     prompt_regen_progress[job_id] = {
         'step': 0,
-        'total': len(cards),
+        'total': len(units),
         'pct': 0,           # 0-100 unified progress across both phases
         'phase': 'generating',
         'message': 'Starting prompt generation...',
@@ -3324,7 +3541,7 @@ def regenerate_prompts_from_inspiration(deck_id):
         if _flux_style:
             _style_hint = f"{_style_hint} — {_flux_style}" if _style_hint else _flux_style
         try:
-            total = len(cards)
+            total = len(units)
             new_prompts = [None] * total  # preserve order
             completed = [0]
             lock = threading.Lock()
@@ -3337,8 +3554,8 @@ def regenerate_prompts_from_inspiration(deck_id):
                 else:
                     prog['message'] = f'Generating AI prompts: 0/{total}'
 
-                def gen_one_ai(idx_card):
-                    idx, card = idx_card
+                def gen_one_ai(idx_unit):
+                    idx, (key, card) = idx_unit
                     max_retries = 5
                     subject = None
                     for attempt in range(max_retries):
@@ -3364,11 +3581,11 @@ def regenerate_prompts_from_inspiration(deck_id):
                                 subject = generate_subject_description(card)
                                 break
 
-                    # Store the rich subject as the single per-card prompt. Style is
+                    # Store the rich subject as the single per-face prompt. Style is
                     # applied separately (deck-level flux_style_prompt) at generation,
                     # so we no longer bundle a style preamble or distill it down.
                     prompt = subject
-                    new_prompts[idx] = {'name': card['name'], 'prompt': prompt}
+                    new_prompts[idx] = {'name': key, 'prompt': prompt}
                     with lock:
                         completed[0] += 1
                         prog['step'] = completed[0]
@@ -3376,29 +3593,29 @@ def regenerate_prompts_from_inspiration(deck_id):
                         prog['message'] = f'Generating prompts: {completed[0]}/{total}'
                         # Update in-memory immediately so frontend sees it on next poll
                         if deck_id == active_deck_id:
-                            prompts_map[card['name']] = prompt
+                            prompts_map[key] = prompt
                         if 'updated_cards' not in prog:
                             prog['updated_cards'] = []
-                        prog['updated_cards'].append(card['name'])
+                        prog['updated_cards'].append(key)
                     time.sleep(0.05)
 
                 with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as pool:
-                    list(pool.map(gen_one_ai, enumerate(cards)))
+                    list(pool.map(gen_one_ai, enumerate(units)))
             else:
                 # ── Rule-based (fast, but still track progress) ──
                 if use_ai and not can_do_ai:
                     prog['ai_fallback'] = True
                     print(f"  [regen] AI requested but no backend available — using rule-based prompts")
-                for i, card in enumerate(cards):
+                for i, (key, card) in enumerate(units):
                     prompt = generate_prompt(card, None)  # plain scene, no style preamble
-                    new_prompts[i] = {'name': card['name'], 'prompt': prompt}
+                    new_prompts[i] = {'name': key, 'prompt': prompt}
                     prog['step'] = i + 1
                     # Update in-memory immediately
                     if deck_id == active_deck_id:
-                        prompts_map[card['name']] = prompt
+                        prompts_map[key] = prompt
                     if 'updated_cards' not in prog:
                         prog['updated_cards'] = []
-                    prog['updated_cards'].append(card['name'])
+                    prog['updated_cards'].append(key)
                     prog['pct'] = 5 + int(45 * (i + 1) / total)
                     prog['message'] = f'Generating prompts: {i + 1}/{total}'
 
@@ -3449,7 +3666,7 @@ def regenerate_prompts_from_inspiration(deck_id):
     return jsonify({
         'success': True,
         'job_id': job_id,
-        'total': len(cards),
+        'total': len(units),
     })
 
 
@@ -3876,7 +4093,7 @@ def get_cards():
                 for e in ('.jpg', '.png', '.jpeg')
             )
 
-        result.append({
+        entry = {
             'name': name,
             'slug': slug,
             'mana_cost': card.get('mana_cost', ''),
@@ -3902,7 +4119,41 @@ def get_cards():
             'toughness': card.get('toughness'),
             'is_pinned': name in pinned_set,
             'frame_overrides': card.get('frame_overrides', {}),
-        })
+        }
+
+        # Double-faced cards: expose the back face so the UI can toggle to it
+        if is_dfc(card):
+            back = card['card_faces'][1]
+            bslug = name_to_slug(face_key(name, 'back'))
+            has_back_scryfall = False
+            if active_deck_id:
+                deck_scryfall_dir = DECKS_DIR / active_deck_id / "scryfall_art"
+                has_back_scryfall = any(
+                    (deck_scryfall_dir / f"{bslug}{e}").exists()
+                    for e in ('.jpg', '.png', '.jpeg')
+                )
+            entry.update({
+                'is_dfc': True,
+                'layout': card.get('layout'),
+                'back_face': {
+                    'name': back.get('name', ''),
+                    'mana_cost': back.get('mana_cost', ''),
+                    'type_line': back.get('type_line', ''),
+                    'oracle_text': back.get('oracle_text', ''),
+                    'power': back.get('power'),
+                    'toughness': back.get('toughness'),
+                    'flavor_text': back.get('flavor_text', ''),
+                },
+                'back_slug': bslug,
+                'back_prompt': prompts_map.get(face_key(name, 'back'), ''),
+                'has_back_raw': (RAW_ART_DIR / f"{bslug}.png").exists(),
+                'has_back_composite': (COMPOSITE_DIR / f"{bslug}.png").exists(),
+                'back_composite_mtime': _composite_mtime_for(bslug),
+                'has_back_ai_art': (RAW_ART_DIR / f"{bslug}.meta.json").exists(),
+                'has_back_scryfall_art': has_back_scryfall,
+            })
+
+        result.append(entry)
 
     return jsonify(result)
 
@@ -4182,6 +4433,9 @@ def generate_single():
     card_name = data.get('card_name')
     feedback = data.get('feedback')
     custom_prompt = data.get('custom_prompt')
+    face = data.get('face', 'all')
+    if face not in ('front', 'back', 'all'):
+        return jsonify({'error': 'face must be front, back, or all'}), 400
 
     if not card_name:
         return jsonify({'error': 'No card name'}), 400
@@ -4219,7 +4473,8 @@ def generate_single():
                 _cancel_single.discard(card_name)
                 return
 
-            success, msg = generate_art_for_card(card_name, custom_prompt=custom_prompt, feedback=feedback)
+            success, msg = generate_card_all_faces(card_name, custom_prompt=custom_prompt,
+                                                   feedback=feedback, face=face)
 
             # If cancelled while generating, discard result
             if card_name in _cancel_single:
@@ -4276,9 +4531,17 @@ def generate_batch():
         card_names = [c['name'] for c in cards_db]
 
     if skip_existing:
+        def _back_face_missing(name):
+            card = next((c for c in cards_db if c['name'] == name), None)
+            if not card or not is_dfc(card):
+                return False
+            back = name_to_slug(face_key(name, 'back'))
+            return not (COMPOSITE_DIR / f"{back}.png").exists()
+
         card_names = [n for n in card_names
                       if generation_status.get(n, {}).get('status') != 'complete'
-                      or not generation_status.get(n, {}).get('has_composite')]
+                      or not generation_status.get(n, {}).get('has_composite')
+                      or _back_face_missing(n)]
 
     if not card_names:
         return jsonify({'success': True, 'message': 'All cards already generated'})
@@ -4346,9 +4609,20 @@ def get_status():
             statuses.update(_batch_generation_status)
     # Attach composite_mtime to each status entry so the poller can detect
     # composite changes without re-fetching /api/cards.
+    _dfc_names = {c['name'] for c in cards_db if is_dfc(c)}
     for name, s in list(statuses.items()):
-        if isinstance(s, dict) and s.get('has_composite'):
-            statuses[name] = {**s, 'composite_mtime': _composite_mtime_for(name_to_slug(name))}
+        if not isinstance(s, dict):
+            continue
+        extra = {}
+        if s.get('has_composite'):
+            extra['composite_mtime'] = _composite_mtime_for(name_to_slug(name))
+        if name in _dfc_names:
+            bslug = name_to_slug(face_key(name, 'back'))
+            extra['has_back_composite'] = (COMPOSITE_DIR / f"{bslug}.png").exists()
+            extra['has_back_raw'] = (RAW_ART_DIR / f"{bslug}.png").exists()
+            extra['back_composite_mtime'] = _composite_mtime_for(bslug)
+        if extra:
+            statuses[name] = {**s, **extra}
     return jsonify({
         'is_generating': is_generating,
         'has_api_key': openai_client is not None,
@@ -4474,39 +4748,55 @@ def recomposite_single():
     if not card:
         return jsonify({'error': f"Card '{card_name}' not found"}), 404
 
-    slug = name_to_slug(card_name)
-    raw_path = RAW_ART_DIR / f"{slug}.png"
-    comp_path = COMPOSITE_DIR / f"{slug}.png"
+    # Faces to re-render: both for DFC cards (or just the requested one)
+    req_face = data.get('face', 'all')
+    faces = [('front', name_to_slug(card_name), card)]
+    if is_dfc(card):
+        faces.append(('back', name_to_slug(face_key(card_name, 'back')),
+                      back_face_card(card)))
+    if req_face in ('front', 'back'):
+        faces = [f for f in faces if f[0] == req_face]
 
-    if not raw_path.exists():
-        # Fall back to Scryfall art if available
-        sf_dir = DECKS_DIR / active_deck_id / "scryfall_art" if active_deck_id else None
-        sf_path = None
-        if sf_dir and sf_dir.exists():
-            for ext in ('.jpg', '.png', '.jpeg'):
-                p = sf_dir / f"{slug}{ext}"
-                if p.exists():
-                    sf_path = p
-                    break
-        if sf_path:
-            # Copy Scryfall art as raw art so future operations work
-            img = Image.open(sf_path).convert('RGB')
-            RAW_ART_DIR.mkdir(parents=True, exist_ok=True)
-            img.save(raw_path, 'PNG')
-        else:
-            return jsonify({'error': 'No raw art exists for this card — generate art first'}), 400
-
+    sf_dir = DECKS_DIR / active_deck_id / "scryfall_art" if active_deck_id else None
+    rendered = 0
     try:
-        # Archive current composite as a version before overwriting
-        archive = data.get('archive_version', False)
-        if archive and comp_path.exists():
-            archived = _archive_art(card_name)
-            if archived:
-                print(f"  [{card_name}] Archived composition as v{archived['version']}")
+        for face, slug, face_card in faces:
+            raw_path = RAW_ART_DIR / f"{slug}.png"
+            comp_path = COMPOSITE_DIR / f"{slug}.png"
 
-        deck_fs = active_deck_meta.get('frame_settings', {})
-        render_composite(card, str(raw_path), None, str(comp_path),
-                         deck_frame_settings=deck_fs)
+            if not raw_path.exists():
+                # Fall back to Scryfall art if available
+                sf_path = None
+                if sf_dir and sf_dir.exists():
+                    for ext in ('.jpg', '.png', '.jpeg'):
+                        p = sf_dir / f"{slug}{ext}"
+                        if p.exists():
+                            sf_path = p
+                            break
+                if sf_path:
+                    # Copy Scryfall art as raw art so future operations work
+                    img = Image.open(sf_path).convert('RGB')
+                    RAW_ART_DIR.mkdir(parents=True, exist_ok=True)
+                    img.save(raw_path, 'PNG')
+                elif face == 'back':
+                    continue  # back face has no art yet — nothing to re-render
+                else:
+                    return jsonify({'error': 'No raw art exists for this card — generate art first'}), 400
+
+            # Archive current composite as a version before overwriting
+            archive = data.get('archive_version', False)
+            if archive and comp_path.exists():
+                archived = _archive_art(face_key(card_name, face))
+                if archived:
+                    print(f"  [{card_name}] Archived composition as v{archived['version']}")
+
+            deck_fs = active_deck_meta.get('frame_settings', {})
+            render_composite(face_card, str(raw_path), None, str(comp_path),
+                             deck_frame_settings=deck_fs)
+            rendered += 1
+
+        if not rendered:
+            return jsonify({'error': 'No art exists for this face — generate art first'}), 400
         with generation_lock:
             generation_status[card_name] = {
                 'status': 'complete',
@@ -4515,7 +4805,7 @@ def recomposite_single():
                 'has_composite': True,
             }
         return jsonify({'success': True, 'message': f'Frame re-rendered for {card_name}',
-                         'composite_mtime': _composite_mtime_for(slug)})
+                         'composite_mtime': _composite_mtime_for(name_to_slug(card_name))})
     except Exception as e:
         return jsonify({'error': str(e)[:200]}), 500
 
@@ -4535,21 +4825,26 @@ def recomposite_all():
     deck_fs = active_deck_meta.get('frame_settings', {})
     sf_dir = DECKS_DIR / active_deck_id / "scryfall_art" if active_deck_id else None
     for card in target_cards:
-        slug = name_to_slug(card['name'])
-        raw_path = RAW_ART_DIR / f"{slug}.png"
-        comp_path = COMPOSITE_DIR / f"{slug}.png"
-        # Fall back to Scryfall art if no raw art
-        if not raw_path.exists() and sf_dir and sf_dir.exists():
-            for ext in ('.jpg', '.png', '.jpeg'):
-                p = sf_dir / f"{slug}{ext}"
-                if p.exists():
-                    img = Image.open(p).convert('RGB')
-                    RAW_ART_DIR.mkdir(parents=True, exist_ok=True)
-                    img.save(raw_path, 'PNG')
-                    break
-        if raw_path.exists():
+        faces = [(name_to_slug(card['name']), card)]
+        if is_dfc(card):
+            faces.append((name_to_slug(face_key(card['name'], 'back')),
+                          back_face_card(card)))
+        for slug, face_card in faces:
+            raw_path = RAW_ART_DIR / f"{slug}.png"
+            comp_path = COMPOSITE_DIR / f"{slug}.png"
+            # Fall back to Scryfall art if no raw art
+            if not raw_path.exists() and sf_dir and sf_dir.exists():
+                for ext in ('.jpg', '.png', '.jpeg'):
+                    p = sf_dir / f"{slug}{ext}"
+                    if p.exists():
+                        img = Image.open(p).convert('RGB')
+                        RAW_ART_DIR.mkdir(parents=True, exist_ok=True)
+                        img.save(raw_path, 'PNG')
+                        break
+            if not raw_path.exists():
+                continue
             try:
-                render_composite(card, str(raw_path), None, str(comp_path),
+                render_composite(face_card, str(raw_path), None, str(comp_path),
                                  deck_frame_settings=deck_fs)
                 with generation_lock:
                     generation_status[card['name']] = {
@@ -4570,7 +4865,7 @@ def recomposite_all():
     })
 
 
-@app.route('/api/versions/<card_name>')
+@app.route('/api/versions/<path:card_name>')
 def get_versions(card_name):
     """List all archived art versions for a card."""
     versions = list_versions(card_name)
@@ -4619,7 +4914,7 @@ def save_card_subject(deck_id):
     return jsonify({'success': True})
 
 
-@app.route('/api/revert/<card_name>', methods=['POST'])
+@app.route('/api/revert/<path:card_name>', methods=['POST'])
 def revert_version(card_name):
     """Revert a card to a specific archived version."""
     data = request.json
@@ -4866,7 +5161,7 @@ def save_card_art_position():
     return jsonify({'success': True})
 
 
-@app.route('/api/delete-version/<card_name>', methods=['POST'])
+@app.route('/api/delete-version/<path:card_name>', methods=['POST'])
 def delete_version_endpoint(card_name):
     """Delete a specific archived version for a card."""
     data = request.json
@@ -4879,7 +5174,7 @@ def delete_version_endpoint(card_name):
     return jsonify({'error': message}), 400
 
 
-@app.route('/api/delete-versions-bulk/<card_name>', methods=['POST'])
+@app.route('/api/delete-versions-bulk/<path:card_name>', methods=['POST'])
 def delete_versions_bulk_endpoint(card_name):
     """Delete all archived versions for a card."""
     versions = list_versions(card_name)
@@ -5774,6 +6069,27 @@ button:active, .btn:active { transform: scale(0.97); }
 }
 .art-orient-btn.active { background: var(--gold); color: #000; }
 .art-orient-btn:hover:not(.active) { background: var(--surface3); }
+
+/* Double-faced card face toggle (detail panel) */
+.face-toggle {
+  display: flex; border: 1px solid var(--border); border-radius: 6px;
+  overflow: hidden; margin-bottom: 8px;
+}
+.face-toggle-btn {
+  flex: 1; padding: 4px 10px; border: none; background: transparent;
+  color: var(--text-dim); font-size: 0.85em; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.face-toggle-btn.active { background: var(--gold); color: #000; }
+.face-toggle-btn:hover:not(.active) { background: var(--surface3); }
+
+/* DFC badge on grid tiles — top-right, inboard of the status dot */
+.dfc-badge {
+  position: absolute; top: 4px; right: 22px; z-index: 2;
+  background: rgba(0,0,0,0.65); color: #fff; border-radius: 4px;
+  font-size: 11px; line-height: 1; padding: 3px 5px;
+  pointer-events: none;
+}
 
 .fd-style-strip {
   display: flex; gap: 6px; flex-wrap: wrap; padding: 2px 0 6px;
@@ -7261,6 +7577,12 @@ header .separator {
           <span id="detailManaCost" class="detail-mana-cost"></span>
         </div>
 
+        <!-- Face toggle — only shown for double-faced cards -->
+        <div class="face-toggle" id="faceToggle" style="display:none;">
+          <button class="face-toggle-btn active" id="faceBtnFront" onclick="setFace('front')">Front</button>
+          <button class="face-toggle-btn" id="faceBtnBack" onclick="setFace('back')">Back</button>
+        </div>
+
         <!-- Zone 2: Hero Image with overlays -->
         <div class="detail-hero" id="detailHero">
           <img id="detailImage" class="detail-card-preview" src="" alt="">
@@ -7532,6 +7854,7 @@ function cleanScenePrompt(p) {
 
 let allCards = [];
 let selectedCard = null;
+let selectedFace = 'front';  // 'front' | 'back' — which face of a DFC the detail panel shows
 let lastSelectedStatus = null;  // tracks status transitions for selected card
 let checkedCards = new Set();
 let pinnedCards = new Set();
@@ -7669,21 +7992,28 @@ async function init() {
     if (!selectedCard) return;
     const newPrompt = e.target.value.trim();
     if (!newPrompt) return;
-    // Only save if the prompt actually differs from what the server has
+    // Only save if the prompt actually differs from what the server has.
+    // On a DFC's back face the prompt saves under "<name> [back]".
     const card = allCards.find(c => c.name === selectedCard);
-    if (card && card.prompt === newPrompt) return;
+    const isBack = viewingBack(card);
+    const current = card ? (isBack ? (card.back_prompt || '') : card.prompt) : '';
+    if (card && current === newPrompt) return;
     try {
       const resp = await fetch('/api/save-prompt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ card_name: selectedCard, prompt: newPrompt }),
+        body: JSON.stringify({ card_name: faceKeyFor(card) || selectedCard, prompt: newPrompt }),
       });
       const data = await resp.json();
       if (data.success) {
         // Update local state so polling doesn't overwrite
         if (card) {
-          card.prompt = newPrompt;
-          if (card.has_ai_art) card.prompt_stale = true;
+          if (isBack) {
+            card.back_prompt = newPrompt;
+          } else {
+            card.prompt = newPrompt;
+            if (card.has_ai_art) card.prompt_stale = true;
+          }
           updateDetailPanel(card);
         }
         showToast('Prompt saved', 'success');
@@ -8291,6 +8621,11 @@ function startPolling() {
         card.step = s.step || 0;
         card.total_steps = s.total_steps || 0;
         if (s.revised_prompt) card.revised_prompt = s.revised_prompt;
+        if (card.is_dfc) {
+          if (s.has_back_raw !== undefined) card.has_back_raw = s.has_back_raw;
+          if (s.has_back_composite !== undefined) card.has_back_composite = s.has_back_composite;
+          card.back_composite_mtime = s.back_composite_mtime || card.back_composite_mtime || 0;
+        }
       }
     }
 
@@ -8568,9 +8903,12 @@ function renderGrid() {
         : `/api/image/proxy/${card.slug}?d=${deckCacheBust}`;
 
     const isPinned = pinnedCards.has(card.name);
+    const dfcBadge = card.is_dfc
+      ? `<div class="dfc-badge" title="Double-faced card">&#x21C6;</div>` : '';
     tile.innerHTML = `
       <div class="select-checkbox"></div>
       <div class="card-status-badge ${badgeClass}"></div>
+      ${dfcBadge}
       <img src="${imgSrc}" alt="${escapeHtml(card.name)}" loading="lazy">
       <div class="card-tile-info">
         <div class="card-tile-name">${escapeHtml(card.name)}</div>
@@ -8767,8 +9105,36 @@ function switchPanelTab(tab) {
   }
 }
 
+// --- Double-faced card face helpers ---
+// The selected face piggybacks on the card name (" [back]") for prompt keys
+// and version/revert endpoints, and on the slug ("__back") for image URLs.
+function viewingBack(card) {
+  return !!(card && card.is_dfc && selectedFace === 'back');
+}
+function faceKeyFor(card) {
+  if (!card) return selectedCard;
+  return viewingBack(card) ? card.name + ' [back]' : card.name;
+}
+function faceSlugFor(card) {
+  if (!card) return name_to_slug(selectedCard || '');
+  return viewingBack(card) ? card.back_slug : card.slug;
+}
+
+function setFace(face) {
+  if (selectedFace === face) return;
+  selectedFace = face;
+  const card = allCards.find(c => c.name === selectedCard);
+  if (!card) return;
+  selectedVersion = null;
+  const actionArea = document.getElementById('detailActionArea');
+  if (actionArea) delete actionArea.dataset.lastState;
+  updateDetailPanel(card);
+  loadVersionHistory(faceKeyFor(card), faceSlugFor(card));
+}
+
 function selectCard(name) {
   selectedCard = name;
+  selectedFace = 'front';
   selectedVersion = null;
   lastSelectedStatus = null;
   const card = allCards.find(c => c.name === name);
@@ -8802,7 +9168,9 @@ function renderActionArea(card) {
   const area = document.getElementById('detailActionArea');
   const hero = document.getElementById('detailHero');
   const heroProgress = document.getElementById('detailHeroProgress');
-  const hasArt = card.has_composite || card.has_raw_art;
+  const back = viewingBack(card);
+  const hasArt = back ? (card.has_back_composite || card.has_back_raw)
+                      : (card.has_composite || card.has_raw_art);
 
   // Update hero progress overlay
   if (card.status === 'generating' && card.total_steps > 0) {
@@ -8843,7 +9211,7 @@ function renderActionArea(card) {
   }
 
   // State caching: avoid clobbering feedback input on every poll
-  const currentState = `${card.status}|${hasArt}|${isGeneratingBatch}|${ollamaBusy}`;
+  const currentState = `${card.status}|${hasArt}|${isGeneratingBatch}|${ollamaBusy}|${selectedFace}`;
   if (area.dataset.lastState === currentState) {
     // Just update text in generating state without rebuilding DOM
     if (card.status === 'generating') {
@@ -8916,14 +9284,24 @@ function renderActionArea(card) {
 }
 
 function updateDetailPanel(card) {
-  document.getElementById('detailName').textContent = card.name;
-  document.getElementById('detailTypeLine').textContent = card.type_line || '';
-  document.getElementById('detailManaCost').innerHTML = renderManaCost(card.mana_cost);
+  // Face toggle — visible only for double-faced cards
+  const faceToggle = document.getElementById('faceToggle');
+  if (faceToggle) {
+    faceToggle.style.display = card.is_dfc ? 'flex' : 'none';
+    document.getElementById('faceBtnFront').classList.toggle('active', selectedFace !== 'back');
+    document.getElementById('faceBtnBack').classList.toggle('active', selectedFace === 'back');
+  }
+  const back = viewingBack(card);
+  const bf = back ? (card.back_face || {}) : null;
+
+  document.getElementById('detailName').textContent = back ? (bf.name || card.name) : card.name;
+  document.getElementById('detailTypeLine').textContent = (back ? bf.type_line : card.type_line) || '';
+  document.getElementById('detailManaCost').innerHTML = renderManaCost(back ? bf.mana_cost : card.mana_cost);
 
   // Only update prompt textarea if user isn't actively editing it
   const promptEl = document.getElementById('detailPrompt');
   if (document.activeElement !== promptEl) {
-    promptEl.value = cleanScenePrompt(card.prompt);
+    promptEl.value = cleanScenePrompt(back ? (card.back_prompt || '') : card.prompt);
   }
 
   // Populate scene direction (distilled subject)
@@ -8932,10 +9310,12 @@ function updateDetailPanel(card) {
     subjectEl.value = card.distilled_subject || '';
   }
 
-  // Flavor text — always-editable textarea
+  // Flavor text — editable for the front face; the back face's flavor text
+  // is display-only for now (no per-face flavor storage yet)
   const flavorEl = document.getElementById('detailFlavorEdit');
   if (flavorEl && document.activeElement !== flavorEl) {
-    flavorEl.value = card.flavor_text || '';
+    flavorEl.value = (back ? bf.flavor_text : card.flavor_text) || '';
+    flavorEl.disabled = back;
   }
 
   // Smart action area (state machine)
@@ -8950,11 +9330,20 @@ function updateDetailPanel(card) {
       .catch(() => {});
   }
 
-  const imgSrc = card.has_composite
-    ? `/api/image/composite/${card.slug}?v=${card.composite_mtime || 0}`
-    : card.has_scryfall_art
-      ? `/api/image/scryfall/${card.slug}?d=${deckCacheBust}`
-      : `/api/image/proxy/${card.slug}?d=${deckCacheBust}`;
+  let imgSrc;
+  if (back) {
+    imgSrc = card.has_back_composite
+      ? `/api/image/composite/${card.back_slug}?v=${card.back_composite_mtime || 0}`
+      : card.has_back_scryfall_art
+        ? `/api/image/scryfall/${card.back_slug}?d=${deckCacheBust}`
+        : `/api/image/proxy/${card.back_slug}?d=${deckCacheBust}`;
+  } else {
+    imgSrc = card.has_composite
+      ? `/api/image/composite/${card.slug}?v=${card.composite_mtime || 0}`
+      : card.has_scryfall_art
+        ? `/api/image/scryfall/${card.slug}?d=${deckCacheBust}`
+        : `/api/image/proxy/${card.slug}?d=${deckCacheBust}`;
+  }
   document.getElementById('detailImage').src = imgSrc;
 
   if (card.revised_prompt) {
@@ -9230,7 +9619,16 @@ function _showGeneratingState(cardName) {
 
 async function generateCurrent(btn) {
   if (!selectedCard) return;
+  const card = allCards.find(c => c.name === selectedCard);
   const prompt = document.getElementById('detailPrompt').value;
+  // Which face to render: single-faced cards always 'all'. On a DFC, render
+  // the face being viewed — except a fresh front render also covers a back
+  // face that has never had AI art, so one click finishes the whole card.
+  let face = 'all';
+  if (card && card.is_dfc) {
+    face = selectedFace;
+    if (face === 'front' && !card.has_back_ai_art) face = 'all';
+  }
   // Save the local prompt (scene direction) before generating — the blur
   // handler races with the generate request, causing the generation to
   // use the PREVIOUS subject instead of what's currently in the textarea.
@@ -9253,6 +9651,7 @@ async function generateCurrent(btn) {
       body: JSON.stringify({
         card_name: selectedCard,
         custom_prompt: prompt,
+        face: face,
       }),
     });
     if (!resp.ok) {
@@ -9274,6 +9673,10 @@ async function regenerateCurrent(btn) {
   if (!deckId) return;
   const steerEl = document.getElementById('detailFeedback');
   const steer = steerEl ? steerEl.value.trim() : '';
+  const selCard = allCards.find(c => c.name === selectedCard);
+  const isBack = viewingBack(selCard);
+  const promptKey = faceKeyFor(selCard);  // "<name> [back]" targets the back face
+  const face = (selCard && selCard.is_dfc) ? selectedFace : 'all';
 
   _showGeneratingState(selectedCard);
   if (btn) { btn.disabled = true; btn.textContent = 'Steering…'; }
@@ -9281,7 +9684,7 @@ async function regenerateCurrent(btn) {
     // 1) Regenerate the prompt, steered by the user's direction.
     const resp = await fetch(`/api/decks/${deckId}/regenerate-prompts`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ use_ai: true, card_names: [selectedCard], steer }),
+      body: JSON.stringify({ use_ai: true, card_names: [promptKey], steer }),
     });
     const data = await resp.json();
     if (!data.success) { showToast(data.error || 'Failed to regenerate prompt', 'error'); return; }
@@ -9302,7 +9705,7 @@ async function regenerateCurrent(btn) {
     const cards = await (await fetch('/api/cards')).json();
     allCards = cards;
     const card = allCards.find(c => c.name === selectedCard);
-    const newPrompt = card ? cleanScenePrompt(card.prompt)
+    const newPrompt = card ? cleanScenePrompt(isBack ? (card.back_prompt || '') : card.prompt)
                            : document.getElementById('detailPrompt').value;
     const promptEl = document.getElementById('detailPrompt');
     if (promptEl) promptEl.value = newPrompt;
@@ -9310,7 +9713,7 @@ async function regenerateCurrent(btn) {
     if (btn) btn.textContent = 'Generating…';
     await fetch('/api/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ card_name: selectedCard, custom_prompt: newPrompt }),
+      body: JSON.stringify({ card_name: selectedCard, custom_prompt: newPrompt, face: face }),
     });
     startPolling();
   } catch (e) {
@@ -10692,9 +11095,11 @@ async function loadVersionHistory(cardName, slug) {
       return;
     }
 
-    // Build thumbnails — newest first
-    const currentCard = allCards.find(c => c.name === cardName);
-    const currentMtime = currentCard?.composite_mtime || 0;
+    // Build thumbnails — newest first ("<name> [back]" keys map to the card's back face)
+    const isBackKey = cardName.endsWith(' [back]');
+    const currentCard = allCards.find(c => c.name === cardName.replace(' [back]', ''));
+    const currentMtime = (isBackKey ? currentCard?.back_composite_mtime
+                                    : currentCard?.composite_mtime) || 0;
     let html = '';
     // Current version first (marked as "Current")
     if (data.has_current) {
@@ -10801,8 +11206,10 @@ function openVersionModal(versionNum, slug, label) {
   const actions = document.getElementById('versionModalActions');
 
   if (versionNum === null) {
-    const currentCard = allCards.find(c => c.slug === slug);
-    const mtime = currentCard?.composite_mtime || 0;
+    const currentCard = allCards.find(c => c.slug === slug || c.back_slug === slug);
+    const mtime = (currentCard?.back_slug === slug
+      ? currentCard?.back_composite_mtime
+      : currentCard?.composite_mtime) || 0;
     img.src = `/api/image/composite/${slug}?v=${mtime}`;
     labelEl.textContent = 'Current Version';
     actions.style.display = 'none';
@@ -10822,26 +11229,32 @@ function closeVersionModal() {
 async function restoreFromModal() {
   if (selectedVersion === null || !selectedCard) return;
   const version = selectedVersion;
-  const slug = name_to_slug(selectedCard);
+  const card = allCards.find(c => c.name === selectedCard);
+  const key = faceKeyFor(card);   // "<name> [back]" targets the back face
+  const slug = faceSlugFor(card);
 
   closeVersionModal();
 
-  const resp = await fetch(`/api/revert/${encodeURIComponent(selectedCard)}`, {
+  const resp = await fetch(`/api/revert/${encodeURIComponent(key)}`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({version: version}),
   });
   const data = await resp.json();
   if (data.success) {
-    const card = allCards.find(c => c.name === selectedCard);
     if (card) {
       card.status = 'complete';
-      card.has_composite = true;
-      card.has_raw_art = true;
+      if (viewingBack(card)) {
+        card.has_back_composite = true;
+        card.has_back_raw = true;
+      } else {
+        card.has_composite = true;
+        card.has_raw_art = true;
+      }
       updateDetailPanel(card);
     }
     renderGrid();
-    loadVersionHistory(selectedCard, slug);
+    loadVersionHistory(key, slug);
   } else {
     showToast('Restore failed: ' + (data.error || 'Unknown error'), 'error');
   }
@@ -10857,7 +11270,9 @@ async function deleteFromModal() {
     confirmClass: 'btn-danger',
   });
   if (!dialogResult) return;
-  const resp = await fetch(`/api/delete-version/${encodeURIComponent(selectedCard)}`, {
+  const _delCard = allCards.find(c => c.name === selectedCard);
+  const _delKey = faceKeyFor(_delCard);
+  const resp = await fetch(`/api/delete-version/${encodeURIComponent(_delKey)}`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({version: selectedVersion}),
@@ -10865,7 +11280,7 @@ async function deleteFromModal() {
   const data = await resp.json();
   if (data.success) {
     closeVersionModal();
-    loadVersionHistory(selectedCard, name_to_slug(selectedCard));
+    loadVersionHistory(_delKey, faceSlugFor(_delCard));
     showToast('Version deleted', 'success');
   } else {
     showToast('Delete failed: ' + (data.error || 'Unknown error'), 'error');
@@ -10874,7 +11289,9 @@ async function deleteFromModal() {
 
 async function deleteAllOldVersions() {
   if (!selectedCard) return;
-  const slug = name_to_slug(selectedCard);
+  const _daCard = allCards.find(c => c.name === selectedCard);
+  const _daKey = faceKeyFor(_daCard);
+  const slug = faceSlugFor(_daCard);
   const dialogResult = await showCustomDialog({
     title: 'Delete All Versions',
     message: 'Delete ALL archived versions for this card? Only the current art will remain.',
@@ -10883,19 +11300,27 @@ async function deleteAllOldVersions() {
     confirmClass: 'btn-danger',
   });
   if (!dialogResult) return;
-  const resp = await fetch(`/api/delete-versions-bulk/${encodeURIComponent(selectedCard)}`, {
+  const resp = await fetch(`/api/delete-versions-bulk/${encodeURIComponent(_daKey)}`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({}),
   });
   const data = await resp.json();
   if (data.success) {
-    loadVersionHistory(selectedCard, slug);
+    loadVersionHistory(_daKey, slug);
   }
 }
 
 function name_to_slug(name) {
-  return name.toLowerCase().replace(/ /g, '_').replace(/,/g, '').replace(/'/g, '').replace(/-/g, '_');
+  // Mirrors the Python name_to_slug: " [back]" → __back, " // " → __, "/" → _
+  return name.toLowerCase()
+    .replace(/ \[back\]/g, '__back')
+    .replace(/ \/\/ /g, '__')
+    .replace(/\//g, '_')
+    .replace(/ /g, '_')
+    .replace(/,/g, '')
+    .replace(/'/g, '')
+    .replace(/-/g, '_');
 }
 
 // --- Start ---
