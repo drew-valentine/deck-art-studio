@@ -1800,15 +1800,6 @@ def render_planeswalker_abilities(card_oracle: str,
         # NOTE: no truncation — every ability always renders. The caller
         # fits the font so the returned used_height <= max_height.
 
-        # ── Draw horizontal divider BEFORE each ability (except the first) ──
-        if i > 0:
-            div_y = current_y - line_spacing * 0.72  # mid-gap between abilities
-            div_x1 = x_start
-            div_x2 = x_start + max_width
-            svg_elements.append(
-                f'<line x1="{div_x1}" y1="{div_y}" x2="{div_x2}" y2="{div_y}" '
-                f'stroke="{text_color}" stroke-width="0.8" opacity="0.25"/>'
-            )
 
         if ability['cost'] is not None:
             cost_str = ability['cost']
