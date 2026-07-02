@@ -3102,7 +3102,7 @@ def _start_loyalty_badge_svg(loyalty: str, cx: float, cy: float,
     asset is missing."""
     import base64
     parts = []
-    loy_font = size * 0.40
+    loy_font = size * 0.32  # breathing room inside the shield plate
     uri = _BADGE_URI_CACHE.get('loyaltyStart')
     if uri is None:
         path = FRAMES_DIR / 'planeswalker' / 'loyaltyStart.png'
