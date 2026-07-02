@@ -246,8 +246,13 @@ def check_pw_badge_alignment():
     asserts the number ink lies inside the plate with a sane center."""
     import numpy as np
     issues = []
-    for cost in ['+2', '0', '−12']:
-        badge = cfr._authentic_loyalty_badge_svg(cost, 20, 60, 80, 28)
+    probes = [('+2', lambda: cfr._authentic_loyalty_badge_svg('+2', 20, 60, 80, 28)),
+              ('0', lambda: cfr._authentic_loyalty_badge_svg('0', 20, 60, 80, 28)),
+              ('−12', lambda: cfr._authentic_loyalty_badge_svg('−12', 20, 60, 80, 28)),
+              ('shield:3', lambda: cfr._start_loyalty_badge_svg('3', 70, 60, size=100)),
+              ('shield:12', lambda: cfr._start_loyalty_badge_svg('12', 70, 60, size=100))]
+    for cost, make in probes:
+        badge = make()
         if not badge:
             return ['pw_badge: badge assets missing']
         head = ('<svg width="140" height="120" viewBox="0 0 140 120" '
@@ -282,49 +287,18 @@ def check_pw_badge_alignment():
     return issues
 
 
-# The content rect each badge-treatment style's planeswalker layout must stay
-# inside — mirrors the rects passed to _render_pw_content_svg by the creators.
-def _pw_rects():
-    L8, LM = cfr.EIGHTH_LAYOUT, cfr.MSA_LAYOUT
-    LA, LS, LE = cfr.ARTDECO_LAYOUT, cfr.SAMURAI_LAYOUT, cfr.ETCHED_LAYOUT
-    LC, LL = cfr.CRYSTAL_LAYOUT, cfr.LOTR_LAYOUT
-    def bar(L):
-        return (L['x_margin'], L['rules_y0'] + 8, L['x_right'], L['rules_y1'] - 8)
-    # (rect, shield_center override or None — must mirror the renderer's calls)
-    return {
-        'godzilla': ((cfr.IKO_LAYOUT['x_margin'], 788, cfr.IKO_LAYOUT['x_right'], 996), None),
-        'crystal': (bar(LC), None), 'lotr': (bar(LL), (LL['pt_cx'], LL['pt_cy'])),
-        '8th': (bar(L8), None), 'msa': (bar(LM), None),
-        'artdeco': (bar(LA), None), 'samurai': (bar(LS), None),
-        'etched': (bar(LE), None),
-    }
-
-
-def _shield_bbox(rect, shield_center):
-    """Mirror _render_pw_content_svg's shield placement exactly."""
-    x0, y0, x1, y1 = rect
-    g = cfr._LOYALTY_SHIELD_GEOM
-    sw = min(88.0, (y1 - y0) * 0.45)
-    sh = sw * g['aspect']
-    if shield_center is not None:
-        cx, cy = shield_center
-    else:
-        cx = x1 + 8 - sw * (1 - g['cx'])
-        cy = y1 + 8 - sh * (1 - g['cy'])
-    return (cx - g['cx'] * sw, cy - g['cy'] * sh,
-            cx + (1 - g['cx']) * sw, cy + (1 - g['cy']) * sh)
-
-
 def check_pw_content_in_rect():
-    """Planeswalker content (badges + text + loyalty shield) must stay
-    strictly inside each style's rules content rect. Rasterizes the text
-    overlay with and without the pw content; the diff is the pw ink, and
-    every ink pixel must be inside the declared rect (±3px tolerance)."""
+    """Planeswalker content (badges + text + loyalty shield) must stay inside
+    the content rect each renderer DECLARES while laying out (fs['_pw_rect'],
+    fs['_pw_shield_bbox'] — single source of truth, no mirrored math).
+    Rasterizes the overlay with and without the pw content; the diff is the
+    pw ink; body ink must stay in the rect and shield ink in its bbox."""
     import numpy as np
-    import copy as _copy
     jace = next(c for c in CARDS if c.get('loyalty'))
+    styles = ['godzilla', 'crystal', 'lotr', '8th', 'msa',
+              'artdeco', 'samurai', 'etched', 'basic']
     issues = []
-    for style, ((x0, y0, x1, y1), shield_center) in _pw_rects().items():
+    for style in styles:
         fs = cfr.resolve_frame_settings(jace, {'style': style})
         full = cfr._build_card_data(jace, fs)
         blank_dict = dict(jace)
@@ -332,27 +306,38 @@ def check_pw_content_in_rect():
         blank_dict['loyalty'] = None
         blank = cfr._build_card_data(blank_dict, fs)
         try:
-            svg_full = _text_svg_for(full, fs)
-            svg_blank = _text_svg_for(blank, fs)
+            if fs.get('mode') == 'image':
+                svg_full = _text_svg_for(full, fs)
+                fs_blank = dict(fs)
+                svg_blank = _text_svg_for(blank, fs_blank)
+            else:
+                svg_full = cfr.create_card_frame_svg(full, fs)
+                fs_blank = dict(fs)
+                svg_blank = cfr.create_card_frame_svg(blank, fs_blank)
         except Exception as e:
             issues.append((style, f'pw_rect_render_error: {e}'))
             continue
+        rect = fs.get('_pw_rect')
+        if rect is None:
+            issues.append((style, 'pw_rect: renderer did not declare _pw_rect'))
+            continue
+        sb = fs.get('_pw_shield_bbox')
         a = _rasterize(svg_full)
         b = _rasterize(svg_blank)
         ink = (np.abs(a.astype(int) - b.astype(int)).sum(axis=2) > 40)
         if not ink.any():
             issues.append((style, 'pw_rect: no planeswalker ink rendered'))
             continue
-        # the shield legitimately straddles the corner — mask its expected
-        # bbox (+tolerance) out of the containment assertion, then assert
-        # the shield ink itself stays within that bbox
-        sb = _shield_bbox((x0, y0, x1, y1), shield_center)
+        x0, y0, x1, y1 = rect
         TOL = 3
-        in_shield = ((np.arange(ink.shape[1])[None, :] >= sb[0] - TOL) &
-                     (np.arange(ink.shape[1])[None, :] <= sb[2] + TOL) &
-                     (np.arange(ink.shape[0])[:, None] >= sb[1] - TOL) &
-                     (np.arange(ink.shape[0])[:, None] <= sb[3] + TOL))
-        body_ink = ink & ~in_shield
+        if sb is not None:
+            in_shield = ((np.arange(ink.shape[1])[None, :] >= sb[0] - TOL) &
+                         (np.arange(ink.shape[1])[None, :] <= sb[2] + TOL) &
+                         (np.arange(ink.shape[0])[:, None] >= sb[1] - TOL) &
+                         (np.arange(ink.shape[0])[:, None] <= sb[3] + TOL))
+            body_ink = ink & ~in_shield
+        else:
+            body_ink = ink
         if not body_ink.any():
             continue
         ys, xs = np.where(body_ink)
@@ -364,7 +349,7 @@ def check_pw_content_in_rect():
         if out:
             issues.append((style, f'pw_content_outside_rect: {", ".join(out)} '
                                   f'(ink x{xs.min()}-{xs.max()} y{ys.min()}-{ys.max()} '
-                                  f'vs rect x{x0}-{x1} y{y0}-{y1})'))
+                                  f'vs rect x{x0:.0f}-{x1:.0f} y{y0:.0f}-{y1:.0f})'))
     return issues
 
 
