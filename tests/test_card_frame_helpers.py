@@ -131,6 +131,27 @@ class TestParseLoyalty:
     def test_empty(self):
         assert _parse_loyalty_abilities('') == []
 
+    def test_x_cost(self):
+        # X loyalty costs (e.g. Chandra Ablaze) must parse as costed abilities
+        abilities = _parse_loyalty_abilities(
+            "−X: Deal X damage to each of up to X targets.\n+1: Draw a card.")
+        assert abilities[0]['cost'] == '−X'
+        assert abilities[1]['cost'] == '+1'
+
+    def test_static_first_detection(self):
+        # Detection regex must find loyalty abilities even when the oracle
+        # OPENS with a static ability (e.g. Nissa, Who Shakes the World)
+        from card_frame_renderer import _LOYALTY_RE
+        oracle = ("Whenever you tap a Forest for mana, add an additional {G}.\n"
+                  "+1: Untap up to three target lands.")
+        assert _LOYALTY_RE.search(oracle) is not None
+
+    def test_plain_text_not_detected(self):
+        from card_frame_renderer import _LOYALTY_RE
+        assert _LOYALTY_RE.search("Draw a card. Then discard a card.") is None
+        # Costs mid-sentence must not match (line-anchored)
+        assert _LOYALTY_RE.search("Creatures get +1: a bonus somehow") is None
+
 
 # ---------------------------------------------------------------------------
 # _is_v2_format / _migrate_v1_to_v2

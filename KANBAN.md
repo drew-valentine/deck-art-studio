@@ -2,6 +2,11 @@
 
 ## Backlog
 
+- [ ] Frame Designer UX polish + validation harness | Priority: P2
+  - Carries forward the two unfinished work items from the Frame Editor Overhaul (merged as v1.34.0)
+  - (a) Frame Designer UX overhaul: style gallery with live thumbnails, intuitive color + gradient controls, art pan/zoom, per-card and apply-to-all UX
+  - (b) Visual validation harness: browser-vs-Python composite parity screenshots across styles × colors (resemblance partially covered by per-frame 0-diff chrome checks in tools/card_quality_check.py)
+
 - [ ] Selection UX Improvements | Priority: P2
   - Hover-reveals checkbox on card tiles for easier multi-select
   - Shift+click range select for selecting contiguous cards
@@ -60,53 +65,28 @@
 
 ## In Progress
 
-- [ ] MLX-Native Pipeline (Mac-only) | Priority: P1 | Created: 2026-06-15 | Owner: drew-valentine
-  - Replace the entire generation pipeline with MLX-native components — Mac-only, pure-local, removing the OpenAI cloud backend
-  - Targets an M3 Pro / 18GB MacBook Pro; full plan at /Users/drew/.claude/plans/elegant-foraging-finch.md
-  - Branch: `feat/mlx-native-pipeline`
-  - Status: Implementation + validation COMPLETE. All 6 stages done and validated. MERGE/TAG PENDING — awaiting user go-ahead to commit (nothing committed yet).
-  - Staged work items:
-    - [x] Stage 0: Branch + dependencies (mflux, mlx-lm, mlx-vlm) + requirements-mac.txt — DONE
-    - [x] Stage 1: Migrate LLM (prompt generation) to mlx-lm and Vision (style analysis) to mlx-vlm; remove Ollama lifecycle machinery — DONE (validated end-to-end: chat, vision, JSON distillation)
-    - [x] Stage 2: Replace SDXL/diffusers image generation with FLUX.1-schnell (4-bit) via mflux (txt2img) — DONE (validated: image generated and viewed)
-    - [x] Stage 3: Rebuild style-matching on FLUX (img2img off Scryfall refs + distilled text-based style tags) + single-resident 18GB memory manager — DONE (validated end-to-end through the app: Kykar card generated + composited)
-    - [x] Stage 4: Remove OpenAI cloud backend entirely + prune torch/diffusers/openai/ollama deps + frontend UI cleanup — DONE (MODEL_OPTIONS FLUX-only, requirements/CI cleaned, welcome modal + model hub + prompt labels de-clouded)
-      - Optional follow-up purge: a few inert dead cloud functions remain (`_generate_openai`, api-key routes, `setApiKeyFromHub`)
-    - [x] Stage 5: Tests + full Playwright/local-FLUX validation — DONE (tests 185/185 pass, full Playwright + local-FLUX validation done)
-    - [ ] Merge to main + semantic version tag — PENDING (awaiting user go-ahead to commit)
-
-- [ ] Frame Editor Overhaul — "recreate any MTG frame, beautifully" | Priority: P1 | Created: 2026-07-01 | Owner: drew-valentine
-  - Goal: The frame editing UI is a joy to use — intuitive and easy to understand. Supports multiple frame styles including a NEW Godzilla-style showcase frame. Supports left/right color gradients for multi-type lands. Able to recreate any frame style from MTG history and produce beautiful proxies.
-  - Long-term goal: Reproduce the most popular MTG frames over time using cardconjurer's open-source frame assets (https://github.com/Investigamer/cardconjurer/tree/master/img/frames).
-  - Foundation: Stands on cardconjurer's frame-asset model (layered color PNGs + region/half masks), building on the existing `card_frame_renderer.py` (FRAME_STYLES / FRAME_LAYERS / FRAME_LAYER_ORDER, SVG vs PNG-layer modes) and `shared/frames/m15` assets.
-  - Branch: `feat/frame-editor`
-  - Status: item 4 COMPLETE — 11-style library (Basic, Clean, Crystal, Showcase, LOTR, 8th Edition, Mystical Archive, Art Deco, Samurai, Etched, M15); remaining work items 5 (Designer UX overhaul) and 6 (validation harness).
-  - Work items (roughly in order):
-    - [x] 1. Codebase map & foundation review — understand `card_frame_renderer.py` (FRAME_STYLES/FRAME_LAYERS/FRAME_LAYER_ORDER, SVG vs PNG-layer modes), the Frame Designer UI, and `shared/frames/m15` assets — DONE
-    - [x] 2. Left/right color gradient frames for multi-type / multicolor lands — composite two color frames via left/right half-masks (hard split) plus a smooth alpha-gradient blend across the middle, using the existing m15 color layers — DONE (commit 6c58ce3 "feat(frames): left→right color gradients for SVG frames (classic/retro)" plus earlier image-mode gradient support via `_gradient_frame_image` for m15/showcase)
-    - [x] 3. Showcase (Godzilla) frame style — a new FRAME_STYLE: larger/full-bleed art window, two-line title (big monster/showcase name + small original card name beneath), dark cinematic type/rules treatment — DONE (shipped as the 'showcase' FRAME_STYLE built on Ikoria (iko) cardconjurer assets, plus rules-text-size slider work). Showcase rules box later expanded +26% taller with text wrapping around an offset P/T plate at 3mm print-safe margins (commits 276d422, 360f5cd, 965ae08).
-    - [x] Frame Designer controls audit — DONE — per-style controls metadata added, dead controls removed/wired (commit 1804e04); two-color Blend/Split fixed to apply card-wide (1bd8688); rules text now always renders with size-as-ceiling (0a4096b); art-position WYSIWYG parity between browser canvas and Python composite fixed (ddb8fb1, 134f158)
-    - [x] Style cleanup — DONE (commit c7c3802) — Full Art removed, Classic renamed to Basic, Godzilla renamed to Showcase
-    - [x] 4. Frame-style library expansion — add more historical MTG frame styles via the layered-PNG model, so users can recreate frames across MTG history — DONE
-      - Note: A 1993/ABU "Retro" style was built then REMOVED for failing fidelity (commit 5b9a689 "chore(frames): remove 1993/ABU 'Retro' style + add frame-editing retro"). A retrospective playbook capturing the lessons was written at `docs/frame-editing-retro.md`.
-      - [x] Crystal frame (crowned shattered-ice style) — DONE (commit 8c82ce2 "feat(frames): Crystal frame style — crowned shattered-ice showcase"), assets + reference + SPEC pinned in commit 117c009 (`shared/frames/crystal/`, `docs/frame-refs/crystal/SPEC.md`), shipped with fidelity proof
-      - [x] LOTR "Ring" showcase frame — DONE (commit 1e3a1eb; user signed off; bottom-mask toggle added commits f4edca5/ad1d063 — native geometry default, toggle to remove)
-      - [x] 8th Edition frame — DONE (commit e937622; colored land variants wl/ul/bl/rl/gl/ml supported; 0.000% chrome parity)
-      - [x] Mystical Archive frame — DONE (commit e937622; style key 'msa'; full-bleed art, legendary crown strip; 0.000% chrome parity)
-      - [x] Art Deco (New Capenna snc/artDeco) — DONE (commit 9ae3caa; assets + SPEC pinned in same commit); 0.000% chrome parity
-      - [x] Samurai (Kamigawa neo/samurai) — DONE (commit 9ae3caa; assets + SPEC pinned in same commit); light-text style; artifact/colorless/land route to gold frame (set's artifact frame has a transparent rules region)
-      - [x] Etched (Commander etched foil) — DONE (commit 9ae3caa; assets + SPEC pinned in same commit); full color coverage incl. land/colorless, holo stamps
-      - Note: shared `_create_bar_box_text_svg` text engine + data-driven `_OVERLAY_SETS` compositor block now power new image frames (marginal cost of a new frame is a layout dict + colors).
-      - Note: CardConjurer attribution added to NOTICE/README/shared-frames README (commit c25d197); rules text now always renders with size-as-ceiling everywhere (commit 0a4096b).
-    - [ ] 5. Frame Designer UX overhaul — style gallery with live thumbnails, WYSIWYG preview that matches the final Python composite (CLAUDE.md warns these are separate code paths — must stay in sync), intuitive color + gradient controls, art pan/zoom, per-card and apply-to-all. — NOT STARTED
-    - [ ] 6. Visual validation harness — screenshot-based checks across styles × colors, browser-vs-Python-composite parity, per CLAUDE.md's mandate to validate frame changes in the actual browser. — NOT STARTED
-      - Note: `docs/frame-editing-retro.md` calls for adding an objective resemblance/fidelity check to `tools/card_quality_check.py`.
-  - Follow-ups / cleanup:
-    - [ ] Cleanup: prune dead ABU code (`ABU_LAYOUT`, `_create_abu_text_svg`, `frame_set=='abu'` branches) — dedicated commit (per the retro's follow-ups)
-
 ## In Review
 
 ## Done
+
+- [x] Frame Editor Overhaul — "recreate any MTG frame, beautifully" | Priority: P1 | Completed: 2026-07-02 | Owner: drew-valentine
+  - Branch: `feat/frame-editor` merged via PR #3
+  - Tagged: v1.34.0
+  - Summary: 11-style frame library (Basic, Clean, Crystal, Showcase, LOTR, 8th Edition, Mystical Archive, Art Deco, Samurai, Etched, M15), each verified at 0.000% chrome fidelity per frame
+  - Per-style Frame Designer controls (dead controls removed, controls metadata data-driven per style)
+  - Rules text never overflows — the size slider acts as a ceiling, text auto-fits below it
+  - WYSIWYG browser preview reaches parity with the final Python composite
+  - 3mm print-safe margins throughout; two-color gradients apply card-wide (blend + hard split)
+  - High-effort code review with 10 verified defects fixed
+  - CardConjurer attribution added (NOTICE / README / shared-frames README)
+  - AI code review removed from CI in favor of local review
+  - Carried forward: the two unfinished work items (Designer UX overhaul + validation harness) now tracked as a new P2 Backlog item "Frame Designer UX polish + validation harness"
+
+- [x] MLX-Native Pipeline (Mac-only) | Priority: P1 | Completed: 2026-07-01 | Owner: drew-valentine
+  - Replaced the entire generation pipeline with MLX-native components — Mac-only, pure-local, removing the OpenAI cloud backend
+  - Branch: `feat/mlx-native-pipeline` merged via PR #2
+  - Tagged: v1.33.0
+  - All 6 stages done and validated (LLM→mlx-lm, Vision→mlx-vlm, image→FLUX.1-schnell via mflux, single-resident 18GB memory manager, cloud backend removed, 185/185 tests + full Playwright/local-FLUX validation)
 
 - [x] Comprehensive Unit Test Suite with Pre-Commit Hooks | Priority: P1 | Completed: 2026-03-27 | Owner: drew-valentine
   - Added test infrastructure with conftest.py, pyproject.toml config, and fixtures

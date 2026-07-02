@@ -66,6 +66,23 @@ CARDS = [
     {'name': 'Aurelia, Exemplar of Justice and the Boros Legion Forever', 'type_line': 'Legendary Creature — Angel',
      'mana_cost': '{2}{R}{W}', 'colors': ['R', 'W'], 'color_identity': ['R', 'W'],
      'oracle_text': 'Flying\nMentor', 'power': '2', 'toughness': '5'},
+    # Hostile walker: oracle OPENS with statics (MULTILINE detection), has an
+    # X cost (badge parse), and 5 paragraphs (band-fit at readable fonts) —
+    # each property covers a defect the happy-path Jace card missed.
+    {'name': 'Chandra, Static Storm', 'type_line': 'Legendary Planeswalker — Chandra',
+     'mana_cost': '{4}{R}{R}', 'colors': ['R'], 'color_identity': ['R'], 'loyalty': '5',
+     'oracle_text': 'Whenever you cast a red spell, Chandra, Static Storm deals 1 damage to any target.\n'
+                    'Red spells you cast cost {1} less to cast.\n'
+                    '+2: Add {R}{R}. Chandra, Static Storm deals 1 damage to up to one target player.\n'
+                    '−3: Chandra, Static Storm deals 3 damage to target creature or planeswalker.\n'
+                    '−X: Chandra, Static Storm deals X damage to each of up to X targets.'},
+    {'name': 'Jace, the Mind Sculptor', 'type_line': 'Legendary Planeswalker — Jace',
+     'mana_cost': '{2}{U}{U}', 'colors': ['U'], 'color_identity': ['U'], 'loyalty': '3',
+     'oracle_text': '+2: Look at the top card of target player’s library. You may put that card '
+                    'on the bottom of that player’s library.\n0: Draw three cards, then put two '
+                    'cards from your hand on top of your library in any order.\n−1: Return target '
+                    'creature to its owner’s hand.\n−12: Exile all cards from target player’s '
+                    'library, then that player shuffles their hand into their library.'},
 ]
 
 
@@ -195,26 +212,7 @@ def check_rules_render_full(card, style):
         return None
     cardobj = cfr._build_card_data(card, fs)
     try:
-        if fs.get('frame_set') == 'iko':
-            svg = cfr._create_iko_text_svg(cardobj, fs)
-        elif fs.get('frame_set') == 'crystal':
-            svg = cfr._create_crystal_text_svg(cardobj, fs)
-        elif fs.get('frame_set') == 'lotr':
-            svg = cfr._create_lotr_text_svg(cardobj, fs)
-        elif fs.get('frame_set') == '8th':
-            svg = cfr._create_8th_text_svg(cardobj, fs)
-        elif fs.get('frame_set') == 'mysticalArchive':
-            svg = cfr._create_msa_text_svg(cardobj, fs)
-        elif fs.get('frame_set') == 'sncArtDeco':
-            svg = cfr._create_artdeco_text_svg(cardobj, fs)
-        elif fs.get('frame_set') == 'neoSamurai':
-            svg = cfr._create_samurai_text_svg(cardobj, fs)
-        elif fs.get('frame_set') == 'etched':
-            svg = cfr._create_etched_text_svg(cardobj, fs)
-        elif fs.get('mode') == 'image':
-            svg = cfr._create_text_only_svg(cardobj, fs)
-        else:
-            svg = cfr.create_card_frame_svg(cardobj, fs)
+        svg = _text_svg_for(cardobj, fs)
     except Exception as e:
         return f'rules_fit_render_error: {type(e).__name__}: {e}'
     overflow = [n for n in fs.get('_quality', []) if 'overflow' in n]
@@ -230,6 +228,179 @@ def check_rules_render_full(card, style):
     return None
 
 
+def check_pw_badge_alignment():
+    """Loyalty badge numbers must sit centered on the badge PLATE (the icons'
+    arrows extend the bounding box asymmetrically, which previously pushed
+    numbers off-plate). Rasterizes each icon with and without its number and
+    asserts the number ink lies inside the plate with a sane center."""
+    import numpy as np
+    issues = []
+    probes = [('+2', lambda: cfr._authentic_loyalty_badge_svg('+2', 20, 60, 80, 28)),
+              ('0', lambda: cfr._authentic_loyalty_badge_svg('0', 20, 60, 80, 28)),
+              ('−12', lambda: cfr._authentic_loyalty_badge_svg('−12', 20, 60, 80, 28)),
+              ('shield:3', lambda: cfr._start_loyalty_badge_svg('3', 70, 60, size=100)),
+              ('shield:12', lambda: cfr._start_loyalty_badge_svg('12', 70, 60, size=100))]
+    for cost, make in probes:
+        badge = make()
+        if not badge:
+            return ['pw_badge: badge assets missing']
+        head = ('<svg width="140" height="120" viewBox="0 0 140 120" '
+                'xmlns="http://www.w3.org/2000/svg" '
+                'xmlns:xlink="http://www.w3.org/1999/xlink">')
+        if cfr._FONT_FACE_CSS:
+            head += f'<style>{cfr._FONT_FACE_CSS}</style>'
+        both = cairosvg.svg2png(bytestring=(head + ''.join(badge) + '</svg>').encode(),
+                                output_width=140, output_height=120)
+        only = cairosvg.svg2png(bytestring=(head + badge[0] + '</svg>').encode(),
+                                output_width=140, output_height=120)
+        a = np.array(Image.open(io.BytesIO(both)).convert('RGBA')).astype(int)
+        b = np.array(Image.open(io.BytesIO(only)).convert('RGBA')).astype(int)
+        text_mask = (np.abs(a - b).sum(axis=2) > 40)
+        if not text_mask.any():
+            issues.append(f'pw_badge {cost}: number did not render')
+            continue
+        # plate = wide rows of the badge-only alpha
+        alpha = b[:, :, 3]
+        rows = (alpha > 100).sum(axis=1)
+        plate_rows = np.where(rows > 0.75 * rows.max())[0]
+        ty, tx = np.where(text_mask)
+        if ty.min() < plate_rows.min() - 2 or ty.max() > plate_rows.max() + 2:
+            issues.append(
+                f'pw_badge {cost}: number y{ty.min()}-{ty.max()} outside plate '
+                f'y{plate_rows.min()}-{plate_rows.max()}')
+        else:
+            # center must sit near the plate center
+            off = abs((ty.min() + ty.max()) / 2 - (plate_rows.min() + plate_rows.max()) / 2)
+            if off > (plate_rows.max() - plate_rows.min()) * 0.22:
+                issues.append(f'pw_badge {cost}: number off-center by {off:.0f}px in plate')
+    return issues
+
+
+def check_pw_content_in_rect():
+    """Planeswalker content (badges + text + loyalty shield) must stay inside
+    the content rect each renderer DECLARES while laying out (fs['_pw_rect'],
+    fs['_pw_shield_bbox'] — single source of truth, no mirrored math).
+    Rasterizes the overlay with and without the pw content; the diff is the
+    pw ink; body ink must stay in the rect and shield ink in its bbox."""
+    import numpy as np
+    jace = next(c for c in CARDS if c.get('loyalty'))
+    styles = ['godzilla', 'crystal', 'lotr', '8th', 'msa',
+              'artdeco', 'samurai', 'etched', 'basic']
+    issues = []
+    for style in styles:
+        fs = cfr.resolve_frame_settings(jace, {'style': style})
+        full = cfr._build_card_data(jace, fs)
+        blank_dict = dict(jace)
+        blank_dict['oracle_text'] = ''
+        blank_dict['loyalty'] = None
+        blank = cfr._build_card_data(blank_dict, fs)
+        try:
+            svg_full = _text_svg_for(full, fs)
+            fs_blank = dict(fs)
+            svg_blank = _text_svg_for(blank, fs_blank)
+        except Exception as e:
+            issues.append((style, f'pw_rect_render_error: {e}'))
+            continue
+        rect = fs.get('_pw_rect')
+        if rect is None:
+            issues.append((style, 'pw_rect: renderer did not declare _pw_rect'))
+            continue
+        sb = fs.get('_pw_shield_bbox')
+        a = _rasterize(svg_full)
+        b = _rasterize(svg_blank)
+        ink = (np.abs(a.astype(int) - b.astype(int)).sum(axis=2) > 40)
+        if not ink.any():
+            issues.append((style, 'pw_rect: no planeswalker ink rendered'))
+            continue
+        x0, y0, x1, y1 = rect
+        TOL = 3
+        if sb is not None:
+            in_shield = ((np.arange(ink.shape[1])[None, :] >= sb[0] - TOL) &
+                         (np.arange(ink.shape[1])[None, :] <= sb[2] + TOL) &
+                         (np.arange(ink.shape[0])[:, None] >= sb[1] - TOL) &
+                         (np.arange(ink.shape[0])[:, None] <= sb[3] + TOL))
+            body_ink = ink & ~in_shield
+        else:
+            body_ink = ink
+        if sb is not None and sb[3] > 1015:
+            issues.append((style, f'pw_shield_print_unsafe: bottom y{sb[3]:.0f} '
+                                  f'past the 3mm limit (1014)'))
+        if not body_ink.any():
+            continue
+        ys, xs = np.where(body_ink)
+        out = []
+        if xs.min() < x0 - TOL: out.append(f'left {x0 - xs.min():.0f}px')
+        if xs.max() > x1 + TOL: out.append(f'right {xs.max() - x1:.0f}px')
+        if ys.min() < y0 - TOL: out.append(f'top {y0 - ys.min():.0f}px')
+        if ys.max() > y1 + TOL: out.append(f'bottom {ys.max() - y1:.0f}px')
+        if out:
+            issues.append((style, f'pw_content_outside_rect: {", ".join(out)} '
+                                  f'(ink x{xs.min()}-{xs.max()} y{ys.min()}-{ys.max()} '
+                                  f'vs rect x{x0:.0f}-{x1:.0f} y{y0:.0f}-{y1:.0f})'))
+    return issues
+
+
+def _text_svg_for(cardobj, fs):
+    """THE frame_set -> text-creator dispatch for this gate. Every check
+    renders through this one table so a new style added to the renderer
+    can't silently exercise the wrong creator in one check but not another."""
+    creators = {
+        'iko': cfr._create_iko_text_svg,
+        'crystal': cfr._create_crystal_text_svg,
+        'lotr': cfr._create_lotr_text_svg,
+        '8th': cfr._create_8th_text_svg,
+        'mysticalArchive': cfr._create_msa_text_svg,
+        'sncArtDeco': cfr._create_artdeco_text_svg,
+        'neoSamurai': cfr._create_samurai_text_svg,
+        'etched': cfr._create_etched_text_svg,
+        'planeswalker': cfr._create_pw_frame_text_svg,
+    }
+    fn = creators.get(fs.get('frame_set'))
+    if fn is not None:
+        return fn(cardobj, fs)
+    if fs.get('mode') == 'image':
+        return cfr._create_text_only_svg(cardobj, fs)
+    return cfr.create_card_frame_svg(cardobj, fs)
+
+
+def _rasterize(svg):
+    import numpy as np
+    png = cairosvg.svg2png(bytestring=svg.encode('utf-8'),
+                           output_width=W, output_height=H)
+    return __import__('numpy').array(Image.open(io.BytesIO(png)).convert('RGBA'))
+
+
+def check_pw_frame_loyalty_centered():
+    """The Planeswalker frame's starting-loyalty numeral must center on the
+    baked plate (mask-isolated bbox x600-713.75 y923.5-994.5, plate center
+    (657, 956.5)). Isolates the glyph ink by diffing the overlay with and
+    without loyalty."""
+    import numpy as np
+    jace = next(c for c in CARDS if c.get('loyalty'))
+    fs = cfr.resolve_frame_settings(jace, {'style': 'planeswalker'})
+    full = cfr._build_card_data(jace, fs)
+    noloy_dict = dict(jace); noloy_dict['loyalty'] = None
+    noloy = cfr._build_card_data(noloy_dict, dict(fs))
+    a = _rasterize(cfr._create_pw_frame_text_svg(full, fs))
+    b = _rasterize(cfr._create_pw_frame_text_svg(noloy, dict(fs)))
+    ink = (np.abs(a.astype(int) - b.astype(int)).sum(axis=2) > 40)
+    # restrict to the plate zone (the loyalty diff also removes shield-band
+    # differences elsewhere if any)
+    ink[:900, :] = False
+    if not ink.any():
+        return ['pw_loyalty: numeral did not render']
+    ys, xs = np.where(ink)
+    gcx, gcy = (xs.min() + xs.max()) / 2, (ys.min() + ys.max()) / 2
+    issues = []
+    if abs(gcx - 657) > 6 or abs(gcy - 956.5) > 7:
+        issues.append(f'pw_loyalty_off_center: glyph center ({gcx:.0f},{gcy:.0f}) '
+                      f'vs plate center (657,956)')
+    if xs.min() < 604 or xs.max() > 710 or ys.min() < 928 or ys.max() > 991:
+        issues.append(f'pw_loyalty_outside_plate: glyph x{xs.min()}-{xs.max()} '
+                      f'y{ys.min()}-{ys.max()}')
+    return issues
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--style', default=None, help='only this style')
@@ -238,6 +409,12 @@ def main():
 
     styles = [args.style] if args.style else list(cfr.FRAME_STYLES.keys())
     grid, failures, total = [], [], 0
+    for iss in check_pw_badge_alignment():
+        failures.append(('(badge geometry)', '-', iss))
+    for style, iss in check_pw_content_in_rect():
+        failures.append(('(pw rect)', style, iss))
+    for iss in check_pw_frame_loyalty_centered():
+        failures.append(('(pw loyalty)', 'planeswalker', iss))
     for card in CARDS:
         row = {}
         for st in styles:
