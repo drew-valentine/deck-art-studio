@@ -599,7 +599,7 @@ def create_deck(deck_name: str, cards: list = None, prompts: list = None,
         'inspiration_image': None,           # filename in deck dir
         'inspiration_style_description': '',  # from GPT-4o vision analysis
         'cards': cards or [],
-        'frame_settings': {'style': 'classic'},
+        'frame_settings': {'style': 'basic'},
         'art_orientation': 'portrait',
     }
     with open(deck_dir / "deck.json", 'w') as f:
@@ -9690,7 +9690,7 @@ let _frameLayerOrder = [];
 let _frameLayerMeta = {};
 let _frameDeckSettings = {};
 let _framePreviewTimer = null;
-let _activeFrameStyle = 'classic';
+let _activeFrameStyle = 'basic';
 let _fdCompositor = null;  // FrameCompositor instance
 
 const SWATCH_COLORS = {
@@ -10052,14 +10052,14 @@ function setLayerControls(key, visible, opacity) {
 }
 
 function populateFrameFromSettings(settings) {
-  const styleMap = {classic:'classic', modern:'m15', borderless:'classic',
-                    minimal:'classic', 'full-art':'full-art', nyx:'m15',
+  const styleMap = {classic:'basic', basic:'basic', modern:'m15', borderless:'basic',
+                    minimal:'basic', 'full-art':'basic', nyx:'m15',
                     vintage:'m15', retro:'m15', frameless:'clean', clean:'clean',
                     m15:'m15'};
   if (settings.preset && !settings.style) {
-    selectFrameStyle(styleMap[settings.preset] || 'classic');
+    selectFrameStyle(styleMap[settings.preset] || 'basic');
   } else {
-    const rawStyle = settings.style || 'classic';
+    const rawStyle = settings.style || 'basic';
     selectFrameStyle(styleMap[rawStyle] || rawStyle);
   }
 

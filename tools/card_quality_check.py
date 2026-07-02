@@ -121,7 +121,7 @@ def check_textbox_legible(card, style):
     the text disappears — the exact defect from the earlier Godzilla frame.)
 
     Only image-mode frames (m15, godzilla) claim a readable box; the SVG frosted-
-    glass / full-art styles are intentionally translucent and are skipped.
+    glass styles are intentionally translucent and are skipped.
     """
     fs = cfr.resolve_frame_settings(card, {'style': style})
     if fs.get('mode') != 'image' or fs.get('no_frame'):

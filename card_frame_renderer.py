@@ -288,8 +288,8 @@ FRAME_STYLES = {
         'frame_set': 'm15',
         'controls': {'colors': ['text']},
     },
-    'classic': {
-        'label': 'Classic',
+    'basic': {
+        'label': 'Basic',
         'description': 'Frosted glass overlays — the original Deck Art Studio look',
         'mode': 'svg',
         'render': {
@@ -314,35 +314,8 @@ FRAME_STYLES = {
             'info_bar':  {'visible': False, 'opacity': 0},
         },
     },
-    'full-art': {
-        'label': 'Full Art',
-        'description': 'Art dominates, type at bottom, no text box',
-        'mode': 'svg',
-        'render': {
-            'border_width': 0,
-            'field_radius': 6,
-            'art_margin': 16,
-            'pinline_width': 0,
-            'pt_shape': 'pentagon',
-            'frame_pattern': 'none',
-            'textbox_style': 'rounded',
-            'field_shape': 'simple',
-            'field_stroke': False,
-        },
-        'layers': {
-            'border':    {'visible': False, 'opacity': 0},
-            'frame':     {'visible': False, 'opacity': 0},
-            'title_bar': {'visible': True,  'opacity': 0.40},
-            'pinlines':  {'visible': False, 'opacity': 0},
-            'type_bar':  {'visible': True,  'opacity': 0.40},
-            'text_box':  {'visible': False, 'opacity': 0},
-            'pt_box':    {'visible': True,  'opacity': 0.70},
-            'info_bar':  {'visible': False, 'opacity': 0},
-        },
-        'type_y': 860, 'show_oracle': False, 'show_flavor': False,
-    },
     'godzilla': {
-        'label': 'Godzilla / Showcase',
+        'label': 'Showcase',
         'description': 'Ikoria borderless showcase — full-bleed art, gold-trimmed title with a '
                        'big display name over the original name, light rules box. Built from the '
                        'authentic Ikoria frame assets.',
@@ -398,18 +371,19 @@ def _migrate_v1_to_v2(settings: dict) -> dict:
     """Convert v1 frame_settings (preset + alpha_overrides) to v2 (style + layers)."""
     # Map v1 preset names to v2 style names
     preset_map = {
-        'classic': 'classic', 'modern': 'modern',
-        'borderless': 'classic',
-        'minimal': 'classic', 'full-art': 'full-art',
-        'vintage': 'modern', 'retro': 'modern',
+        'classic': 'basic', 'modern': 'm15',
+        'borderless': 'basic',
+        'minimal': 'basic', 'full-art': 'basic',
+        'vintage': 'm15', 'retro': 'm15',
         'frameless': 'clean',
     }
-    v1_preset = settings.get('preset', 'classic')
-    style_key = preset_map.get(v1_preset, 'classic')
+    v1_preset = settings.get('preset', 'basic')
+    style_key = preset_map.get(v1_preset, 'basic')
 
     # Start from the mapped style's layer defaults
-    style = FRAME_STYLES.get(style_key, FRAME_STYLES['classic'])
-    layers = copy.deepcopy(style['layers'])
+    style = FRAME_STYLES.get(style_key, FRAME_STYLES['basic'])
+    # Image-mode styles (e.g. m15) carry no layers dict — use basic's
+    layers = copy.deepcopy(style.get('layers', FRAME_STYLES['basic']['layers']))
 
     # Apply v1 alpha_overrides to corresponding v2 layers
     alphas = settings.get('alpha_overrides', {})
@@ -455,13 +429,15 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None) -> dict:
     if deck_settings and not _is_v2_format(deck_settings):
         deck_settings = _migrate_v1_to_v2(deck_settings)
 
-    # ── Determine style: card override > deck > classic ──
-    # Map removed styles to closest remaining style
-    _style_remap = {'modern': 'm15', 'retro': 'm15', 'nyx': 'm15', 'vintage': 'm15'}
+    # ── Determine style: card override > deck > basic ──
+    # Map removed/renamed styles to the closest remaining style
+    _style_remap = {'modern': 'm15', 'retro': 'm15', 'nyx': 'm15', 'vintage': 'm15',
+                    'classic': 'basic', 'full-art': 'basic',
+                    'borderless': 'basic', 'minimal': 'basic'}
     style_key = card_overrides.get('style',
-                deck_settings.get('style', 'classic'))
+                deck_settings.get('style', 'basic'))
     style_key = _style_remap.get(style_key, style_key)
-    style = FRAME_STYLES.get(style_key, FRAME_STYLES['classic'])
+    style = FRAME_STYLES.get(style_key, FRAME_STYLES['basic'])
 
     # ── Build layers: start from style defaults (image-based styles have no layers) ──
     layers = copy.deepcopy(style.get('layers', {}))
@@ -936,7 +912,7 @@ def _render_border_layer(opacity: float, render: dict = None) -> str:
     """
     render = render or {}
     # A zero-width border is invisible even when the layer is toggled on
-    # (classic/full-art set border_width 0) — floor it so enabling the
+    # (basic sets border_width 0) — floor it so enabling the
     # Border layer always actually draws a border.
     bw = render.get('border_width', 8) or 8
     br = render.get('border_radius', 22)
@@ -1774,7 +1750,7 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
             theme[key] = fs['color_overrides'][key]
 
     mana_pips = parse_mana_cost(card.mana_cost)
-    layers = fs.get('layers', FRAME_STYLES['classic']['layers'])
+    layers = fs.get('layers', FRAME_STYLES['basic']['layers'])
     render = fs.get('render', dict(DEFAULT_RENDER_PARAMS))
 
     field = theme['field']
@@ -1807,7 +1783,7 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
     fw = VB_W - 2 * art_m  # field width
     rules_inner_w = fw - 2 * RULES_PADDING
 
-    # Layout positions (overridable by styles like full-art)
+    # Layout positions (styles can override e.g. type_y / show_oracle)
     name_y = NAME_Y
     name_bottom = NAME_Y + NAME_H
     type_y = fs.get('type_y', TYPE_Y)
