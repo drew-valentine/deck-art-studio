@@ -10506,6 +10506,32 @@ function resetTextOverrides() {
   scheduleFramePreview();
 }
 
+// Persist the selected card's WYSIWYG state (art pan/zoom + text overrides).
+// Shared by Save Frame and Apply to Checked so a repositioned art never
+// silently reverts when the composite re-renders.
+async function persistSelectedCardFrameState(textOverrides) {
+  if (!selectedCard) return;
+  const cardOverrides = {};
+  if (textOverrides && Object.keys(textOverrides).length) {
+    cardOverrides.text_overrides = textOverrides;
+  }
+  if (_fdCompositor) {
+    const artState = _fdCompositor.getArtState();
+    cardOverrides.art_offset = artState.offset;
+    cardOverrides.art_zoom = artState.zoom;
+  }
+  if (Object.keys(cardOverrides).length) {
+    await fetch('/api/cards/frame-overrides', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        card_name: selectedCard,
+        frame_overrides: cardOverrides,
+      }),
+    });
+  }
+}
+
 async function saveFrameSettings() {
   const settings = gatherFrameSettings();
   const textOverrides = settings.text_overrides;
@@ -10521,40 +10547,7 @@ async function saveFrameSettings() {
     _frameDeckSettings = settings;
 
     if (selectedCard) {
-      // Save per-card overrides (text + art position)
-      const cardOverrides = {};
-      if (textOverrides && Object.keys(textOverrides).length) {
-        cardOverrides.text_overrides = textOverrides;
-      }
-      // Save art position from compositor
-      if (_fdCompositor) {
-        const artState = _fdCompositor.getArtState();
-        cardOverrides.art_offset = artState.offset;
-        cardOverrides.art_zoom = artState.zoom;
-      }
-      if (Object.keys(cardOverrides).length) {
-        await fetch('/api/cards/frame-overrides', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            card_name: selectedCard,
-            frame_overrides: cardOverrides,
-          }),
-        });
-      }
-      // Also save art position to dedicated endpoint
-      if (_fdCompositor) {
-        const artState = _fdCompositor.getArtState();
-        await fetch('/api/cards/art-position', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            card_name: selectedCard,
-            art_offset: artState.offset,
-            art_zoom: artState.zoom,
-          }),
-        });
-      }
+      await persistSelectedCardFrameState(textOverrides);
 
       // Re-render composite on server (archive previous as version)
       const resp = await fetch('/api/recomposite', {
@@ -10565,6 +10558,10 @@ async function saveFrameSettings() {
       const data = await resp.json();
       if (data.success) {
         showToast('Frame saved', 'success');
+      } else {
+        // Settings persisted but the composite didn't re-render — say so
+        // instead of failing silently (looks like "my changes didn't save").
+        showToast('Frame saved, but re-render failed: ' + (data.error || 'unknown error'), 'error');
       }
     } else {
       showToast('Frame settings saved', 'success');
@@ -10585,6 +10582,7 @@ async function applyFrameToChecked() {
     return;
   }
   const settings = gatherFrameSettings();
+  const textOverrides = settings.text_overrides;
   delete settings.text_overrides;
 
   await fetch(`/api/decks/${document.getElementById('deckSelect').value}/frame-settings`, {
@@ -10593,6 +10591,10 @@ async function applyFrameToChecked() {
     body: JSON.stringify(settings),
   });
   _frameDeckSettings = settings;
+
+  // Persist the selected card's art pan/zoom BEFORE recompositing, so a
+  // repositioned art doesn't silently revert if that card is checked.
+  await persistSelectedCardFrameState(textOverrides);
 
   const names = [...checkedCards];
   const resp = await fetch('/api/recomposite-all', {
