@@ -11,10 +11,10 @@
     - Generation: one art image per card name. FLUX accepts arbitrary width/height; deck-level `art_orientation` (portrait/landscape) already exists for art aspect.
     - Extension (`extension/content.js`): replaces edhplay.com images by Scryfall UUID from image URL. DFC front and back share the same UUID (URLs differ by /front/ vs /back/), so back faces would currently be replaced with front art.
   - **Phasing (subtasks):**
-    - Phases 0, 1 + 2 — **SHIPPED in v1.36.0** (2026-07-03, PR #7 squash-merged as commit 23a5d8c, owner drew-valentine). Moved to Done. Remaining epic scope: Phase 3 (landscape), the transform-indicator-pips polish, and a DRY cleanup pass (below).
+    - Phases 0, 1 + 2 — **SHIPPED in v1.36.0** (2026-07-03, PR #7 squash-merged as commit 23a5d8c, owner drew-valentine). Phase 3a — **SHIPPED in v1.37.0** (2026-07-03, PR #8 squash-merged as commit dac763a, owner drew-valentine). Both moved to Done. Remaining epic scope: Phase 3b (authentic rotated split cards with per-half art), the transform-indicator-pips polish, and a DRY cleanup pass (below).
     - [ ] Transform/MDFC face-indicator pips on frames | polish, carried from Phase 1 — a dedicated transform-indicator icon on the frame (front/back face indicator). Back-face composites currently render with the standard frame for the back face's own card data; a face-indicator icon was deferred out of Phase 1.
     - Phase 3 split into two parts (Drew approved starting 3a on 2026-07-03):
-      - [ ] **Phase 3a — Battle cards (landscape sieges)** — IN REVIEW (see In Review column; PR #8, `semver:minor`). Battle fronts render a dedicated landscape battle frame (title bar, art region, rules panel, defense shield) composed on a landscape canvas then rotated 90° into the standard 750×1050 portrait composite (matching how real battles print); defense stored per face + top-level; landscape-aspect FLUX art; back face via existing DFC machinery. Pleasant discovery: battles are Scryfall `layout=transform`, so the v1.36.0 DFC machinery covered faces/toggle/extension automatically — PR smaller than scoped. Branch `feature/battles-landscape`.
+      - Phase 3a — Battle cards (landscape sieges) — **SHIPPED in v1.37.0** (see Done). Battle fronts render a dedicated landscape battle frame rotated 90° into the standard portrait composite; battles are Scryfall `layout=transform`, so the v1.36.0 DFC machinery covered faces/toggle/extension automatically.
       - [ ] **Phase 3b — Authentic rotated split cards with per-half art** — remains Backlog. True rotated split-card layout with two halves each having their own art. Note: split cards already render usably today via the Phase 2 side-by-side treatment, so this is a fidelity upgrade rather than net-new support.
     - [ ] DRY cleanup pass (flagged by the Phase 2 review) — de-duplicate the face-expansion logic (duplicated across paths) and consolidate the triple-copied download/slug helpers into a single shared implementation.
   - **Open question — resolved (2026-07-03):** the friend's examples are all covered by Phases 0-3 except "PIP cards", which remains unclarified. Still need the requester to clarify what "PIP cards" means (likely Kamigawa flip cards) before scoping any flip-layout work.
@@ -84,10 +84,13 @@
 
 ## In Review
 
-- [ ] Alt Layouts Phase 3a — Battle cards (landscape sieges) | Priority: P2 | Review Started: 2026-07-03 | Owner: drew-valentine
-  - Branch: `feature/battles-landscape`
+## Done
+
+- [x] Alt Layouts Phase 3a — Battle cards (landscape sieges) | Priority: P2 | Completed: 2026-07-03 | Owner: drew-valentine
+  - Branch: `feature/battles-landscape` merged via PR #8 (squash-merged to main as commit dac763a)
   - PR: https://github.com/drew-valentine/deck-art-studio/pull/8 (label `semver:minor`)
-  - Part of EPIC: Support Alternative Card Layouts (see Backlog). Phase 3 was split into 3a (this item) and 3b (authentic rotated split cards, remains Backlog).
+  - Tagged: v1.37.0 (released 2026-07-03)
+  - Part of EPIC: Support Alternative Card Layouts (see Backlog). Phase 3 was split into 3a (this item) and 3b (authentic rotated split cards, remains Backlog). Remaining epic scope: Phase 3b, transform-indicator-pips polish, and a DRY cleanup pass.
   - **Pleasant discovery:** battles are Scryfall `layout=transform`, so the v1.36.0 DFC machinery already covered per-face storage, the Front/Back toggle, and the extension automatically — the PR came in smaller than scoped.
   - Acceptance criteria (Given/When/Then) — all met:
     - [x] Given a battle card (e.g. Invasion of Zendikar // Awakened Skyclave — Scryfall `layout=transform` with front type "Battle — Siege" and a `defense` field), when the deck is imported or an existing deck is backfilled, then the per-face `defense` value is stored on the card entry (per-face + top-level).
@@ -96,8 +99,7 @@
     - [x] Given a battle card, when the back face (a normal portrait card, e.g. Awakened Skyclave) is viewed/generated, then it works via the existing DFC machinery (Front/Back toggle, per-face art + composite).
     - [x] Known limitation (documented): Frame Designer art pan/zoom is limited for battle fronts in this pass.
     - [x] Validation gate: Playwright browser verification + live local FLUX generation of a battle front + full pytest suite (206 tests).
-
-## Done
+  - CI fix included in the release: the PR health check now polls up to 45s and dumps the server log on failure (previously a fixed 6s sleep that raced first-start font downloads with no diagnostics).
 
 - [x] Alt Layouts Phase 2 — Adventure + Room split text rendering & Frame Designer face support | Priority: P2 | Completed: 2026-07-03 | Owner: drew-valentine
   - Branch: `feature/alt-layouts-dfc` merged via PR #7 (squash-merged to main as commit 23a5d8c)
