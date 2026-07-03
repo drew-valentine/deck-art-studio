@@ -80,18 +80,40 @@ jobs:
           echo "Starting Flask server on port 5099..."
           python3 deck_studio.py --port 5099 > /tmp/flask-server.log 2>&1 &
           SERVER_PID=$!
-          sleep 6
+
+          # Wait up to 45s for the server to come up (first start downloads
+          # MTG fonts, which can be slow on runners). curl failing must not
+          # abort the -e shell — always fall through to the log dump below.
+          up=0
+          for i in $(seq 1 45); do
+            if ! kill -0 $SERVER_PID 2>/dev/null; then
+              echo "Server process exited during startup"
+              break
+            fi
+            status=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:5099/" || true)
+            if [ "$status" = "200" ]; then
+              up=1
+              echo "Server up after ${i}s"
+              break
+            fi
+            sleep 1
+          done
 
           errors=0
-          for endpoint in "/" "/api/status" "/api/decks" "/api/model-config"; do
-            status=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:5099${endpoint}")
-            if [ "$status" = "200" ]; then
-              echo "  OK: ${endpoint} → ${status}"
-            else
-              echo "  FAIL: ${endpoint} → ${status}"
-              errors=$((errors + 1))
-            fi
-          done
+          if [ "$up" = "1" ]; then
+            for endpoint in "/" "/api/status" "/api/decks" "/api/model-config"; do
+              status=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:5099${endpoint}" || true)
+              if [ "$status" = "200" ]; then
+                echo "  OK: ${endpoint} → ${status}"
+              else
+                echo "  FAIL: ${endpoint} → ${status}"
+                errors=$((errors + 1))
+              fi
+            done
+          else
+            echo "Server never became healthy"
+            errors=1
+          fi
 
           kill $SERVER_PID 2>/dev/null || true
 

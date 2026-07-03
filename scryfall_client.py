@@ -240,6 +240,8 @@ def normalize_card_type(type_line: str) -> str:
     """Derive a simple card_type from a Scryfall type_line."""
     tl = type_line.lower()
     # Check in order of specificity
+    if 'battle' in tl:
+        return 'battle'
     if 'creature' in tl:
         return 'creature'
     if 'planeswalker' in tl:
@@ -273,6 +275,7 @@ def _face_entry(face: dict) -> dict:
         'power': face.get('power'),
         'toughness': face.get('toughness'),
         'loyalty': face.get('loyalty'),
+        'defense': face.get('defense'),  # battles (sieges)
         # Back faces of transform cards carry a color_indicator instead of a
         # mana cost — fall back to it so frame coloring works.
         'colors': face.get('colors', face.get('color_indicator', [])),
@@ -295,6 +298,7 @@ def scryfall_to_card_entry(sf: dict, quantity: int = 1, is_commander: bool = Fal
         power = face.get('power')
         toughness = face.get('toughness')
         loyalty = face.get('loyalty')
+        defense = face.get('defense')
     else:
         oracle_text = sf.get('oracle_text', '')
         mana_cost = sf.get('mana_cost', '')
@@ -302,6 +306,7 @@ def scryfall_to_card_entry(sf: dict, quantity: int = 1, is_commander: bool = Fal
         power = sf.get('power')
         toughness = sf.get('toughness')
         loyalty = sf.get('loyalty')
+        defense = sf.get('defense')
 
     # Extract art_crop URL (for Scryfall default art display)
     image_uris = sf.get('image_uris', {})
@@ -328,6 +333,7 @@ def scryfall_to_card_entry(sf: dict, quantity: int = 1, is_commander: bool = Fal
         'power': power,
         'toughness': toughness,
         'loyalty': loyalty,
+        'defense': defense,
         'colors': sf.get('colors', []),
         'color_identity': sf.get('color_identity', []),
         'quantity': quantity,
