@@ -36,6 +36,7 @@ import backend_config
 # v3: gpt-image-1 with reference images + SVG card frame renderer
 from card_frame_renderer import (
     composite_card as render_composite,
+    composite_split_card,
     composite_card_preview,
     resolve_frame_settings,
     render_frame_layer,
@@ -369,8 +370,8 @@ def load_data():
                 RAW_ART_DIR.mkdir(parents=True, exist_ok=True)
                 img.save(raw_path, 'PNG')
                 COMPOSITE_DIR.mkdir(parents=True, exist_ok=True)
-                render_composite(card, str(raw_path), None, str(comp_path),
-                                 deck_frame_settings=active_deck_meta.get('frame_settings'))
+                render_composite_for_card(card, raw_path, comp_path,
+                                          deck_fs=active_deck_meta.get('frame_settings'))
                 generation_status[name] = {
                     'status': 'complete',
                     'message': 'Scryfall art (original)',
@@ -589,6 +590,72 @@ def back_face_card(card):
     merged.pop('card_faces', None)
     merged.pop('layout', None)
     return merged
+
+
+def is_rotated_split(card) -> bool:
+    """Classic split cards (Fire // Ice): two rotated halves, EACH with its
+    own art. Rooms are also layout='split' but portrait with one art, so
+    they keep the side-by-side text treatment instead."""
+    return (card.get('layout') == 'split'
+            and 'room' not in (card.get('type_line') or '').lower()
+            and len(card.get('card_faces') or []) >= 2)
+
+
+def has_second_art_face(card) -> bool:
+    """Cards with a second independently generated art unit. The second unit
+    rides the existing back-face machinery (" [back]" keys, "__back" slugs):
+    DFC backs and the right half of a rotated split card."""
+    return is_dfc(card) or is_rotated_split(card)
+
+
+def split_half_card(card, idx):
+    """Clean card dict for ONE half of a rotated split — renders as a normal
+    mini card (no layout/card_faces, so no column treatment)."""
+    faces = card.get('card_faces') or []
+    if len(faces) <= idx:
+        return None
+    face = faces[idx]
+    merged = dict(card)
+    for k in ('name', 'mana_cost', 'type_line', 'oracle_text', 'power',
+              'toughness', 'loyalty', 'defense', 'flavor_text', 'card_type'):
+        merged[k] = face.get(k)
+    # Split faces carry no colors on Scryfall — derive each half's frame
+    # color from its own mana cost so Fire is red and Ice is blue.
+    cost_colors = sorted({c for c in (face.get('mana_cost') or '') if c in 'WUBRG'},
+                         key='WUBRG'.index)
+    merged['colors'] = face.get('colors') or cost_colors or card.get('colors', [])
+    # The combined card's identity (e.g. R+U) would gradient BOTH halves —
+    # each half frames in its own color only
+    merged['color_identity'] = merged['colors']
+    if not merged.get('card_type'):
+        from scryfall_client import normalize_card_type
+        merged['card_type'] = normalize_card_type(merged.get('type_line') or '')
+    # Style-level frame overrides only — text/art overrides were authored
+    # against the combined card, not a half.
+    overrides = dict(card.get('frame_overrides') or {})
+    for k in ('text_overrides', 'art_offset', 'art_zoom'):
+        overrides.pop(k, None)
+    merged['frame_overrides'] = overrides
+    merged.pop('frame_overrides_back', None)
+    merged.pop('card_faces', None)
+    merged.pop('layout', None)
+    return merged
+
+
+def render_composite_for_card(card, art_path, comp_path, deck_fs=None,
+                              raw_art_dir=None):
+    """Render a card's stored composite. Rotated splits combine BOTH halves'
+    art into one rotated portrait card; everything else renders directly."""
+    if is_rotated_split(card):
+        _raw = Path(raw_art_dir) if raw_art_dir else RAW_ART_DIR
+        right = _raw / f"{name_to_slug(face_key(card['name'], 'back'))}.png"
+        composite_split_card(
+            [split_half_card(card, 0), split_half_card(card, 1)],
+            [str(art_path), str(right) if right.exists() else None],
+            str(comp_path), deck_frame_settings=deck_fs)
+    else:
+        render_composite(card, str(art_path), None, str(comp_path),
+                         deck_frame_settings=deck_fs)
 
 
 def _resolve_card_ref(card_name):
@@ -1082,8 +1149,17 @@ def revert_to_version(card_name: str, version_num: int) -> tuple[bool, str]:
     comp_path = COMPOSITE_DIR / f"{slug}.png"
     if render_card:
         try:
-            render_composite(render_card, str(raw_path), None, str(comp_path),
-                                 deck_frame_settings=active_deck_meta.get('frame_settings'))
+            if base_card and is_rotated_split(base_card):
+                # Either half reverting re-renders the COMBINED composite
+                front_slug = name_to_slug(base_card['name'])
+                front_raw = RAW_ART_DIR / f"{front_slug}.png"
+                render_composite_for_card(
+                    base_card, front_raw if front_raw.exists() else raw_path,
+                    COMPOSITE_DIR / f"{front_slug}.png",
+                    deck_fs=active_deck_meta.get('frame_settings'))
+            else:
+                render_composite(render_card, str(raw_path), None, str(comp_path),
+                                     deck_frame_settings=active_deck_meta.get('frame_settings'))
         except Exception as e:
             return False, f"Reverted raw art but frame render failed: {e}"
 
@@ -1649,7 +1725,7 @@ def generate_card_all_faces(card_name, custom_prompt=None, feedback=None,
         return False, f"Card '{card_name}' not found"
 
     if face == 'all':
-        faces = ['front', 'back'] if is_dfc(card) else ['front']
+        faces = ['front', 'back'] if has_second_art_face(card) else ['front']
     else:
         faces = [face]
 
@@ -1726,11 +1802,12 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
     face_label = ''
     composite_card_dict = card
     if face == 'back':
-        composite_card_dict = back_face_card(card)
+        composite_card_dict = (split_half_card(card, 1) if is_rotated_split(card)
+                               else back_face_card(card))
         if not composite_card_dict:
             return False, f"Card '{card_name}' has no back face"
         face_label = f" (back: {composite_card_dict.get('name', '')})"
-    elif is_dfc(card):
+    elif has_second_art_face(card):
         face_label = ' (front)'
 
     # Battle fronts are sideways cards — generate landscape-aspect art
@@ -1824,8 +1901,16 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
         with generation_lock:
             _status[card_name]['message'] = f'Compositing card frame{face_label}...'
 
-        render_composite(composite_card_dict, str(raw_path), None, str(comp_path),
-                                 deck_frame_settings=active_deck_meta.get('frame_settings'))
+        if is_rotated_split(card):
+            # Either half regenerating re-renders the COMBINED composite,
+            # stored at the front slug
+            front_art = _front_raw if _front_raw.exists() else raw_path
+            render_composite_for_card(card, front_art, _front_comp,
+                                      deck_fs=active_deck_meta.get('frame_settings'),
+                                      raw_art_dir=_raw_art_dir)
+        else:
+            render_composite(composite_card_dict, str(raw_path), None, str(comp_path),
+                                     deck_frame_settings=active_deck_meta.get('frame_settings'))
 
         # Don't overwrite 'cancelled' status if user cancelled during generation
         if card_name in _cancel_single:
@@ -2506,8 +2591,15 @@ def api_import_create():
                         try:
                             img = Image.open(sf_path).convert('RGB')
                             img.save(raw_path, 'PNG')
-                            render_composite(face_card, str(raw_path), None, str(comp_path),
-                                     deck_frame_settings=active_deck_meta.get('frame_settings'))
+                            if face_card is card:
+                                # front entry — rotated splits combine here
+                                render_composite_for_card(
+                                    card, raw_path, comp_path,
+                                    deck_fs=active_deck_meta.get('frame_settings'),
+                                    raw_art_dir=deck_raw_dir)
+                            else:
+                                render_composite(face_card, str(raw_path), None, str(comp_path),
+                                         deck_frame_settings=active_deck_meta.get('frame_settings'))
                             composited += 1
                         except Exception as e:
                             print(f"  [import] Composite failed for {card['name']}: {e}")
@@ -3541,8 +3633,10 @@ def regenerate_prompts_from_inspiration(deck_id):
     units = []
     for c in cards:
         units.append((c['name'], c))
-        if is_dfc(c):
-            units.append((face_key(c['name'], 'back'), back_face_card(c)))
+        if has_second_art_face(c):
+            second = (split_half_card(c, 1) if is_rotated_split(c)
+                      else back_face_card(c))
+            units.append((face_key(c['name'], 'back'), second))
 
     # If specific unit keys requested, filter to just those. Plain names mean
     # the front face; "<name> [back]" targets the back face.
@@ -3833,8 +3927,8 @@ def generate_flavor_text_endpoint(deck_id):
                     db_card = next((c for c in cards_db if c['name'] == cname), None)
                     if db_card:
                         try:
-                            render_composite(db_card, str(raw_path), None, str(comp_path),
-                                             deck_frame_settings=active_deck_meta.get('frame_settings'))
+                            render_composite_for_card(db_card, raw_path, comp_path,
+                                             deck_fs=active_deck_meta.get('frame_settings'))
                             with generation_lock:
                                 existing = generation_status.get(cname)
                                 if existing:
@@ -3898,8 +3992,8 @@ def save_flavor_text():
     comp_path = COMPOSITE_DIR / f"{slug}.png"
     if raw_path.exists():
         try:
-            render_composite(card, str(raw_path), None, str(comp_path),
-                                 deck_frame_settings=active_deck_meta.get('frame_settings'))
+            render_composite_for_card(card, raw_path, comp_path,
+                                 deck_fs=active_deck_meta.get('frame_settings'))
             with generation_lock:
                 existing = generation_status.get(card_name)
                 if existing:
@@ -4175,8 +4269,9 @@ def get_cards():
             'frame_overrides': card.get('frame_overrides', {}),
         }
 
-        # Double-faced cards: expose the back face so the UI can toggle to it
-        if is_dfc(card):
+        # Cards with a second art unit (DFC backs, rotated-split right
+        # halves): expose the other face so the UI can toggle to it
+        if has_second_art_face(card):
             back = card['card_faces'][1]
             bslug = name_to_slug(face_key(name, 'back'))
             has_back_scryfall = False
@@ -4187,7 +4282,9 @@ def get_cards():
                     for e in ('.jpg', '.png', '.jpeg')
                 )
             entry.update({
-                'is_dfc': True,
+                'is_dfc': is_dfc(card),
+                'is_split_halves': is_rotated_split(card),
+                'face_names': [f.get('name', '') for f in card['card_faces'][:2]],
                 'layout': card.get('layout'),
                 'back_face': {
                     'name': back.get('name', ''),
@@ -4415,8 +4512,8 @@ def api_add_card():
                 RAW_ART_DIR.mkdir(parents=True, exist_ok=True)
                 img.save(raw_path, 'PNG')
             COMPOSITE_DIR.mkdir(parents=True, exist_ok=True)
-            render_composite(card, str(raw_path), None, str(comp_path),
-                                 deck_frame_settings=active_deck_meta.get('frame_settings'))
+            render_composite_for_card(card, raw_path, comp_path,
+                                 deck_fs=active_deck_meta.get('frame_settings'))
             with generation_lock:
                 generation_status[card['name']] = {
                     'status': 'complete',
@@ -4589,9 +4686,13 @@ def generate_batch():
     if skip_existing:
         def _back_face_missing(name):
             card = next((c for c in cards_db if c['name'] == name), None)
-            if not card or not is_dfc(card):
+            if not card or not has_second_art_face(card):
                 return False
             back = name_to_slug(face_key(name, 'back'))
+            if is_rotated_split(card):
+                # Split halves share one composite — the half's RAW art is
+                # the completeness signal
+                return not (RAW_ART_DIR / f"{back}.png").exists()
             return not (COMPOSITE_DIR / f"{back}.png").exists()
 
         def _front_incomplete(name):
@@ -4682,7 +4783,7 @@ def get_status():
             statuses.update(_batch_generation_status)
     # Attach composite_mtime to each status entry so the poller can detect
     # composite changes without re-fetching /api/cards.
-    _dfc_names = {c['name'] for c in cards_db if is_dfc(c)}
+    _dfc_names = {c['name'] for c in cards_db if has_second_art_face(c)}
     for name, s in list(statuses.items()):
         if not isinstance(s, dict):
             continue
@@ -4822,6 +4923,27 @@ def recomposite_single():
     if not card:
         return jsonify({'error': f"Card '{card_name}' not found"}), 404
 
+    # Rotated splits: one COMBINED composite regardless of requested face
+    if is_rotated_split(card):
+        front_slug = name_to_slug(card_name)
+        front_raw = RAW_ART_DIR / f"{front_slug}.png"
+        if not front_raw.exists():
+            return jsonify({'error': 'No raw art exists for this card — generate art first'}), 400
+        try:
+            render_composite_for_card(card, front_raw,
+                                      COMPOSITE_DIR / f"{front_slug}.png",
+                                      deck_fs=active_deck_meta.get('frame_settings'))
+            with generation_lock:
+                generation_status[card_name] = {
+                    'status': 'complete', 'message': 'Frame re-rendered',
+                    'has_raw_art': True, 'has_composite': True,
+                }
+            return jsonify({'success': True,
+                            'message': f'Frame re-rendered for {card_name}',
+                            'composite_mtime': _composite_mtime_for(front_slug)})
+        except Exception as e:
+            return jsonify({'error': str(e)[:200]}), 500
+
     # Faces to re-render: both for DFC cards (or just the requested one)
     req_face = data.get('face', 'all')
     faces = [('front', name_to_slug(card_name), card)]
@@ -4906,6 +5028,18 @@ def recomposite_all():
     deck_fs = active_deck_meta.get('frame_settings', {})
     sf_dir = DECKS_DIR / active_deck_id / "scryfall_art" if active_deck_id else None
     for card in target_cards:
+        if is_rotated_split(card):
+            slug = name_to_slug(card['name'])
+            raw_path = RAW_ART_DIR / f"{slug}.png"
+            if raw_path.exists():
+                try:
+                    render_composite_for_card(card, raw_path,
+                                              COMPOSITE_DIR / f"{slug}.png",
+                                              deck_fs=deck_fs)
+                    count += 1
+                except Exception:
+                    errors += 1
+            continue
         faces = [(name_to_slug(card['name']), card)]
         if is_dfc(card):
             faces.append((name_to_slug(face_key(card['name'], 'back')),
@@ -8716,7 +8850,7 @@ function startPolling() {
         card.step = s.step || 0;
         card.total_steps = s.total_steps || 0;
         if (s.revised_prompt) card.revised_prompt = s.revised_prompt;
-        if (card.is_dfc) {
+        if (card.is_dfc || card.is_split_halves) {
           if (s.has_back_raw !== undefined) card.has_back_raw = s.has_back_raw;
           if (s.has_back_composite !== undefined) card.has_back_composite = s.has_back_composite;
           if (s.has_back_ai_art !== undefined) card.has_back_ai_art = s.has_back_ai_art;
@@ -8999,8 +9133,8 @@ function renderGrid() {
         : `/api/image/proxy/${card.slug}?d=${deckCacheBust}`;
 
     const isPinned = pinnedCards.has(card.name);
-    const dfcBadge = card.is_dfc
-      ? `<div class="dfc-badge" title="Double-faced card">&#x21C6;</div>` : '';
+    const dfcBadge = (card.is_dfc || card.is_split_halves)
+      ? `<div class="dfc-badge" title="${card.is_dfc ? 'Double-faced card' : 'Split card — two halves'}">&#x21C6;</div>` : '';
     tile.innerHTML = `
       <div class="select-checkbox"></div>
       <div class="card-status-badge ${badgeClass}"></div>
@@ -9205,12 +9339,12 @@ function switchPanelTab(tab) {
 // The selected face piggybacks on the card name (" [back]") for prompt keys
 // and version/revert endpoints, and on the slug ("__back") for image URLs.
 function viewingBack(card) {
-  return !!(card && card.is_dfc && selectedFace === 'back');
+  return !!(card && (card.is_dfc || card.is_split_halves) && selectedFace === 'back');
 }
 // Hint for single-faced multi-part cards, where "A // B" names suggest a
 // flip side that doesn't exist (adventures, rooms, split cards).
 function faceHintFor(card) {
-  if (!card || card.is_dfc) return '';
+  if (!card || card.is_dfc || card.is_split_halves) return '';
   if (card.layout === 'adventure') return 'Adventure card — single-faced: the adventure half renders beside the creature’s rules.';
   if (card.layout === 'split') return 'Single-faced card — both halves render side by side in the text box.';
   return '';
@@ -9394,9 +9528,16 @@ function updateDetailPanel(card) {
   // Face toggle — visible only for double-faced cards
   const faceToggle = document.getElementById('faceToggle');
   if (faceToggle) {
-    faceToggle.style.display = card.is_dfc ? 'flex' : 'none';
-    document.getElementById('faceBtnFront').classList.toggle('active', selectedFace !== 'back');
-    document.getElementById('faceBtnBack').classList.toggle('active', selectedFace === 'back');
+    const hasFaces = card.is_dfc || card.is_split_halves;
+    faceToggle.style.display = hasFaces ? 'flex' : 'none';
+    const fBtn = document.getElementById('faceBtnFront');
+    const bBtn = document.getElementById('faceBtnBack');
+    // Split halves aren't front/back — label the toggle with the half names
+    const names = (card.is_split_halves && card.face_names) ? card.face_names : null;
+    fBtn.textContent = names ? names[0] : 'Front';
+    bBtn.textContent = names ? names[1] : 'Back';
+    fBtn.classList.toggle('active', selectedFace !== 'back');
+    bBtn.classList.toggle('active', selectedFace === 'back');
   }
   const faceHint = document.getElementById('faceHint');
   if (faceHint) {
@@ -9444,7 +9585,14 @@ function updateDetailPanel(card) {
   }
 
   let imgSrc;
-  if (back) {
+  if (back && card.is_split_halves) {
+    // Split halves share one combined composite
+    imgSrc = card.has_composite
+      ? `/api/image/composite/${card.slug}?v=${card.composite_mtime || 0}`
+      : card.has_scryfall_art
+        ? `/api/image/scryfall/${card.slug}?d=${deckCacheBust}`
+        : `/api/image/proxy/${card.slug}?d=${deckCacheBust}`;
+  } else if (back) {
     // Last resort is the FRONT image chain — a proxy URL for the back slug
     // would always 404 (nothing generates back-face proxies)
     imgSrc = card.has_back_composite
@@ -9742,7 +9890,7 @@ async function generateCurrent(btn) {
   // the face being viewed — except a fresh front render also covers a back
   // face that has never had AI art, so one click finishes the whole card.
   let face = 'all';
-  if (card && card.is_dfc) {
+  if (card && (card.is_dfc || card.is_split_halves)) {
     face = selectedFace;
     if (face === 'front' && !card.has_back_ai_art) face = 'all';
   }
@@ -9793,7 +9941,7 @@ async function regenerateCurrent(btn) {
   const selCard = allCards.find(c => c.name === selectedCard);
   const isBack = viewingBack(selCard);
   const promptKey = faceKeyFor(selCard);  // "<name> [back]" targets the back face
-  const face = (selCard && selCard.is_dfc) ? selectedFace : 'all';
+  const face = (selCard && (selCard.is_dfc || selCard.is_split_halves)) ? selectedFace : 'all';
 
   _showGeneratingState(selectedCard);
   if (btn) { btn.disabled = true; btn.textContent = 'Steering…'; }
@@ -10175,7 +10323,7 @@ async function recompositeCurrent() {
     if (data.back_composite_mtime) card.back_composite_mtime = data.back_composite_mtime;
     // Keep showing the face the user is viewing (cache-busted with ITS mtime)
     const img = document.getElementById('detailImage');
-    img.src = back
+    img.src = (back && !card.is_split_halves)
       ? `/api/image/composite/${card.back_slug}?v=${card.back_composite_mtime || 0}`
       : `/api/image/composite/${card.slug}?v=${card.composite_mtime || 0}`;
     showToast('Frame re-rendered', 'success');
@@ -11086,9 +11234,12 @@ function scheduleFramePreview() {
 function syncFdFaceToggle(card) {
   const toggle = document.getElementById('fdFaceToggle');
   if (!toggle) return;
-  toggle.style.display = (card && card.is_dfc) ? 'flex' : 'none';
+  toggle.style.display = (card && (card.is_dfc || card.is_split_halves)) ? 'flex' : 'none';
   const fBtn = document.getElementById('fdFaceBtnFront');
   const bBtn = document.getElementById('fdFaceBtnBack');
+  const names = (card && card.is_split_halves && card.face_names) ? card.face_names : null;
+  if (fBtn) fBtn.textContent = names ? names[0] : 'Front';
+  if (bBtn) bBtn.textContent = names ? names[1] : 'Back';
   if (fBtn) fBtn.classList.toggle('active', selectedFace !== 'back');
   if (bBtn) bBtn.classList.toggle('active', selectedFace === 'back');
   const hintEl = document.getElementById('fdFaceHint');

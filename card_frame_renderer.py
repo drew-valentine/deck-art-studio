@@ -4707,6 +4707,39 @@ def render_text_overlay(card_dict: dict, frame_settings: dict) -> bytes:
 
 
 # ===========================================================================
+# Rotated split cards (Fire // Ice) — two mini cards, rotated to portrait
+# ===========================================================================
+def composite_split_card(half_dicts, art_paths, output_path,
+                         deck_frame_settings: dict = None) -> None:
+    """Authentic classic-split composite: each half renders as a normal card
+    through the full frame pipeline, scales to half size, and the pair is
+    rotated 90° CCW into the standard 750x1050 portrait — matching how real
+    split cards are printed (turn the card sideways: left half = first face).
+
+    half_dicts: [left, right] clean card dicts (one half each, no layout).
+    art_paths:  [left, right] art file paths; a missing right falls back to
+                the left art so the card is never blank.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    half_w, half_h = CARD_HEIGHT // 2, CARD_WIDTH  # 525 x 750 readable minis
+    canvas = Image.new('RGBA', (CARD_HEIGHT, CARD_WIDTH))  # 1050 x 750 readable
+
+    left_art = art_paths[0]
+    for i, half in enumerate(half_dicts):
+        art = art_paths[i] or left_art
+        fs = resolve_frame_settings(half, deck_frame_settings)
+        png = composite_card_preview(half, art, fs)
+        mini = Image.open(io.BytesIO(png)).convert('RGBA')
+        mini = mini.resize((half_w, half_h), Image.Resampling.LANCZOS)
+        canvas.paste(mini, (i * half_w, 0))
+
+    # Rotate 90° CCW: half titles read bottom-to-top like printed splits
+    canvas.rotate(90, expand=True).save(output_path, 'PNG')
+
+
+# ===========================================================================
 # Battle (siege) frame — landscape, rotated into the portrait composite
 # ===========================================================================
 # Real battles are printed as portrait cards whose content is rotated 90°

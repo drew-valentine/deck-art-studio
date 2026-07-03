@@ -184,3 +184,48 @@ class TestSafeInspirationPath:
 
     def test_rejects_backslash(self, tmp_path):
         assert _safe_inspiration_path(tmp_path, 'sub\\file.png') is None
+
+
+class TestRotatedSplitHelpers:
+    FIRE_ICE = {
+        'name': 'Fire // Ice',
+        'layout': 'split',
+        'mana_cost': '{1}{R}',
+        'type_line': 'Instant',
+        'oracle_text': 'Fire deals 2 damage divided as you choose among one or two targets.',
+        'colors': ['R', 'U'], 'color_identity': ['R', 'U'],
+        'card_type': 'instant',
+        'frame_overrides': {'frame_set': 'm15', 'art_zoom': 0.5},
+        'card_faces': [
+            {'name': 'Fire', 'mana_cost': '{1}{R}', 'type_line': 'Instant',
+             'oracle_text': 'Fire deals 2 damage divided as you choose among one or two targets.'},
+            {'name': 'Ice', 'mana_cost': '{1}{U}', 'type_line': 'Instant',
+             'oracle_text': 'Tap target permanent.\nDraw a card.'},
+        ],
+    }
+    ROOM = {
+        'name': 'Smoky Lounge // Misty Salon',
+        'layout': 'split',
+        'type_line': 'Enchantment — Room',
+        'card_faces': [{'name': 'A'}, {'name': 'B'}],
+    }
+
+    def test_rotated_split_detection(self):
+        from deck_studio import is_rotated_split, has_second_art_face, is_dfc
+        assert is_rotated_split(self.FIRE_ICE) is True
+        assert is_rotated_split(self.ROOM) is False        # rooms stay portrait
+        assert has_second_art_face(self.FIRE_ICE) is True
+        assert is_dfc(self.FIRE_ICE) is False              # not a DFC
+
+    def test_split_half_card(self):
+        from deck_studio import split_half_card
+        left = split_half_card(self.FIRE_ICE, 0)
+        right = split_half_card(self.FIRE_ICE, 1)
+        assert left['name'] == 'Fire' and right['name'] == 'Ice'
+        # Half colors derive from each half's own mana cost
+        assert left['colors'] == ['R']
+        assert right['colors'] == ['U']
+        # No layout/faces — halves render as normal mini cards
+        assert 'layout' not in left and 'card_faces' not in left
+        # Combined-card art zoom must not leak onto halves
+        assert left['frame_overrides'] == {'frame_set': 'm15'}
