@@ -13,7 +13,9 @@
   - **Phasing (subtasks):**
     - Phases 0, 1 + 2 — **SHIPPED in v1.36.0** (2026-07-03, PR #7 squash-merged as commit 23a5d8c, owner drew-valentine). Moved to Done. Remaining epic scope: Phase 3 (landscape), the transform-indicator-pips polish, and a DRY cleanup pass (below).
     - [ ] Transform/MDFC face-indicator pips on frames | polish, carried from Phase 1 — a dedicated transform-indicator icon on the frame (front/back face indicator). Back-face composites currently render with the standard frame for the back face's own card data; a face-indicator icon was deferred out of Phase 1.
-    - [ ] Phase 3 — Landscape cards (battles, rotated split cards): landscape frame rendering (new canvas orientation 1050x750); battle defense counter; split cards = two halves each with own art; extension/print output rotation handling.
+    - Phase 3 split into two parts (Drew approved starting 3a on 2026-07-03):
+      - [ ] **Phase 3a — Battle cards (landscape sieges)** — IN PROGRESS (see In Progress column). Battle fronts render a dedicated landscape battle frame (title bar, art region, rules panel, defense shield) composed on a landscape canvas then rotated 90° into the standard 750×1050 portrait composite (matching how real battles print); defense stored per face; landscape-aspect FLUX art; back face via existing DFC machinery. Branch `feature/battles-landscape`.
+      - [ ] **Phase 3b — Authentic rotated split cards with per-half art** — remains Backlog. True rotated split-card layout with two halves each having their own art. Note: split cards already render usably today via the Phase 2 side-by-side treatment, so this is a fidelity upgrade rather than net-new support.
     - [ ] DRY cleanup pass (flagged by the Phase 2 review) — de-duplicate the face-expansion logic (duplicated across paths) and consolidate the triple-copied download/slug helpers into a single shared implementation.
   - **Open question — resolved (2026-07-03):** the friend's examples are all covered by Phases 0-3 except "PIP cards", which remains unclarified. Still need the requester to clarify what "PIP cards" means (likely Kamigawa flip cards) before scoping any flip-layout work.
 
@@ -79,6 +81,17 @@
 ## Ready
 
 ## In Progress
+
+- [ ] Alt Layouts Phase 3a — Battle cards (landscape sieges) | Priority: P2 | Started: 2026-07-03 | Owner: drew-valentine
+  - Branch: `feature/battles-landscape`
+  - Part of EPIC: Support Alternative Card Layouts (see Backlog). Phase 3 was split into 3a (this item) and 3b (authentic rotated split cards, remains Backlog).
+  - Acceptance criteria (Given/When/Then):
+    - [ ] Given a battle card (e.g. Invasion of Zendikar // Awakened Skyclave — Scryfall `layout=transform` with front type "Battle — Siege" and a `defense` field), when the deck is imported or an existing deck is backfilled, then the per-face `defense` value is stored on the card entry.
+    - [ ] Given a battle card front, when the composite is rendered, then a dedicated landscape battle frame (title bar, art region, rules panel, defense shield) is composed on a landscape canvas and rotated 90° into the standard 750×1050 portrait composite — matching how real battles are printed — so the grid, exports, and extension continue to work unchanged.
+    - [ ] Given a battle card front, when art is generated, then landscape-aspect FLUX art is produced to fill the landscape art region.
+    - [ ] Given a battle card, when the back face (a normal portrait card, e.g. Awakened Skyclave) is viewed/generated, then it works via the existing DFC machinery (Front/Back toggle, per-face art + composite).
+    - [ ] Known limitation (documented): Frame Designer art pan/zoom is limited for battle fronts in this pass.
+    - [ ] Validation gate: Playwright browser verification + local FLUX generation of a battle front + full pytest suite.
 
 ## In Review
 
