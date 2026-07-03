@@ -652,6 +652,14 @@ MANA_PIPS_RIGHT = VB_W - MARGIN - 12
 RULES_PIP_SIZE = 24
 RULES_PIP_RADIUS = RULES_PIP_SIZE / 2
 
+
+def _rules_pip_size(font_size: int) -> int:
+    """Mana symbol size for EVERYTHING in the rules area (inline symbols and
+    split-column header costs): 0.83em — the classic 24px-at-font-29 look —
+    scaled with the fitted font so long-text cards keep pips and text in
+    proportion, and all pips in one text box are the same size."""
+    return max(14, round(font_size * 0.83))
+
 # Font sizes — LARGE for print readability at 750×1050
 NAME_FONT = 35
 TYPE_FONT = 29
@@ -1304,7 +1312,7 @@ def _wrap_paragraph_with_pips(tokens: List[dict], max_width: float,
     bottom lines narrower around a P/T plate); falls back to `max_width`.
     """
     space_w = _measure_text(' ', font_size)
-    pip_w = RULES_PIP_SIZE + 2       # width reserved for a pip image
+    pip_w = _rules_pip_size(font_size) + 2   # width reserved for a pip image
 
     # Break tokens into individual words and symbols, with measured widths
     items: List[dict] = []
@@ -1413,7 +1421,8 @@ def render_rules_text_svg(oracle_text: str, x_start: float, y_start: float,
     svg_elements = []
     # Use actual font metrics for pixel-perfect positioning
     space_w = font_size * 0.22
-    pip_img_w = RULES_PIP_SIZE + 2
+    pip_size = _rules_pip_size(font_size)
+    pip_img_w = pip_size + 2
 
     current_y = y_start
     paragraphs = oracle_text.split('\n')
@@ -1444,15 +1453,15 @@ def render_rules_text_svg(oracle_text: str, x_start: float, y_start: float,
                     cx += seg['width']
                 elif seg['type'] == 'symbol':
                     pip_x = cx
-                    pip_y = current_y - RULES_PIP_SIZE + 2
+                    pip_y = current_y - pip_size + 2
                     # Background circle so pip is visible against any textbox color
-                    pip_cx = pip_x + RULES_PIP_SIZE / 2
-                    pip_cy = pip_y + RULES_PIP_SIZE / 2
+                    pip_cx = pip_x + pip_size / 2
+                    pip_cy = pip_y + pip_size / 2
                     svg_elements.append(
-                        f'<circle cx="{pip_cx}" cy="{pip_cy}" r="{RULES_PIP_SIZE/2 + 1}" '
+                        f'<circle cx="{pip_cx}" cy="{pip_cy}" r="{pip_size/2 + 1}" '
                         f'fill="rgba(255,255,255,0.6)"/>'
                     )
-                    svg_elements.append(_pip_image_tag(seg['value'], pip_x, pip_y, RULES_PIP_SIZE))
+                    svg_elements.append(_pip_image_tag(seg['value'], pip_x, pip_y, pip_size))
                     cx += pip_img_w
                 else:
                     # Render entire text segment as one <text> element
@@ -1610,11 +1619,12 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             raw_name = face.get('name') or ''
             fname = raw_name.replace('&', '&amp;').replace('<', '&lt;')
             pips = parse_mana_cost(face.get('mana_cost') or '')
-            # Header pips match the half-name height (like the title bar's
-            # 36px pips against its 40px name)
-            ps = max(16, int(f * 0.9))
+            # Half titles print larger than body text on real cards; their
+            # cost pips match the body's inline pips so every symbol in the
+            # rules area is the same size
+            nf = int(f * 1.12)
+            ps = _rules_pip_size(f)
             pips_w = len(pips) * (ps + 2) + 6 if pips else 0
-            nf = f
             est = len(raw_name) * nf * 0.55
             name_avail = col_w - pips_w
             if est > name_avail and name_avail > 0:
@@ -2410,7 +2420,7 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
                     # Line overlaps P/T vertically — measure its width
                     line_w = sum(
                         _measure_text(seg['value'], FLAVOR_FONT) if seg['type'] == 'text'
-                        else seg.get('width', RULES_PIP_SIZE + 2)
+                        else seg.get('width', _rules_pip_size(FLAVOR_FONT) + 2)
                         for seg in line_items
                     )
                     if fx + RULES_PADDING + line_w > pt_x:
@@ -2984,7 +2994,7 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
                         continue
                     line_w = sum(
                         _measure_text(seg['value'], FLAVOR_FONT) if seg['type'] == 'text'
-                        else seg.get('width', RULES_PIP_SIZE + 2)
+                        else seg.get('width', _rules_pip_size(FLAVOR_FONT) + 2)
                         for seg in line_items
                     )
                     if art_m + RULES_PADDING + line_w > pt_x:
