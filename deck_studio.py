@@ -6325,6 +6325,14 @@ button:active, .btn:active { transform: scale(0.97); }
   pointer-events: none;
 }
 
+.fd-deck-style-hint {
+  font-size: 0.72em; color: var(--text-muted); margin: 2px 0 6px;
+}
+.fd-deck-style-hint b { color: var(--text-dim); font-weight: 600; }
+.fd-style-btn .deck-default-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--gold); margin-left: 6px; vertical-align: middle;
+}
 .fd-style-strip {
   display: flex; gap: 6px; flex-wrap: wrap; padding: 2px 0 6px;
 }
@@ -7927,7 +7935,8 @@ header .separator {
 
           <!-- Style strip -->
           <div class="fd-section">
-            <div class="fd-section-label">Style</div>
+            <div class="fd-section-label">Deck Frame Style</div>
+            <div class="fd-deck-style-hint" id="fdDeckStyleHint"></div>
             <div class="fd-style-strip" id="fdStyleStrip"></div>
           </div>
 
@@ -10638,16 +10647,33 @@ async function initFrameDesigner() {
 function renderStyleStrip() {
   const strip = document.getElementById('fdStyleStrip');
   if (!strip) return;
+  const deckStyle = _frameDeckSettings && _frameDeckSettings.style;
   strip.innerHTML = '';
   for (const [key, style] of Object.entries(_frameStyles)) {
     const btn = document.createElement('button');
     btn.className = 'fd-style-btn' + (key === _activeFrameStyle ? ' active' : '');
     btn.textContent = style.label;
-    btn.title = style.description;
+    btn.title = style.description + (key === deckStyle ? ' — current deck default' : '');
+    if (key === deckStyle) {
+      const dot = document.createElement('span');
+      dot.className = 'deck-default-dot';
+      dot.title = 'Current deck default';
+      btn.appendChild(dot);
+    }
     btn.dataset.styleKey = key;
     btn.addEventListener('click', () => selectFrameStyle(key));
     strip.appendChild(btn);
   }
+  updateDeckStyleHint();
+}
+
+function updateDeckStyleHint() {
+  const hint = document.getElementById('fdDeckStyleHint');
+  if (!hint) return;
+  const deckStyle = _frameDeckSettings && _frameDeckSettings.style;
+  const label = (deckStyle && _frameStyles[deckStyle]) ? _frameStyles[deckStyle].label : 'not set';
+  hint.innerHTML = `Deck default: <b>${escapeHtml(label)}</b> — new imports use it. ` +
+    `Saving a frame with a different style selected changes it for the whole deck.`;
 }
 
 function renderLayerList() {
@@ -11370,6 +11396,7 @@ async function saveFrameSettings() {
   const settings = gatherFrameSettings();
   const textOverrides = settings.text_overrides;
   delete settings.text_overrides;
+  const _prevDeckStyle = _frameDeckSettings && _frameDeckSettings.style;
 
   try {
     // Save deck-level settings (style, colors, layers)
@@ -11379,6 +11406,7 @@ async function saveFrameSettings() {
       body: JSON.stringify(settings),
     });
     _frameDeckSettings = settings;
+    renderStyleStrip();  // refresh the deck-default badge + hint
 
     if (selectedCard) {
       await persistSelectedCardFrameState(textOverrides);
@@ -11394,7 +11422,12 @@ async function saveFrameSettings() {
       });
       const data = await resp.json();
       if (data.success) {
-        showToast('Frame saved', 'success');
+        if (_prevDeckStyle && settings.style && settings.style !== _prevDeckStyle) {
+          const lbl = _frameStyles[settings.style] ? _frameStyles[settings.style].label : settings.style;
+          showToast(`Deck style set to ${lbl} — all cards & new imports use it`, 'info');
+        } else {
+          showToast('Frame saved', 'success');
+        }
       } else {
         // Settings persisted but the composite didn't re-render — say so
         // instead of failing silently (looks like "my changes didn't save").
