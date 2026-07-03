@@ -4620,10 +4620,7 @@ def render_frame_layer(card_dict: dict, frame_settings: dict) -> bytes:
     # Battles: chrome + text render as one rotated layer (the text overlay
     # returns empty for battles)
     if _is_battle(card):
-        svg_content = _create_battle_frame_svg(card, fs)
-        png = cairosvg.svg2png(bytestring=svg_content.encode('utf-8'),
-                               output_width=BATTLE_W, output_height=BATTLE_H)
-        chrome = Image.open(io.BytesIO(png)).convert('RGBA').rotate(90, expand=True)
+        chrome = _battle_overlay_landscape(card_dict, card, fs).rotate(90, expand=True)
         buf = io.BytesIO()
         chrome.save(buf, 'PNG')
         return buf.getvalue()
@@ -4784,9 +4781,85 @@ def _battle_defense_shield_svg(defense: str, cx: float, cy: float,
     ]
 
 
+def _battle_text_svg_parts(card: CardData, fs: dict, BL: dict,
+                           bar_text: str, rules_col: str) -> list:
+    """Title/type/rules text + defense shield for the landscape battle frame.
+
+    BL: battle-space layout (title_y0/y1, type_y0/y1, rules_y0/y1,
+    x_margin, x_right) in the 1050x750 landscape canvas."""
+    parts = []
+    tx, xr = BL['x_margin'], BL['x_right']
+
+    # ── Title: front-face name + mana pips (real battles title the front) ──
+    mana_pips = parse_mana_cost(card.mana_cost)
+    pip_w = len(mana_pips) * (MANA_PIP_SIZE + MANA_PIP_GAP) + 14 if mana_pips else 0
+    disp_name = card.name.split(' // ')[0]
+    esc_name = disp_name.replace('&', '&amp;').replace('<', '&lt;')
+    nf = 40
+    name_avail = (xr - tx) - pip_w
+    if len(disp_name) * nf * 0.58 > name_avail and name_avail > 0:
+        nf = max(22, int(nf * name_avail / (len(disp_name) * nf * 0.58)))
+    ncy = (BL['title_y0'] + BL['title_y1']) / 2 + nf * 0.35
+    parts.append(f'<text x="{tx}" y="{ncy}" font-family="{NAME_FONT_FAMILY}" '
+                 f'font-size="{nf}" font-weight="bold" fill="{bar_text}">{esc_name}</text>')
+    if mana_pips:
+        pcy = (BL['title_y0'] + BL['title_y1']) / 2
+        px = xr + 4
+        for pip in reversed(mana_pips):
+            pxx = px - MANA_PIP_SIZE
+            parts.append(f'<circle cx="{pxx + MANA_PIP_SIZE/2 + 0.5}" cy="{pcy + 1}" '
+                         f'r="{MANA_PIP_SIZE/2}" fill="rgba(0,0,0,0.3)"/>')
+            parts.append(_pip_image_tag(pip, pxx, pcy - MANA_PIP_SIZE / 2, MANA_PIP_SIZE))
+            px -= (MANA_PIP_SIZE + MANA_PIP_GAP)
+
+    # ── Type line ──
+    esc_type = (card.type_line or '').replace('&', '&amp;').replace('<', '&lt;')
+    tf = 32
+    type_avail = (xr - tx) - 10
+    if len(card.type_line or '') * tf * 0.50 > type_avail and type_avail > 0:
+        tf = max(18, int(tf * type_avail / (len(card.type_line) * tf * 0.50)))
+    tcy = (BL['type_y0'] + BL['type_y1']) / 2 + tf * 0.35
+    parts.append(f'<text x="{tx}" y="{tcy}" font-family="{TYPE_FONT_FAMILY}" '
+                 f'font-size="{tf}" font-weight="bold" fill="{bar_text}">{esc_type}</text>')
+
+    # ── Rules text, wrapping around the defense shield bottom-right ──
+    shield_size = 92
+    if card.oracle_text:
+        rb_x = tx
+        rb_w = xr - tx
+        rb_top = BL['rules_y0'] + 12
+        rb_h = (BL['rules_y1'] - 4) - rb_top
+        avoid = None
+        if card.defense is not None:
+            avoid = (BL['rules_y1'] - shield_size * 1.08 - 14,
+                     rb_w - shield_size - 22)
+        desired = int(fs.get('rules_font_size') or RULES_FONT)
+
+        def _msr(f):
+            av = ((avoid[0] - (rb_top + f * 0.8), avoid[1]) if avoid else None)
+            return _measure_rules_text(card.oracle_text, rb_w, f,
+                                       int(RULES_LINE_H * f / RULES_FONT), avoid=av)
+
+        r_font = _max_fitting_rules_font(_msr, rb_h, desired)
+        r_line = int(RULES_LINE_H * r_font / RULES_FONT)
+        if _msr(r_font) > rb_h + 2:  # only possible at the hard floor
+            fs.setdefault('_quality', []).append(
+                f'rules_overflow: battle needs {_msr(r_font):.0f}px but box is {rb_h:.0f}px (font {r_font})')
+        rules_lines, _ = render_rules_text_svg(
+            card.oracle_text, rb_x, rb_top + r_font * 0.8, rb_w, rb_h,
+            r_font, r_line, text_color=rules_col, avoid=avoid)
+        parts.extend(rules_lines)
+
+    if card.defense is not None:
+        parts.extend(_battle_defense_shield_svg(
+            str(card.defense), xr - 40, BL['rules_y1'] - 54, size=shield_size))
+    return parts
+
+
 def _create_battle_frame_svg(card: CardData, fs: dict) -> str:
-    """Landscape battle chrome + text: full-bleed art shows on the left; the
-    right side carries a type bar, rules panel, and defense shield."""
+    """Dedicated landscape battle chrome (used by the SVG-mode styles and as
+    the fallback when a style has no sliceable assets): full-bleed art with a
+    title bar on top and a full-width type bar + rules band at the bottom."""
     W, H = BATTLE_W, BATTLE_H
     theme = get_color_theme(card)
     _ovr = (fs.get('color_overrides', {}) or {}).get('text')
@@ -4805,35 +4878,12 @@ def _create_battle_frame_svg(card: CardData, fs: dict) -> str:
     svg.append(f'<rect x="27" y="27" width="{W - 54}" height="{H - 54}" rx="18" '
                f'fill="none" stroke="{theme["bg"]}" stroke-width="5"/>')
 
-    # ── Title bar ──
+    # Title bar chrome
     tb_x, tb_y0, tb_y1 = 44, 40, 100
-    tb_w = W - 2 * tb_x
-    svg.append(f'<rect x="{tb_x}" y="{tb_y0}" width="{tb_w}" height="{tb_y1 - tb_y0}" '
+    svg.append(f'<rect x="{tb_x}" y="{tb_y0}" width="{W - 2 * tb_x}" height="{tb_y1 - tb_y0}" '
                f'rx="14" fill="rgba(12,12,14,0.88)" stroke="{theme["border"]}" stroke-width="2.5"/>')
-    mana_pips = parse_mana_cost(card.mana_cost)
-    pip_w = len(mana_pips) * (MANA_PIP_SIZE + MANA_PIP_GAP) + 14 if mana_pips else 0
-    # Real battles title only the front face, not the full "A // B" name
-    disp_name = card.name.split(' // ')[0]
-    esc_name = disp_name.replace('&', '&amp;').replace('<', '&lt;')
-    nf = 40
-    name_avail = tb_w - 40 - pip_w
-    if len(disp_name) * nf * 0.58 > name_avail and name_avail > 0:
-        nf = max(22, int(nf * name_avail / (len(disp_name) * nf * 0.58)))
-    ncy = (tb_y0 + tb_y1) / 2 + nf * 0.35
-    svg.append(f'<text x="{tb_x + 22}" y="{ncy}" font-family="{NAME_FONT_FAMILY}" '
-               f'font-size="{nf}" font-weight="bold" fill="{bar_text}">{esc_name}</text>')
-    if mana_pips:
-        pcy = (tb_y0 + tb_y1) / 2
-        px = tb_x + tb_w - 18
-        for pip in reversed(mana_pips):
-            pxx = px - MANA_PIP_SIZE
-            svg.append(f'<circle cx="{pxx + MANA_PIP_SIZE/2 + 0.5}" cy="{pcy + 1}" '
-                       f'r="{MANA_PIP_SIZE/2}" fill="rgba(0,0,0,0.3)"/>')
-            svg.append(_pip_image_tag(pip, pxx, pcy - MANA_PIP_SIZE / 2, MANA_PIP_SIZE))
-            px -= (MANA_PIP_SIZE + MANA_PIP_GAP)
 
-    # ── Bottom band: full-width type bar + wide rules box + defense
-    # shield, matching the real battle layout (art fills the top ~55%) ──
+    # Bottom band chrome: full-width type bar + wide rules box
     pn_x0, pn_x1 = 44, W - 44
     pn_y0, pn_y1 = 430, H - 40
     ty_h = 50
@@ -4842,50 +4892,177 @@ def _create_battle_frame_svg(card: CardData, fs: dict) -> str:
                f'stroke="{theme["border"]}" stroke-width="2.5"/>')
     svg.append(f'<rect x="{pn_x0}" y="{pn_y0}" width="{pn_x1 - pn_x0}" height="{ty_h}" '
                f'rx="12" fill="rgba(12,12,14,0.88)"/>')
-    esc_type = (card.type_line or '').replace('&', '&amp;').replace('<', '&lt;')
-    tf = 32
-    type_avail = (pn_x1 - pn_x0) - 36
-    if len(card.type_line or '') * tf * 0.50 > type_avail and type_avail > 0:
-        tf = max(18, int(tf * type_avail / (len(card.type_line) * tf * 0.50)))
-    svg.append(f'<text x="{pn_x0 + 18}" y="{pn_y0 + ty_h / 2 + tf * 0.35}" '
-               f'font-family="{TYPE_FONT_FAMILY}" font-size="{tf}" font-weight="bold" '
-               f'fill="{bar_text}">{esc_type}</text>')
 
-    # Rules text in the wide band, wrapping around the defense shield in
-    # the bottom-right corner
-    if card.oracle_text:
-        rb_x = pn_x0 + 22
-        rb_w = (pn_x1 - 22) - rb_x
-        rb_top = pn_y0 + ty_h + 14
-        rb_h = (pn_y1 - 16) - rb_top
-        shield_size = 92
-        avoid = None
-        if card.defense is not None:
-            # (shield top - pad, narrow line width inside the band)
-            avoid = (pn_y1 - shield_size * 1.08 - 14, rb_w - shield_size - 22)
-        desired = int(fs.get('rules_font_size') or RULES_FONT)
-
-        def _msr(f):
-            av = ((avoid[0] - (rb_top + f * 0.8), avoid[1]) if avoid else None)
-            return _measure_rules_text(card.oracle_text, rb_w, f,
-                                       int(RULES_LINE_H * f / RULES_FONT), avoid=av)
-
-        r_font = _max_fitting_rules_font(_msr, rb_h, desired)
-        r_line = int(RULES_LINE_H * r_font / RULES_FONT)
-        if _msr(r_font) > rb_h + 2:  # only possible at the hard floor
-            fs.setdefault('_quality', []).append(
-                f'rules_overflow: battle needs {_msr(r_font):.0f}px but box is {rb_h:.0f}px (font {r_font})')
-        rules_lines, _ = render_rules_text_svg(
-            card.oracle_text, rb_x, rb_top + r_font * 0.8, rb_w, rb_h,
-            r_font, r_line, text_color=rules_col, avoid=avoid)
-        svg.extend(rules_lines)
-
-    if card.defense is not None:
-        svg.extend(_battle_defense_shield_svg(
-            str(card.defense), pn_x1 - 62, pn_y1 - 54, size=92))
+    BL = {'title_y0': tb_y0, 'title_y1': tb_y1,
+          'type_y0': pn_y0, 'type_y1': pn_y0 + ty_h,
+          'rules_y0': pn_y0 + ty_h + 2, 'rules_y1': pn_y1 - 12,
+          'x_margin': tb_x + 22, 'x_right': pn_x1 - 22}
+    svg.extend(_battle_text_svg_parts(card, fs, BL, bar_text, rules_col))
 
     svg.append('</svg>')
     return '\n'.join(svg)
+
+
+# Per-style band metadata for slicing each style's PORTRAIT frame assets into
+# the landscape battle geometry. Bands are pixel coords in the 750x1050 frame
+# PNGs; text colors of None fall back to the theme text color (m15).
+_BATTLE_STYLE_BANDS = {
+    'm15': ({'title_y0': 53, 'title_y1': 107, 'type_y0': 585, 'type_y1': 647,
+             'rules_y0': 653, 'rules_y1': 973, 'x_margin': 58, 'x_right': 692},
+            None, None),
+    'iko': ({'title_y0': 43, 'title_y1': 117, 'type_y0': 644, 'type_y1': 721,
+             'rules_y0': 719, 'rules_y1': 996, 'x_margin': 62, 'x_right': 690},
+            '#f6f1e6', '#1a1712'),
+    'crystal': ({'title_y0': 53, 'title_y1': 110, 'type_y0': 594, 'type_y1': 648,
+                 'rules_y0': 671, 'rules_y1': 957, 'x_margin': 64, 'x_right': 690,
+                 'cap_extra': 80},
+                '#f2f3f5', '#f2f3f5'),
+    'lotr': ({'title_y0': 56, 'title_y1': 117, 'type_y0': 590, 'type_y1': 650,
+              'rules_y0': 662, 'rules_y1': 940, 'x_margin': 64, 'x_right': 690},
+             '#f6f1e6', '#1a1712'),
+    'abu': ({'title_y0': 34, 'title_y1': 100, 'type_y0': 574, 'type_y1': 618,
+             'rules_y0': 628, 'rules_y1': 992, 'x_margin': 62, 'x_right': 688},
+            '#1a1712', '#1a1712'),
+    '8th': ({'title_y0': 58, 'title_y1': 118, 'type_y0': 590, 'type_y1': 647,
+             'rules_y0': 659, 'rules_y1': 938, 'x_margin': 75, 'x_right': 680},
+            '#1a1712', '#1a1712'),
+    'mysticalArchive': ({'title_y0': 55, 'title_y1': 112, 'type_y0': 595, 'type_y1': 652,
+                         'rules_y0': 662, 'rules_y1': 955, 'x_margin': 70, 'x_right': 680,
+                         'cap_extra': 60},
+                        '#211a10', '#211a10'),
+    'sncArtDeco': ({'title_y0': 55, 'title_y1': 112, 'type_y0': 595, 'type_y1': 652,
+                    'rules_y0': 662, 'rules_y1': 946, 'x_margin': 64, 'x_right': 690},
+                   '#f6f1e6', '#1a1712'),
+    'neoSamurai': ({'title_y0': 72, 'title_y1': 129, 'type_y0': 595, 'type_y1': 652,
+                    'rules_y0': 662, 'rules_y1': 946, 'x_margin': 64, 'x_right': 690},
+                   '#f2f3f5', '#f2f3f5'),
+    'etched': ({'title_y0': 55, 'title_y1': 112, 'type_y0': 595, 'type_y1': 652,
+                'rules_y0': 662, 'rules_y1': 955, 'x_margin': 70, 'x_right': 685},
+               '#f2f3f5', '#f2f3f5'),
+}
+
+_BATTLE_STYLE_ALIASES = {'msa': 'mysticalArchive', 'artdeco': 'sncArtDeco',
+                         'samurai': 'neoSamurai'}
+
+
+def _battle_frame_dir(fs: dict):
+    """Resolve the frame-asset directory for a battle, or None for SVG styles."""
+    v = fs.get('frame_set') or fs.get('layout') or ''
+    v = _BATTLE_STYLE_ALIASES.get(v, v)
+    if v in _BATTLE_STYLE_BANDS:
+        return v
+    if fs.get('mode') == 'image':
+        return 'm15'  # image-mode default frame
+    return None
+
+
+def _hslice_to(img: Image.Image, out_w: int, cap_l: int, cap_r: int) -> Image.Image:
+    """Resize img horizontally to out_w, preserving the left/right end caps
+    (borders, bar caps) and stretching only the middle."""
+    w, h = img.size
+    mid_w = max(1, out_w - cap_l - cap_r)
+    out = Image.new('RGBA', (out_w, h))
+    out.paste(img.crop((cap_l, 0, w - cap_r, h)).resize((mid_w, h), Image.Resampling.LANCZOS),
+              (cap_l, 0))
+    out.paste(img.crop((0, 0, cap_l, h)), (0, 0))
+    out.paste(img.crop((w - cap_r, 0, w, h)), (out_w - cap_r, 0))
+    return out
+
+
+def _compose_battle_frame_from_style(card_dict: dict, card: CardData, fs: dict):
+    """Slice a style's portrait frame PNG into landscape battle chrome.
+
+    Vertical recomposition: [top border + title bar] unscaled, [art-window
+    side borders] stretched to fill, [type bar] unscaled, [rules texture]
+    stretched, [bottom border] unscaled — each band horizontally 3-sliced so
+    corners and bar end caps keep their shapes.
+
+    Returns (chrome RGBA 1050x750, battle-space layout dict, bar_col,
+    rules_col) or None when the style has no sliceable assets.
+    """
+    frame_dir = _battle_frame_dir(fs)
+    if frame_dir is None:
+        return None
+    L, bar_col, rules_col = _BATTLE_STYLE_BANDS[frame_dir]
+    # The layout bands are measured against the COMPOSITED portrait chrome
+    # (crowns applied, bars relocated, box textures merged) — slice that,
+    # not the raw color PNG.
+    try:
+        frame = _compose_image_frame_base(card_dict, card, fs)
+    except Exception:
+        return None
+    if frame is None:
+        return None
+
+    W, H = BATTLE_W, BATTLE_H
+    pw, ph = frame.size
+    pad = 8
+    extra = L.get('cap_extra', 16)
+    cap_l = L['x_margin'] + extra
+    cap_r = (pw - L['x_right']) + extra
+
+    top_h = L['title_y1'] + pad
+    type_h = (L['type_y1'] - L['type_y0']) + 2 * pad
+    bottom_h = ph - L['rules_y1']
+    bot_target = 335
+    rules_target = max(40, bot_target - type_h - bottom_h)
+    mid_target = H - top_h - bot_target
+
+    top = _hslice_to(frame.crop((0, 0, pw, top_h)), W, cap_l, cap_r)
+    mid = frame.crop((0, top_h, pw, L['type_y0'] - pad))
+    mid = mid.resize((pw, max(1, mid_target)), Image.Resampling.LANCZOS)
+    mid = _hslice_to(mid, W, cap_l, cap_r)
+    typebar = _hslice_to(frame.crop((0, L['type_y0'] - pad, pw, L['type_y1'] + pad)),
+                         W, cap_l, cap_r)
+    rules = frame.crop((0, L['type_y1'] + pad, pw, L['rules_y1']))
+    rules = rules.resize((pw, rules_target), Image.Resampling.LANCZOS)
+    rules = _hslice_to(rules, W, cap_l, cap_r)
+    bottom = _hslice_to(frame.crop((0, L['rules_y1'], pw, ph)), W, cap_l, cap_r)
+
+    chrome = Image.new('RGBA', (W, H))
+    y = 0
+    for band in (top, mid, typebar, rules, bottom):
+        chrome.paste(band, (0, y))
+        y += band.size[1]
+
+    bot_top = top_h + mid_target
+    BL = {
+        'title_y0': L['title_y0'], 'title_y1': L['title_y1'],
+        'type_y0': bot_top + pad, 'type_y1': bot_top + type_h - pad,
+        'rules_y0': bot_top + type_h, 'rules_y1': bot_top + type_h + rules_target,
+        'x_margin': L['x_margin'], 'x_right': W - (pw - L['x_right']),
+    }
+    return chrome, BL, bar_col, rules_col
+
+
+def _battle_overlay_landscape(card_dict: dict, card: CardData, fs: dict) -> Image.Image:
+    """Full battle chrome + text as a landscape RGBA overlay (no art)."""
+    if fs.get('mode') == 'image':
+        res = _compose_battle_frame_from_style(card_dict, card, fs)
+        if res is not None:
+            chrome, BL, bar_col, rules_col = res
+            theme = get_color_theme(card)
+            _ovr = (fs.get('color_overrides', {}) or {}).get('text')
+            bar_col = _ovr or bar_col or theme['text']
+            rules_col = _ovr or rules_col or theme['text']
+            parts = ['<?xml version="1.0" encoding="UTF-8"?>',
+                     f'<svg width="{BATTLE_W}" height="{BATTLE_H}" '
+                     f'viewBox="0 0 {BATTLE_W} {BATTLE_H}" '
+                     f'xmlns="http://www.w3.org/2000/svg" '
+                     f'xmlns:xlink="http://www.w3.org/1999/xlink">']
+            if _FONT_FACE_CSS:
+                parts.append(f'<style type="text/css">\n{_FONT_FACE_CSS}\n</style>')
+            parts.extend(_battle_text_svg_parts(card, fs, BL, bar_col, rules_col))
+            parts.append('</svg>')
+            png = cairosvg.svg2png(bytestring='\n'.join(parts).encode('utf-8'),
+                                   output_width=BATTLE_W, output_height=BATTLE_H)
+            text_img = Image.open(io.BytesIO(png)).convert('RGBA')
+            return Image.alpha_composite(chrome, text_img)
+
+    svg_content = _create_battle_frame_svg(card, fs)
+    png = cairosvg.svg2png(bytestring=svg_content.encode('utf-8'),
+                           output_width=BATTLE_W, output_height=BATTLE_H)
+    return Image.open(io.BytesIO(png)).convert('RGBA')
 
 
 def _render_battle_composite(card_dict: dict, card: CardData, fs: dict,
@@ -4905,11 +5082,7 @@ def _render_battle_composite(card_dict: dict, card: CardData, fs: dict,
     canvas.paste(art_l, (0, 0))
 
     if not fs.get('no_frame'):
-        svg_content = _create_battle_frame_svg(card, fs)
-        png = cairosvg.svg2png(bytestring=svg_content.encode('utf-8'),
-                               output_width=BATTLE_W, output_height=BATTLE_H)
-        chrome = Image.open(io.BytesIO(png)).convert('RGBA')
-        canvas = Image.alpha_composite(canvas, chrome)
+        canvas = Image.alpha_composite(canvas, _battle_overlay_landscape(card_dict, card, fs))
 
     # Rotate 90° CCW: the title ends up reading bottom-to-top along the left
     # edge, exactly like a printed battle card.
