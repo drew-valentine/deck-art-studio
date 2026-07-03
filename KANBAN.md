@@ -11,11 +11,11 @@
     - Generation: one art image per card name. FLUX accepts arbitrary width/height; deck-level `art_orientation` (portrait/landscape) already exists for art aspect.
     - Extension (`extension/content.js`): replaces edhplay.com images by Scryfall UUID from image URL. DFC front and back share the same UUID (URLs differ by /front/ vs /back/), so back faces would currently be replaced with front art.
   - **Phasing (subtasks):**
-    - Phases 0, 1 + 2 — **SHIPPED in v1.36.0** (2026-07-03, PR #7 squash-merged as commit 23a5d8c, owner drew-valentine). Phase 3a — **SHIPPED in v1.37.0** (2026-07-03, PR #8 squash-merged as commit dac763a, owner drew-valentine). Both moved to Done. Remaining epic scope: Phase 3b (authentic rotated split cards with per-half art), the transform-indicator-pips polish, and a DRY cleanup pass (below).
+    - Phases 0, 1 + 2 — **SHIPPED in v1.36.0** (2026-07-03, PR #7 squash-merged as commit 23a5d8c, owner drew-valentine). Phase 3a — **SHIPPED in v1.37.0** (2026-07-03, PR #8 squash-merged as commit dac763a, owner drew-valentine). Both moved to Done. Phase 3b (authentic rotated split cards with per-half art) — **IN REVIEW** (completed 2026-07-03, branch `feature/split-rotated`, PR #9 `semver:minor`, owner drew-valentine; see In Review). **Rendering scope of the epic is now complete once 3b merges — DFCs, adventures, rooms, battles, and rotated splits all render authentically.** Remaining backlog items are polish only: the transform-indicator-pips polish, a DRY cleanup pass (below), and the "PIP cards" clarification still owed by the requester.
     - [ ] Transform/MDFC face-indicator pips on frames | polish, carried from Phase 1 — a dedicated transform-indicator icon on the frame (front/back face indicator). Back-face composites currently render with the standard frame for the back face's own card data; a face-indicator icon was deferred out of Phase 1.
     - Phase 3 split into two parts (Drew approved starting 3a on 2026-07-03):
       - Phase 3a — Battle cards (landscape sieges) — **SHIPPED in v1.37.0** (see Done). Battle fronts render a dedicated landscape battle frame rotated 90° into the standard portrait composite; battles are Scryfall `layout=transform`, so the v1.36.0 DFC machinery covered faces/toggle/extension automatically.
-      - [ ] **Phase 3b — Authentic rotated split cards with per-half art** — remains Backlog. True rotated split-card layout with two halves each having their own art. Note: split cards already render usably today via the Phase 2 side-by-side treatment, so this is a fidelity upgrade rather than net-new support.
+      - [ ] **Phase 3b — Authentic rotated split cards with per-half art** — **IN PROGRESS** (started 2026-07-03, branch `feature/split-rotated`, owner drew-valentine; tracked in the In Progress column). True rotated split-card layout with two halves each having their own art. Note: split cards already render usably today via the Phase 2 side-by-side treatment, so this is a fidelity upgrade rather than net-new support.
     - [ ] DRY cleanup pass (flagged by the Phase 2 review) — de-duplicate the face-expansion logic (duplicated across paths) and consolidate the triple-copied download/slug helpers into a single shared implementation.
   - **Open question — resolved (2026-07-03):** the friend's examples are all covered by Phases 0-3 except "PIP cards", which remains unclarified. Still need the requester to clarify what "PIP cards" means (likely Kamigawa flip cards) before scoping any flip-layout work.
 
@@ -84,6 +84,28 @@
 
 ## In Review
 
+- [ ] Alt Layouts Phase 3b+ — Rotated split cards, per-style battle frames, and alt-layout polish | Priority: P2 | Review Started: 2026-07-03 | Owner: drew-valentine
+  - Branch: `feature/split-rotated`
+  - PR: https://github.com/drew-valentine/deck-art-studio/pull/9 (retitled "feat: rotated split cards, per-style battle frames, and alt-layout polish (Phase 3b+)", label `semver:minor`) — **CI green.**
+  - Completed: 2026-07-03 — awaiting review/merge. Scope grew well past the original Phase 3b during live testing (additions itemized below).
+  - Part of EPIC: Support Alternative Card Layouts (see Backlog). Drew approved starting Phase 3b on 2026-07-03. Started as a rotated-split fidelity upgrade; broadened into a per-style battle-frame + alt-layout polish pass driven by reference-checking real printings in the browser.
+  - Scope added beyond original Phase 3b (from live testing):
+    - Rooms corrected to the rotated-split treatment: real Duskmourn Room printings have per-half art, so Rooms now render as rotated per-half splits like classic splits. This reverses the original "Rooms stay portrait side-by-side" criterion — the reversal is backed by reference evidence from actual printings.
+    - Battle frames now render in EVERY image style: the landscape battle chrome is sliced from each style's own composited portrait assets (rather than a single hardcoded battle frame), verified across a 10-style contact sheet. Battle rules also corrected to match the reference's full-width bottom band.
+    - Frame Designer WYSIWYG art rotation for battle fronts — the designer preview now rotates battle-front art to match the final composite (pixel-verified parity). This RESOLVES the battle-front pan/zoom limitation documented in Phase 3a (v1.37.0).
+    - Alt-layout polish: uniform rules-area mana pip sizing; face-aware "Generate Random"; `cards_revision` self-healing card list that recovers stale/out-of-date pages; Showcase is now the default frame style for new decks.
+  - Acceptance criteria (Given/When/Then) — all met:
+    - [x] Given a classic split card (`layout=split`, e.g. Fire // Ice), when the composite is rendered, then each half renders as a mini card (own title/mana/type/rules/art) at ~70% scale, both rotated 90° into the standard portrait composite — like real printed splits, with per-half frame colors (Fire red / Ice blue).
+    - [x] Given a Room card (Duskmourn `layout=room`, e.g. Smoky Lounge // Misty Salon), when the composite is rendered, then it uses the rotated per-half split treatment (per-half art), matching real printings — correcting the earlier portrait side-by-side treatment (reversed with reference evidence).
+    - [x] Given a battle front, when the composite is rendered in ANY of the 10 image styles, then a landscape battle frame is sliced from that style's own composited portrait assets and rotated into the portrait composite — verified via a 10-style contact sheet — with the rules in the reference's full-width bottom band.
+    - [x] Given either half of a rotated split, when art is generated, then each half has its own AI art + prompt + version history (right half reuses the existing second-face machinery: "<name> [back]" keys / "__back" slugs).
+    - [x] Given either half is (re)generated, when generation completes, then the combined composite is re-rendered from either half; batch generation covers both halves without regenerating finished ones.
+    - [x] Given a rotated split is selected in the UI, when the face toggle appears, then it is labeled with the half names (not Front/Back) and the hero always shows the combined card.
+    - [x] Given a battle front in the Frame Designer, when the designer preview renders, then battle-front art is rotated to match the final composite (pixel-verified parity) — battle pan/zoom limitation from Phase 3a resolved.
+    - [x] Given a stale/out-of-date grid page, when `cards_revision` advances, then the card list self-heals rather than showing stale entries; "Generate Random" is face-aware; rules-area mana pips are uniformly sized; Showcase is the default frame style for new decks.
+    - [x] Known limitation (documented, remaining): Frame Designer preview for rotated *splits* still falls back to the column layout; the final composite is authoritative. (The battle-front pan/zoom limitation is now RESOLVED — see above.)
+    - [x] Validation gate: Playwright + live FLUX generation of both halves of a real split card, 10-style battle contact sheet, and the full unit-test suite pass. CI green on PR #9.
+
 ## Done
 
 - [x] Alt Layouts Phase 3a — Battle cards (landscape sieges) | Priority: P2 | Completed: 2026-07-03 | Owner: drew-valentine
@@ -97,7 +119,7 @@
     - [x] Given a battle card front, when the composite is rendered, then a dedicated landscape battle frame (title bar, art region, rules panel, defense shield) is composed on a landscape canvas and rotated 90° into the standard 750×1050 portrait composite — matching how real battles are printed — so the grid, exports, and extension continue to work unchanged.
     - [x] Given a battle card front, when art is generated, then landscape-aspect FLUX art is produced to fill the landscape art region.
     - [x] Given a battle card, when the back face (a normal portrait card, e.g. Awakened Skyclave) is viewed/generated, then it works via the existing DFC machinery (Front/Back toggle, per-face art + composite).
-    - [x] Known limitation (documented): Frame Designer art pan/zoom is limited for battle fronts in this pass.
+    - [x] Known limitation (documented): Frame Designer art pan/zoom is limited for battle fronts in this pass. **RESOLVED in PR #9 (Phase 3b+)** — battle-front art now rotates in the Frame Designer with pixel-verified parity to the final composite.
     - [x] Validation gate: Playwright browser verification + live local FLUX generation of a battle front + full pytest suite (206 tests).
   - CI fix included in the release: the PR health check now polls up to 45s and dumps the server log on failure (previously a fixed 6s sleep that raced first-start font downloads with no diagnostics).
 

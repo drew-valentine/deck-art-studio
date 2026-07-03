@@ -184,3 +184,71 @@ class TestSafeInspirationPath:
 
     def test_rejects_backslash(self, tmp_path):
         assert _safe_inspiration_path(tmp_path, 'sub\\file.png') is None
+
+
+class TestRotatedSplitHelpers:
+    FIRE_ICE = {
+        'name': 'Fire // Ice',
+        'layout': 'split',
+        'mana_cost': '{1}{R}',
+        'type_line': 'Instant',
+        'oracle_text': 'Fire deals 2 damage divided as you choose among one or two targets.',
+        'colors': ['R', 'U'], 'color_identity': ['R', 'U'],
+        'card_type': 'instant',
+        'frame_overrides': {'frame_set': 'm15', 'art_zoom': 0.5},
+        'card_faces': [
+            {'name': 'Fire', 'mana_cost': '{1}{R}', 'type_line': 'Instant',
+             'oracle_text': 'Fire deals 2 damage divided as you choose among one or two targets.'},
+            {'name': 'Ice', 'mana_cost': '{1}{U}', 'type_line': 'Instant',
+             'oracle_text': 'Tap target permanent.\nDraw a card.'},
+        ],
+    }
+    ROOM = {
+        'name': 'Smoky Lounge // Misty Salon',
+        'layout': 'split',
+        'type_line': 'Enchantment — Room',
+        'card_faces': [{'name': 'A'}, {'name': 'B'}],
+    }
+
+    def test_rotated_split_detection(self):
+        from deck_studio import is_rotated_split, has_second_art_face, is_dfc
+        assert is_rotated_split(self.FIRE_ICE) is True
+        # Rooms print rotated with per-half art too (see DSK Smoky Lounge)
+        assert is_rotated_split(self.ROOM) is True
+        assert has_second_art_face(self.FIRE_ICE) is True
+        assert is_dfc(self.FIRE_ICE) is False              # not a DFC
+
+    def test_split_half_card(self):
+        from deck_studio import split_half_card
+        left = split_half_card(self.FIRE_ICE, 0)
+        right = split_half_card(self.FIRE_ICE, 1)
+        assert left['name'] == 'Fire' and right['name'] == 'Ice'
+        # Half colors derive from each half's own mana cost
+        assert left['colors'] == ['R']
+        assert right['colors'] == ['U']
+        # No layout/faces — halves render as normal mini cards
+        assert 'layout' not in left and 'card_faces' not in left
+        # The FIRST half is the designer's "front": it keeps the card's own
+        # art pan/zoom; the second half doesn't inherit those
+        assert left['frame_overrides'] == {'frame_set': 'm15', 'art_zoom': 0.5}
+        assert right['frame_overrides'] == {'frame_set': 'm15'}
+
+    def test_split_second_half_uses_own_overrides(self):
+        from deck_studio import split_half_card
+        card = dict(self.FIRE_ICE)
+        card['frame_overrides_back'] = {'frame_set': 'etched',
+                                        'art_zoom': 1.3}
+        right = split_half_card(card, 1)
+        # A frame saved while viewing the second half renders on it
+        assert right['frame_overrides'] == {'frame_set': 'etched',
+                                            'art_zoom': 1.3}
+        # ...and never leaks onto the first half
+        left = split_half_card(card, 0)
+        assert left['frame_overrides']['frame_set'] == 'm15'
+
+    def test_split_flavor_text_renders_on_first_half(self):
+        from deck_studio import split_half_card
+        card = dict(self.FIRE_ICE)
+        card['flavor_text'] = 'Which do you want first?'
+        assert split_half_card(card, 0)['flavor_text'] == 'Which do you want first?'
+        assert split_half_card(card, 1)['flavor_text'] == ''
