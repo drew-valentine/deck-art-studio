@@ -388,7 +388,7 @@ Contributions are welcome! Please:
 
 The source code is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0) — free to use, modify, and share for personal and non-commercial purposes.
 
-This software is not intended for commercial use. If you are a business or commercial entity interested in using Deck Art Studio, contact [drew@drewvalentine.com](mailto:drew@drewvalentine.com).
+This software is not intended for commercial use. If you are a business or commercial entity interested in using Deck Art Studio, contact me.
 
 ### Fan Content Disclaimer
 
