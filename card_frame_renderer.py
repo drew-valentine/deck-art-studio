@@ -728,6 +728,11 @@ class CardData:
     # renders small beneath it (e.g. "GODZILLA, KING OF THE MONSTERS" over
     # "Zilortha, Strength Incarnate").
     showcase_name: Optional[str] = None
+    # Single-art multi-part cards (adventure, split/room): Scryfall layout +
+    # both face dicts (name, mana_cost, type_line, oracle_text). When set, the
+    # rules box renders as two columns instead of one.
+    layout: str = 'normal'
+    split_faces: Optional[List[dict]] = None
 
     def __post_init__(self):
         if self.colors is None:
@@ -1526,6 +1531,125 @@ def _max_fitting_rules_font(measure, box_h: float, desired: int,
     return f
 
 
+def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
+                            w: float, h: float, text_color: str,
+                            desired_font: int,
+                            avoid: Optional[Tuple[float, float]] = None) -> List[str]:
+    """Two-column rules area for single-art multi-part cards.
+
+    Adventure (Murderous Rider // Swift End): LEFT column = the adventure half
+    (name / cost / type header + its rules), RIGHT column = the creature
+    half's rules — matching the real Eldraine layout. Split/room cards
+    (Smoky Lounge // Misty Salon): one column per half, each with its own
+    name/cost/type header.
+
+    Coordinate-agnostic: works in any style's rules rect (672- or 750-space).
+    `avoid` (abs y_top, narrow width from box left) applies to the right
+    column only — the creature half wraps around the P/T plate.
+    """
+    faces = card.split_faces
+    if card.layout == 'adventure':
+        cols = [
+            {'face': faces[1], 'text': faces[1].get('oracle_text') or ''},
+            {'face': None, 'text': card.oracle_text or ''},
+        ]
+    else:  # split / room
+        cols = [
+            {'face': faces[0], 'text': faces[0].get('oracle_text') or ''},
+            {'face': faces[1], 'text': faces[1].get('oracle_text') or ''},
+        ]
+
+    gap = max(16.0, w * 0.03)
+    col_w = (w - gap) / 2
+    xs = [x, x + col_w + gap]
+
+    def _col_avoid_narrow():
+        """Allowed line width inside the RIGHT column above the P/T plate."""
+        return avoid[1] - (col_w + gap) if avoid is not None else None
+
+    def measure(f):
+        line_h = int(RULES_LINE_H * f / RULES_FONT)
+        worst = 0.0
+        for i, col in enumerate(cols):
+            hh = (line_h + line_h * 0.85) if col['face'] else 0.0
+            need = hh
+            if avoid is not None and i == 1:
+                narrow = _col_avoid_narrow()
+                if narrow >= 60:
+                    av = (avoid[0] - (y_top + hh + f * 0.8), narrow)
+                    need += _measure_rules_text(col['text'], col_w, f, line_h, avoid=av)
+                else:
+                    # Plate eats the whole column bottom — text must END above it
+                    body = _measure_rules_text(col['text'], col_w, f, line_h)
+                    cap = max(avoid[0] - y_top - 4, 0)
+                    need += body if hh + body <= cap else body + (h - cap)
+            else:
+                need += _measure_rules_text(col['text'], col_w, f, line_h)
+            worst = max(worst, need)
+        return worst
+
+    f = _max_fitting_rules_font(measure, h, int(desired_font))
+    line_h = int(RULES_LINE_H * f / RULES_FONT)
+    if measure(f) > h + 2:  # only possible at the hard floor
+        fs.setdefault('_quality', []).append(
+            f'rules_overflow: split text needs {measure(f):.0f}px but box is {h:.0f}px (font {f})')
+
+    parts = []
+    mid = x + col_w + gap / 2
+    parts.append(f'<line x1="{mid:.1f}" y1="{y_top + 2:.1f}" x2="{mid:.1f}" '
+                 f'y2="{y_top + h - 2:.1f}" stroke="{text_color}" '
+                 f'stroke-width="1.2" opacity="0.3"/>')
+
+    for i, col in enumerate(cols):
+        cx = xs[i]
+        cy = y_top + f * 0.8  # first baseline
+        if col['face']:
+            face = col['face']
+            raw_name = face.get('name') or ''
+            fname = raw_name.replace('&', '&amp;').replace('<', '&lt;')
+            pips = parse_mana_cost(face.get('mana_cost') or '')
+            ps = max(14, int(f * 0.72))
+            pips_w = len(pips) * (ps + 2) + 6 if pips else 0
+            nf = f
+            est = len(raw_name) * nf * 0.55
+            name_avail = col_w - pips_w
+            if est > name_avail and name_avail > 0:
+                nf = max(12, int(nf * name_avail / est))
+            parts.append(f'<text x="{cx:.1f}" y="{cy:.1f}" font-family="{NAME_FONT_FAMILY}" '
+                         f'font-size="{nf}" font-weight="bold" fill="{text_color}">{fname}</text>')
+            if pips:
+                px = cx + col_w
+                pcy = cy - nf * 0.32
+                for pip in reversed(pips):
+                    pxx = px - ps
+                    parts.append(f'<circle cx="{pxx + ps/2:.1f}" cy="{pcy:.1f}" '
+                                 f'r="{ps/2 + 0.5:.1f}" fill="rgba(0,0,0,0.25)"/>')
+                    parts.append(_pip_image_tag(pip, pxx, pcy - ps / 2, ps))
+                    px -= (ps + 2)
+            cy += line_h
+            ftype = (face.get('type_line') or '').replace('&', '&amp;').replace('<', '&lt;')
+            tf2 = max(11, int(f * 0.78))
+            parts.append(f'<text x="{cx:.1f}" y="{cy:.1f}" font-family="{TYPE_FONT_FAMILY}" '
+                         f'font-size="{tf2}" font-weight="bold" fill="{text_color}" '
+                         f'opacity="0.82">{ftype}</text>')
+            cy += line_h * 0.85
+
+        av_abs = None
+        if avoid is not None and i == 1:
+            narrow = _col_avoid_narrow()
+            if narrow >= 60:
+                av_abs = (avoid[0], narrow)
+        body_h = h - (cy - (y_top + f * 0.8))
+        if avoid is not None and i == 1 and av_abs is None:
+            body_h = min(body_h, avoid[0] - cy - 4)  # hard-stop above the P/T plate
+        body, _ = render_rules_text_svg(col['text'], cx, cy, col_w, body_h,
+                                        f, line_h, text_color=text_color,
+                                        avoid=av_abs)
+        parts.extend(body)
+
+    return parts
+
+
 # ===========================================================================
 # Planeswalker loyalty ability renderer
 # ===========================================================================
@@ -2205,6 +2329,14 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
             fs.setdefault('_quality', []).append(
                 f'rules_overflow: planeswalker needs {_start_off + rules_used_h:.0f}px '
                 f'but box is {rules_max_h:.0f}px (font {pw_font})')
+    elif show_oracle and rules_max_h > 0 and card.split_faces:
+        # Adventure / split / room: two-column rules area
+        rules_svg = _render_split_rules_svg(
+            card, fs, fx + RULES_PADDING, rules_y + RULES_PADDING,
+            rules_inner_w, rules_max_h, text_color,
+            int(fs.get('rules_font_size') or RULES_FONT))
+        rules_used_h = rules_max_h
+        rules_text_y_start = rules_y + RULES_PADDING
     elif show_oracle and rules_max_h > 0:
         oracle = card.oracle_text or ""
         desired = int(fs.get('rules_font_size') or RULES_FONT)
@@ -2242,8 +2374,9 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
     svg.extend(rules_svg)
 
     # ── Flavor text (italic, quoted, BOTTOM-ALIGNED in textbox) ──
+    # (skipped for split-text cards — both columns own the full box height)
     has_pt = card.power is not None and card.toughness is not None
-    if show_flavor and card.flavor_text and rules_h > 0:
+    if show_flavor and card.flavor_text and rules_h > 0 and not card.split_faces:
         ft = card.flavor_text.strip()
         if not ft.startswith('"') and not ft.startswith('\u201c'):
             ft = f'\u201c{ft}\u201d'  # wrap in curly quotes
@@ -2482,9 +2615,29 @@ def _cover_crop_with_offset(img, target_w, target_h, offset_x=0, offset_y=0, zoo
 def _build_card_data(card_dict: dict, frame_settings: dict = None) -> CardData:
     """Build CardData from card_dict, applying text_overrides from frame_settings."""
     text_ovr = (frame_settings or {}).get('text_overrides', {})
+
+    # Single-art multi-part layouts (adventure, split/room) carry both halves
+    # so the rules box can render two columns.
+    layout = card_dict.get('layout') or 'normal'
+    faces = card_dict.get('card_faces') or []
+    split_faces = faces if layout in ('adventure', 'split') and len(faces) >= 2 else None
+
+    name = text_ovr.get('name') or card_dict.get('name', 'Unknown')
+    mana_cost = text_ovr.get('mana_cost') if 'mana_cost' in text_ovr else card_dict.get('mana_cost', '')
+    if split_faces:
+        if layout == 'adventure' and not text_ovr.get('name'):
+            # Real adventure cards title the creature half only
+            name = split_faces[0].get('name') or name
+        if layout == 'split' and 'mana_cost' not in text_ovr:
+            # Each half's cost renders in its column header; a single cost in
+            # the title bar would be misleading
+            mana_cost = ''
+
     return CardData(
-        name=text_ovr.get('name') or card_dict.get('name', 'Unknown'),
-        mana_cost=text_ovr.get('mana_cost') if 'mana_cost' in text_ovr else card_dict.get('mana_cost', ''),
+        name=name,
+        mana_cost=mana_cost,
+        layout=layout,
+        split_faces=split_faces,
         type_line=text_ovr.get('type_line') or card_dict.get('type_line', ''),
         oracle_text=text_ovr.get('oracle_text') if 'oracle_text' in text_ovr else card_dict.get('oracle_text', ''),
         power=text_ovr.get('power') if 'power' in text_ovr else card_dict.get('power'),
@@ -2754,6 +2907,14 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
             fs.setdefault('_quality', []).append(
                 f'rules_overflow: planeswalker needs {_start_off + rules_used_h:.0f}px '
                 f'but box is {rules_max_h:.0f}px (font {pw_font})')
+    elif show_oracle and rules_max_h > 0 and card.split_faces:
+        # Adventure / split / room: two-column rules area
+        rules_svg = _render_split_rules_svg(
+            card, fs, art_m + RULES_PADDING, rules_y + RULES_PADDING,
+            rules_inner_w, rules_max_h, text_color,
+            int(fs.get('rules_font_size') or RULES_FONT))
+        rules_used_h = rules_max_h
+        rules_text_y_start = rules_y + RULES_PADDING
     elif show_oracle and rules_max_h > 0:
         oracle = card.oracle_text or ""
         desired = int(fs.get('rules_font_size') or RULES_FONT)
@@ -2789,8 +2950,8 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
         rules_text_y_start = rules_y + RULES_PADDING
     svg.extend(rules_svg)
 
-    # ── Flavor text ──
-    if show_flavor and card.flavor_text and rules_h > 0:
+    # ── Flavor text (skipped for split-text cards) ──
+    if show_flavor and card.flavor_text and rules_h > 0 and not card.split_faces:
         ft = card.flavor_text.strip()
         if not ft.startswith('"') and not ft.startswith('\u201c'):
             ft = f'\u201c{ft}\u201d'
@@ -3014,6 +3175,14 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
     if card.oracle_text and _is_planeswalker(card):
         svg.extend(_render_pw_content_svg(card, fs, tx, L['rules_y0'] + 8,
                                           L['x_right'], L['rules_y1'], dark))
+    elif card.split_faces:
+        # Adventure / split / room: two-column rules area
+        _av = ((956.0, 532.0) if card.power is not None
+               and card.toughness is not None else None)
+        svg.extend(_render_split_rules_svg(
+            card, fs, tx, L['rules_y0'] + 8, L['x_right'] - tx,
+            (L['rules_y1'] - L['rules_y0']) - 16, dark,
+            int(fs.get('rules_font_size') or 30), avoid=_av))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8
@@ -3244,6 +3413,15 @@ def _create_bar_box_text_svg(card: CardData, fs: dict, L: dict,
         svg.extend(_render_pw_content_svg(card, fs, tx, L['rules_y0'] + 8,
                                           L['x_right'], L['rules_y1'] - 8,
                                           rules_col))
+    elif card.split_faces:
+        # Adventure / split / room: two-column rules area
+        avoid_abs = None
+        if card.power is not None and card.toughness is not None and 'avoid' in L:
+            avoid_abs = L['avoid']
+        svg.extend(_render_split_rules_svg(
+            card, fs, tx, L['rules_y0'] + 8, L['x_right'] - tx,
+            (L['rules_y1'] - L['rules_y0']) - 16, rules_col,
+            int(fs.get('rules_font_size') or 30), avoid=avoid_abs))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8
@@ -3617,6 +3795,14 @@ def _create_lotr_text_svg(card: CardData, fs: dict) -> str:
         svg.extend(_render_pw_content_svg(card, fs, tx, L['rules_y0'] + 8,
                                           L['x_right'], L['rules_y1'] - 8, dark,
                                           shield_center=(L['pt_cx'], L['pt_cy'])))
+    elif card.split_faces:
+        # Adventure / split / room: two-column rules area
+        _av = ((920.0, 502.0) if card.power is not None
+               and card.toughness is not None else None)
+        svg.extend(_render_split_rules_svg(
+            card, fs, tx, L['rules_y0'] + 8, L['x_right'] - tx,
+            (L['rules_y1'] - L['rules_y0']) - 16, dark,
+            int(fs.get('rules_font_size') or 30), avoid=_av))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8
@@ -3725,6 +3911,14 @@ def _create_crystal_text_svg(card: CardData, fs: dict) -> str:
     if card.oracle_text and _is_planeswalker(card):
         svg.extend(_render_pw_content_svg(card, fs, tx, L['rules_y0'] + 8,
                                           L['x_right'], L['rules_y1'] - 8, rules_col))
+    elif card.split_faces:
+        # Adventure / split / room: two-column rules area
+        _av = ((915.0, 506.0) if card.power is not None
+               and card.toughness is not None else None)
+        svg.extend(_render_split_rules_svg(
+            card, fs, tx, L['rules_y0'] + 8, L['x_right'] - tx,
+            (L['rules_y1'] - L['rules_y0']) - 16, rules_col,
+            int(fs.get('rules_font_size') or 30), avoid=_av))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8
@@ -3822,7 +4016,13 @@ def _create_abu_text_svg(card: CardData, fs: dict) -> str:
                f'font-size="{tf}" font-weight="bold" fill="{ink}">{esc_type}</text>')
 
     # Rules text (black serif), shrink to fit the text box
-    if card.oracle_text:
+    if card.split_faces:
+        # Adventure / split / room: two-column rules area
+        svg.extend(_render_split_rules_svg(
+            card, fs, tx, L['rules_y0'] + 8, L['x_right'] - tx,
+            (L['rules_y1'] - L['rules_y0']) - 12, ink,
+            int(fs.get('rules_font_size') or RULES_FONT)))
+    elif card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_h = (L['rules_y1'] - L['rules_y0']) - 12
         desired = int(fs.get('rules_font_size') or RULES_FONT)

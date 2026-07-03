@@ -556,8 +556,8 @@ def face_key(card_name, face='front'):
 def back_face_card(card):
     """Merged card dict for the BACK face — face fields over card-level fields.
 
-    Card-level extras (frame_overrides, is_commander, color_identity, ...) are
-    inherited so frame rendering behaves like the front face.
+    Card-level extras (is_commander, color_identity, ...) are inherited so
+    frame rendering behaves like the front face.
     """
     faces = card.get('card_faces') or []
     if len(faces) < 2:
@@ -571,13 +571,45 @@ def back_face_card(card):
     if not merged.get('card_type'):
         from scryfall_client import normalize_card_type
         merged['card_type'] = normalize_card_type(merged.get('type_line') or '')
-    # Frame overrides authored for the FRONT face (text overrides, art
-    # pan/zoom) must not leak onto the back; keep only style-level overrides.
-    overrides = dict(card.get('frame_overrides') or {})
-    for k in ('text_overrides', 'art_offset', 'art_zoom'):
-        overrides.pop(k, None)
-    merged['frame_overrides'] = overrides
+    # The back face has its own designer overrides. Without any, inherit only
+    # style-level front overrides — text overrides and art pan/zoom authored
+    # for the front face must not leak onto the back.
+    if card.get('frame_overrides_back') is not None:
+        merged['frame_overrides'] = card['frame_overrides_back']
+    else:
+        overrides = dict(card.get('frame_overrides') or {})
+        for k in ('text_overrides', 'art_offset', 'art_zoom'):
+            overrides.pop(k, None)
+        merged['frame_overrides'] = overrides
+    merged.pop('frame_overrides_back', None)
+    # Back faces render standalone — never as a split/adventure text box
+    merged.pop('card_faces', None)
+    merged.pop('layout', None)
     return merged
+
+
+def _resolve_card_ref(card_name):
+    """Resolve a possibly face-qualified name ("<name> [back]") from cards_db.
+
+    Returns (render_card, base_card, face, slug):
+    - render_card: dict to feed the frame renderer (back-face merged for backs)
+    - base_card:   the underlying cards_db entry
+    - face:        'front' | 'back'
+    - slug:        file slug for this face
+    (None, None, face, None) when the card isn't found.
+    """
+    face = 'front'
+    base_name = card_name
+    if card_name.endswith(BACK_FACE_SUFFIX):
+        face = 'back'
+        base_name = card_name[:-len(BACK_FACE_SUFFIX)]
+    card = next((c for c in cards_db if c['name'] == base_name), None)
+    if not card:
+        return None, None, face, None
+    render_card = back_face_card(card) if face == 'back' else card
+    if face == 'back' and render_card is None:
+        return None, None, face, None
+    return render_card, card, face, name_to_slug(face_key(base_name, face))
 
 
 # ---------------------------------------------------------------------------
@@ -4151,6 +4183,7 @@ def get_cards():
                 'back_composite_mtime': _composite_mtime_for(bslug),
                 'has_back_ai_art': (RAW_ART_DIR / f"{bslug}.meta.json").exists(),
                 'has_back_scryfall_art': has_back_scryfall,
+                'back_frame_overrides': card.get('frame_overrides_back', {}),
             })
 
         result.append(entry)
@@ -5012,18 +5045,19 @@ def deck_art_orientation(deck_id):
 
 @app.route('/api/cards/frame-overrides', methods=['POST'])
 def save_card_frame_overrides():
-    """Save per-card frame overrides."""
+    """Save per-card frame overrides. "<name> [back]" targets the back face,
+    which keeps its own override set (frame_overrides_back)."""
     data = request.json or {}
     card_name = data.get('card_name', '').strip()
     overrides = data.get('frame_overrides', {})
     if not card_name:
         return jsonify({'error': 'No card_name provided'}), 400
 
-    card = next((c for c in cards_db if c['name'] == card_name), None)
+    _, card, face, _ = _resolve_card_ref(card_name)
     if not card:
         return jsonify({'error': f'Card not found: {card_name}'}), 404
 
-    card['frame_overrides'] = overrides
+    card['frame_overrides_back' if face == 'back' else 'frame_overrides'] = overrides
     _persist_cards_and_prompts()
     return jsonify({'success': True})
 
@@ -5038,20 +5072,21 @@ def preview_frame():
     if not card_name:
         return jsonify({'error': 'No card_name provided'}), 400
 
-    card = next((c for c in cards_db if c['name'] == card_name), None)
+    card, _base, _face, slug = _resolve_card_ref(card_name)
     if not card:
         return jsonify({'error': f'Card not found: {card_name}'}), 404
 
-    # Find art: raw art first, then Scryfall
-    slug = name_to_slug(card_name)
+    # Find art: raw art first, then Scryfall (deck-local, then shared)
     raw_path = RAW_ART_DIR / f"{slug}.png"
-    scryfall_path = SCRYFALL_ART_DIR / f"{slug}.jpg"
+    deck_sf_dir = DECKS_DIR / active_deck_id / "scryfall_art" if active_deck_id else None
 
     art_path = None
     if raw_path.exists():
         art_path = raw_path
-    elif scryfall_path.exists():
-        art_path = scryfall_path
+    elif deck_sf_dir and (deck_sf_dir / f"{slug}.jpg").exists():
+        art_path = deck_sf_dir / f"{slug}.jpg"
+    elif (SCRYFALL_ART_DIR / f"{slug}.jpg").exists():
+        art_path = SCRYFALL_ART_DIR / f"{slug}.jpg"
 
     if not art_path:
         return jsonify({'error': 'No art available for preview'}), 404
@@ -5103,7 +5138,7 @@ def render_frame_layer_endpoint():
     frame_settings = data.get('frame_settings', {})
     if not card_name:
         return jsonify({'error': 'No card_name provided'}), 400
-    card = next((c for c in cards_db if c['name'] == card_name), None)
+    card, _base, _face, _slug = _resolve_card_ref(card_name)
     if not card:
         return jsonify({'error': f'Card not found: {card_name}'}), 404
     try:
@@ -5126,7 +5161,7 @@ def render_text_overlay_endpoint():
     frame_settings = data.get('frame_settings', {})
     if not card_name:
         return jsonify({'error': 'No card_name provided'}), 400
-    card = next((c for c in cards_db if c['name'] == card_name), None)
+    card, _base, _face, _slug = _resolve_card_ref(card_name)
     if not card:
         return jsonify({'error': f'Card not found: {card_name}'}), 404
     try:
@@ -5144,11 +5179,12 @@ def save_card_art_position():
     card_name = data.get('card_name', '').strip()
     if not card_name:
         return jsonify({'error': 'No card_name provided'}), 400
-    card = next((c for c in cards_db if c['name'] == card_name), None)
+    _, card, face, _slug = _resolve_card_ref(card_name)
     if not card:
         return jsonify({'error': f'Card not found: {card_name}'}), 404
 
-    overrides = card.get('frame_overrides', {})
+    ovr_key = 'frame_overrides_back' if face == 'back' else 'frame_overrides'
+    overrides = card.get(ovr_key, {})
     if 'art_offset' in data:
         overrides['art_offset'] = {
             'x': float(data['art_offset'].get('x', 0)),
@@ -5156,7 +5192,7 @@ def save_card_art_position():
         }
     if 'art_zoom' in data:
         overrides['art_zoom'] = float(data['art_zoom'])
-    card['frame_overrides'] = overrides
+    card[ovr_key] = overrides
     _persist_cards_and_prompts()
     return jsonify({'success': True})
 
@@ -7667,6 +7703,10 @@ header .separator {
         <!-- Canvas preview -->
         <div id="fdCanvasWrap" style="display:none;">
           <div class="fd-card-name" id="fdCardName"></div>
+          <div class="face-toggle" id="fdFaceToggle" style="display:none;">
+            <button class="face-toggle-btn active" id="fdFaceBtnFront" onclick="setFace('front')">Front</button>
+            <button class="face-toggle-btn" id="fdFaceBtnBack" onclick="setFace('back')">Back</button>
+          </div>
           <div class="fd-canvas-container" id="fdCanvasContainer">
             <canvas id="fdCanvas" width="750" height="1050"></canvas>
             <div class="fd-canvas-loading" id="fdCanvasLoading">
@@ -9130,6 +9170,9 @@ function setFace(face) {
   if (actionArea) delete actionArea.dataset.lastState;
   updateDetailPanel(card);
   loadVersionHistory(faceKeyFor(card), faceSlugFor(card));
+  // Frame Designer edits the selected face — reload it if it's open
+  if (activePanelTab === 'frame') updateFrameTab();
+  syncFdFaceToggle(card);
 }
 
 function selectCard(name) {
@@ -10725,13 +10768,19 @@ async function loadFrameDesignerForCard(cardName) {
   const loading = document.getElementById('fdCanvasLoading');
   const nameEl = document.getElementById('fdCardName');
 
+  // Face-aware context: on a DFC's back face the designer edits the back's
+  // own art, text, and override set (frame_overrides_back).
+  const fdBack = viewingBack(card);
+  const fdFace = fdBack ? (card.back_face || {}) : null;
+  const fdSlug = faceSlugFor(card);
+
   if (emptyEl) emptyEl.style.display = 'none';
   if (canvasWrap) canvasWrap.style.display = '';
-  if (nameEl) nameEl.textContent = card.name;
+  if (nameEl) nameEl.textContent = fdBack ? `${fdFace.name || card.name} (back face)` : card.name;
   if (loading) loading.classList.add('visible');
 
   // Load saved art position
-  const ovr = card.frame_overrides || {};
+  const ovr = (fdBack ? card.back_frame_overrides : card.frame_overrides) || {};
   if (ovr.art_offset || ovr.art_zoom) {
     _fdCompositor.setArtState(ovr.art_offset, ovr.art_zoom || 1.0);
   } else {
@@ -10745,10 +10794,12 @@ async function loadFrameDesignerForCard(cardName) {
 
   // Load art
   try {
-    const artUrl = card.has_raw_art
-      ? `/api/image/raw/${card.slug}?t=${Date.now()}`
-      : card.has_scryfall_art
-        ? `/api/image/scryfall/${card.slug}`
+    const _hasRaw = fdBack ? card.has_back_raw : card.has_raw_art;
+    const _hasScry = fdBack ? card.has_back_scryfall_art : card.has_scryfall_art;
+    const artUrl = _hasRaw
+      ? `/api/image/raw/${fdSlug}?t=${Date.now()}`
+      : _hasScry
+        ? `/api/image/scryfall/${fdSlug}`
         : null;
     if (artUrl) {
       await _fdCompositor.loadArt(artUrl);
@@ -10788,13 +10839,15 @@ async function loadFrameDesignerForCard(cardName) {
 async function loadFrameLayerForCanvas() {
   if (!_fdCompositor || !selectedCard) return;
   const settings = gatherFrameSettings();
+  // "<name> [back]" targets a DFC's back face
+  const _fdKey = faceKeyFor(allCards.find(c => c.name === selectedCard));
 
   try {
     // Fetch frame layer
     const frameResp = await fetch('/api/render-frame-layer', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ card_name: selectedCard, frame_settings: settings }),
+      body: JSON.stringify({ card_name: _fdKey, frame_settings: settings }),
     });
     if (frameResp.ok) {
       const blob = await frameResp.blob();
@@ -10811,7 +10864,7 @@ async function loadFrameLayerForCanvas() {
     const textResp = await fetch('/api/render-text-overlay', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ card_name: selectedCard, frame_settings: settings }),
+      body: JSON.stringify({ card_name: _fdKey, frame_settings: settings }),
     });
     if (textResp.ok) {
       const blob = await textResp.blob();
@@ -10827,6 +10880,10 @@ async function loadFrameLayerForCanvas() {
 }
 
 function populateTextOverrides(card) {
+  // On a DFC's back face, placeholders and saved overrides come from the
+  // back face's data + its own override set
+  const _back = viewingBack(card);
+  const _src = _back ? (card.back_face || {}) : card;
   const showcaseEl = document.getElementById('frameOverrideShowcase');
   if (showcaseEl) showcaseEl.value = '';
   const nameEl = document.getElementById('frameOverrideName');
@@ -10835,14 +10892,14 @@ function populateTextOverrides(card) {
   const oracleEl = document.getElementById('frameOverrideOracle');
   const powerEl = document.getElementById('frameOverridePower');
   const toughEl = document.getElementById('frameOverrideToughness');
-  if (nameEl) { nameEl.placeholder = card.name || ''; nameEl.value = ''; }
-  if (manaEl) { manaEl.placeholder = card.mana_cost || ''; manaEl.value = ''; }
-  if (typeEl) { typeEl.placeholder = card.type_line || ''; typeEl.value = ''; }
-  if (oracleEl) { oracleEl.placeholder = card.oracle_text || ''; oracleEl.value = ''; }
-  if (powerEl) { powerEl.placeholder = card.power || ''; powerEl.value = ''; }
-  if (toughEl) { toughEl.placeholder = card.toughness || ''; toughEl.value = ''; }
+  if (nameEl) { nameEl.placeholder = _src.name || ''; nameEl.value = ''; }
+  if (manaEl) { manaEl.placeholder = _src.mana_cost || ''; manaEl.value = ''; }
+  if (typeEl) { typeEl.placeholder = _src.type_line || ''; typeEl.value = ''; }
+  if (oracleEl) { oracleEl.placeholder = _src.oracle_text || ''; oracleEl.value = ''; }
+  if (powerEl) { powerEl.placeholder = _src.power || ''; powerEl.value = ''; }
+  if (toughEl) { toughEl.placeholder = _src.toughness || ''; toughEl.value = ''; }
 
-  const ovr = card.frame_overrides || {};
+  const ovr = (_back ? card.back_frame_overrides : card.frame_overrides) || {};
   const textOvr = ovr.text_overrides || {};
   // Restore the saved showcase name too — omitting it meant the next save
   // wholesale-replaced frame_overrides WITHOUT it, silently deleting it.
@@ -10945,10 +11002,21 @@ function scheduleFramePreview() {
   }, 300);
 }
 
+function syncFdFaceToggle(card) {
+  const toggle = document.getElementById('fdFaceToggle');
+  if (!toggle) return;
+  toggle.style.display = (card && card.is_dfc) ? 'flex' : 'none';
+  const fBtn = document.getElementById('fdFaceBtnFront');
+  const bBtn = document.getElementById('fdFaceBtnBack');
+  if (fBtn) fBtn.classList.toggle('active', selectedFace !== 'back');
+  if (bBtn) bBtn.classList.toggle('active', selectedFace === 'back');
+}
+
 function updateFrameTab() {
   const emptyEl = document.getElementById('fdEmpty');
   const canvasWrap = document.getElementById('fdCanvasWrap');
 
+  syncFdFaceToggle(allCards.find(c => c.name === selectedCard));
   if (selectedCard) {
     loadFrameDesignerForCard(selectedCard);
   } else {
@@ -10985,7 +11053,7 @@ async function persistSelectedCardFrameState(textOverrides) {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        card_name: selectedCard,
+        card_name: faceKeyFor(allCards.find(c => c.name === selectedCard)),
         frame_overrides: cardOverrides,
       }),
     });
@@ -11009,11 +11077,14 @@ async function saveFrameSettings() {
     if (selectedCard) {
       await persistSelectedCardFrameState(textOverrides);
 
-      // Re-render composite on server (archive previous as version)
+      // Re-render composite on server (archive previous as version).
+      // On a DFC only the face being edited re-renders.
+      const _svCard = allCards.find(c => c.name === selectedCard);
       const resp = await fetch('/api/recomposite', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ card_name: selectedCard, archive_version: true }),
+        body: JSON.stringify({ card_name: selectedCard, archive_version: true,
+                               face: (_svCard && _svCard.is_dfc) ? selectedFace : 'all' }),
       });
       const data = await resp.json();
       if (data.success) {

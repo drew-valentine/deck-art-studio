@@ -40,7 +40,8 @@ def fetch_card_by_name(name: str, use_cache: bool = True) -> Optional[dict]:
     Returns the full Scryfall card object, or None on failure.
     """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    slug = name.lower().replace(' ', '_').replace(',', '').replace("'", "").replace('-', '_')
+    slug = (name.lower().replace(' // ', '__').replace('/', '_').replace(' ', '_')
+            .replace(',', '').replace("'", "").replace('-', '_'))
     cache_path = CACHE_DIR / f"{slug}.json"
 
     if use_cache and cache_path.exists():
