@@ -4832,17 +4832,18 @@ def _create_battle_frame_svg(card: CardData, fs: dict) -> str:
             svg.append(_pip_image_tag(pip, pxx, pcy - MANA_PIP_SIZE / 2, MANA_PIP_SIZE))
             px -= (MANA_PIP_SIZE + MANA_PIP_GAP)
 
-    # ── Right-side panel: type bar + rules box + defense shield ──
-    pn_x0, pn_x1 = 636, W - 44
-    pn_y0, pn_y1 = 120, H - 40
-    ty_h = 48
+    # ── Bottom band: full-width type bar + wide rules box + defense
+    # shield, matching the real battle layout (art fills the top ~55%) ──
+    pn_x0, pn_x1 = 44, W - 44
+    pn_y0, pn_y1 = 430, H - 40
+    ty_h = 50
     svg.append(f'<rect x="{pn_x0}" y="{pn_y0}" width="{pn_x1 - pn_x0}" height="{pn_y1 - pn_y0}" '
                f'rx="12" fill="{hex_with_alpha(theme["textbox"], 0.93)}" '
                f'stroke="{theme["border"]}" stroke-width="2.5"/>')
     svg.append(f'<rect x="{pn_x0}" y="{pn_y0}" width="{pn_x1 - pn_x0}" height="{ty_h}" '
                f'rx="12" fill="rgba(12,12,14,0.88)"/>')
     esc_type = (card.type_line or '').replace('&', '&amp;').replace('<', '&lt;')
-    tf = 30
+    tf = 32
     type_avail = (pn_x1 - pn_x0) - 36
     if len(card.type_line or '') * tf * 0.50 > type_avail and type_avail > 0:
         tf = max(18, int(tf * type_avail / (len(card.type_line) * tf * 0.50)))
@@ -4850,17 +4851,18 @@ def _create_battle_frame_svg(card: CardData, fs: dict) -> str:
                f'font-family="{TYPE_FONT_FAMILY}" font-size="{tf}" font-weight="bold" '
                f'fill="{bar_text}">{esc_type}</text>')
 
-    # Rules text, wrapping around the defense shield in the bottom-right
+    # Rules text in the wide band, wrapping around the defense shield in
+    # the bottom-right corner
     if card.oracle_text:
-        rb_x = pn_x0 + 20
-        rb_w = (pn_x1 - 20) - rb_x
+        rb_x = pn_x0 + 22
+        rb_w = (pn_x1 - 22) - rb_x
         rb_top = pn_y0 + ty_h + 14
         rb_h = (pn_y1 - 16) - rb_top
         shield_size = 92
         avoid = None
         if card.defense is not None:
-            # (shield top - pad, narrow line width inside the panel)
-            avoid = (pn_y1 - shield_size * 1.08 - 14, rb_w - shield_size - 18)
+            # (shield top - pad, narrow line width inside the band)
+            avoid = (pn_y1 - shield_size * 1.08 - 14, rb_w - shield_size - 22)
         desired = int(fs.get('rules_font_size') or RULES_FONT)
 
         def _msr(f):
