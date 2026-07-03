@@ -318,3 +318,20 @@ class TestSplitTextLayouts:
         assert 'Smoky Lounge' in blob
         assert 'Misty Salon' in blob
         assert 'unlock' in blob
+
+
+class TestPlaneswalkerDetection:
+    def test_back_face_planeswalker_without_loyalty(self):
+        from card_frame_renderer import _is_planeswalker, CardData
+        # Transform PW back faces have loyalty abilities but no loyalty value
+        cd = CardData(name='Arlinn, Embraced by the Moon', mana_cost='',
+                      type_line='Legendary Planeswalker — Arlinn',
+                      oracle_text='+1: Creatures you control get +1/+1.\n−1: Deal 3 damage.',
+                      loyalty=None, card_type='planeswalker')
+        assert _is_planeswalker(cd) is True
+
+    def test_normal_creature_not_planeswalker(self):
+        from card_frame_renderer import _is_planeswalker, CardData
+        cd = CardData(name='Sol Ring', mana_cost='{1}', type_line='Artifact',
+                      oracle_text='{T}: Add {C}{C}.', card_type='artifact')
+        assert _is_planeswalker(cd) is False

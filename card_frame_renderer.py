@@ -2278,7 +2278,7 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
     rules_max_h = max(rules_h - RULES_PADDING * 2, 0) if rules_h > 0 else 0
 
     # Use planeswalker-specific renderer for loyalty abilities
-    is_planeswalker = card.loyalty is not None and _LOYALTY_RE.search(card.oracle_text or '')
+    is_planeswalker = _is_planeswalker(card)
     if show_oracle and rules_max_h > 0 and is_planeswalker:
         # Smaller font & tighter line spacing for planeswalkers to fit loyalty
         # badges + longer ability text. Fitting loop: shrink until every
@@ -2883,7 +2883,7 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
     show_oracle = fs.get('show_oracle', True)
     show_flavor = fs.get('show_flavor', True)
 
-    is_planeswalker = card.loyalty is not None and _LOYALTY_RE.search(card.oracle_text or '')
+    is_planeswalker = _is_planeswalker(card)
     if show_oracle and rules_max_h > 0 and is_planeswalker:
         # Fitting loop: shrink until every ability renders inside the box
         # (abilities must never truncate).
@@ -3225,7 +3225,13 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
 
 
 def _is_planeswalker(card: CardData) -> bool:
-    return card.loyalty is not None and bool(_LOYALTY_RE.search(card.oracle_text or ''))
+    # Back faces of transform planeswalkers (e.g. "Arlinn, Embraced by the
+    # Moon") have loyalty ABILITIES but no starting loyalty value — Scryfall
+    # omits `loyalty` on them, so the type line matters too. Shield rendering
+    # stays guarded by `if card.loyalty:` everywhere.
+    return ((card.loyalty is not None
+             or 'planeswalker' in (card.type_line or '').lower())
+            and bool(_LOYALTY_RE.search(card.oracle_text or '')))
 
 
 def _render_pw_content_svg(card: CardData, fs: dict, x0: float, y0: float,
