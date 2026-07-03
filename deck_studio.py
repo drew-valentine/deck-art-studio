@@ -133,6 +133,11 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB upload limit
 openai_client = None
 cards_db = []
 prompts_map = {}
+# Bumped whenever the card LIST or card capabilities change (deck load,
+# add/remove, backfill). Open pages watch it via /api/status and refetch
+# /api/cards — so new fields (e.g. is_split_halves) reach stale tabs
+# without a hard refresh.
+cards_revision = 0
 generation_queue = []
 generation_status = {}  # card_name -> {status, message, timestamp, attempt}
 generation_lock = threading.Lock()
@@ -503,6 +508,9 @@ def load_data():
                 print(f"  [backfill] Back composite failed for {name}: {e}")
         if back_backfilled:
             print(f"  Backfilled {back_backfilled} DFC back faces with Scryfall art composites")
+
+    global cards_revision
+    cards_revision = int(time.time() * 1000)
 
     print(f"Loaded {len(cards_db)} cards, {len(prompts_map)} prompts")
 
@@ -4311,6 +4319,8 @@ def get_cards():
 
 def _persist_cards_and_prompts():
     """Save the in-memory cards_db and prompts_map back to disk for the active deck."""
+    global cards_revision
+    cards_revision = int(time.time() * 1000)
     if not active_deck_id:
         return
     deck_dir = DECKS_DIR / active_deck_id
@@ -4806,6 +4816,7 @@ def get_status():
         'batch_deck_id': batch_deck_id,
         'style_progress': style_analysis_progress,
         'model_load_progress': model_load_progress,
+        'cards_rev': cards_revision,
         'ollama_pull_progress': ollama_pull_progress,
         'statuses': statuses,
     })
@@ -8827,6 +8838,8 @@ function getActiveCostPerImage() {
 
 // --- Polling ---
 let _wasActive = false; // track if generation/analysis was active last tick
+let _lastCardsRev = null;
+
 function startPolling() {
   if (pollInterval) clearInterval(pollInterval);
   async function poll() {
@@ -8835,6 +8848,24 @@ function startPolling() {
 
     ollamaBusy = !!data.ollama_busy;
     isGeneratingBatch = !!data.is_generating;
+
+    // Card list changed on the server (deck reload, add/remove, backfill,
+    // server restart with new capabilities) — refresh allCards so flags
+    // like is_split_halves reach already-open pages without a hard refresh
+    if (data.cards_rev !== undefined && data.cards_rev !== _lastCardsRev) {
+      const known = _lastCardsRev !== null;
+      _lastCardsRev = data.cards_rev;
+      if (known) {
+        try {
+          allCards = await (await fetch('/api/cards')).json();
+          renderGrid();
+          if (selectedCard) {
+            const c = allCards.find(x => x.name === selectedCard);
+            if (c) updateDetailPanel(c);
+          }
+        } catch (e) {}
+      }
+    }
 
     // Update card statuses
     const statuses = data.statuses;
