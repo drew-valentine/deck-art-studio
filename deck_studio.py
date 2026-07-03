@@ -10039,10 +10039,14 @@ async function regeneratePromptForCard() {
   }
 
   try {
+    // Target the face being viewed — "<name> [back]" regenerates the DFC
+    // back / split right-half prompt instead of the front's
+    const _rpCard = allCards.find(c => c.name === selectedCard);
+    const _rpKey = faceKeyFor(_rpCard);
     const resp = await fetch(`/api/decks/${deckId}/regenerate-prompts`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ use_ai: useAi, card_names: [selectedCard] }),
+      body: JSON.stringify({ use_ai: useAi, card_names: [_rpKey] }),
     });
     const data = await resp.json();
     if (!data.success) {
@@ -10067,7 +10071,8 @@ async function regeneratePromptForCard() {
           allCards = cards;
           const card = allCards.find(c => c.name === selectedCard);
           if (card) {
-            document.getElementById('detailPrompt').value = card.prompt;
+            document.getElementById('detailPrompt').value = cleanScenePrompt(
+              viewingBack(card) ? (card.back_prompt || '') : card.prompt);
             updateDetailPanel(card);
           }
           btn.disabled = false;
