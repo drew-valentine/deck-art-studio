@@ -279,3 +279,27 @@ class TestScryfallToCardEntry:
         }
         entry = scryfall_to_card_entry(sf, quantity=1, is_commander=True)
         assert entry['is_commander'] is True
+
+    def test_battle_card_stores_defense(self):
+        sf = {
+            'name': 'Invasion of Zendikar // Awakened Skyclave',
+            'layout': 'transform',
+            'colors': ['G'],
+            'color_identity': ['G'],
+            'card_faces': [
+                {'name': 'Invasion of Zendikar', 'mana_cost': '{3}{G}',
+                 'type_line': 'Battle — Siege', 'defense': '3',
+                 'oracle_text': 'When this Siege enters...',
+                 'image_uris': {'art_crop': 'https://cards.scryfall.io/art_crop/front/z.jpg'}},
+                {'name': 'Awakened Skyclave', 'mana_cost': '',
+                 'type_line': 'Creature — Elemental',
+                 'oracle_text': 'Vigilance', 'power': '4', 'toughness': '4',
+                 'image_uris': {'art_crop': 'https://cards.scryfall.io/art_crop/back/z.jpg'}},
+            ],
+        }
+        entry = scryfall_to_card_entry(sf)
+        assert entry['layout'] == 'transform'
+        assert entry['defense'] == '3'          # flattened front-face defense
+        assert entry['card_type'] == 'battle'
+        assert entry['card_faces'][0]['defense'] == '3'
+        assert entry['card_faces'][1]['defense'] is None

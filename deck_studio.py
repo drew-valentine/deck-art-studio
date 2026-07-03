@@ -433,6 +433,8 @@ def load_data():
                         card['layout'] = fresh['layout']
                     if fresh.get('card_faces'):
                         card['card_faces'] = fresh['card_faces']
+                    if fresh.get('defense') is not None and card.get('defense') is None:
+                        card['defense'] = fresh['defense']  # battles
                     if fresh.get('layout') or fresh.get('card_faces'):
                         faces_backfilled += 1
                 except Exception as e:
@@ -565,7 +567,8 @@ def back_face_card(card):
     face = faces[1]
     merged = dict(card)
     for k in ('name', 'mana_cost', 'type_line', 'oracle_text',
-              'power', 'toughness', 'loyalty', 'flavor_text', 'card_type'):
+              'power', 'toughness', 'loyalty', 'defense', 'flavor_text',
+              'card_type'):
         merged[k] = face.get(k)
     merged['colors'] = face.get('colors') or card.get('colors', [])
     if not merged.get('card_type'):
@@ -1729,6 +1732,10 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
         face_label = f" (back: {composite_card_dict.get('name', '')})"
     elif is_dfc(card):
         face_label = ' (front)'
+
+    # Battle fronts are sideways cards — generate landscape-aspect art
+    if face != 'back' and 'battle' in (card.get('type_line') or '').lower():
+        actual_size = model_cfg.get('landscape_size', actual_size)
 
     # Build prompt — back faces fall back to a scene built from the face name
     # and type line when no back prompt has been generated yet.

@@ -733,6 +733,8 @@ class CardData:
     # rules box renders as two columns instead of one.
     layout: str = 'normal'
     split_faces: Optional[List[dict]] = None
+    # Battles (sieges): defense value, rendered in a shield on the landscape frame
+    defense: Optional[str] = None
 
     def __post_init__(self):
         if self.colors is None:
@@ -2640,6 +2642,7 @@ def _build_card_data(card_dict: dict, frame_settings: dict = None) -> CardData:
         mana_cost=mana_cost,
         layout=layout,
         split_faces=split_faces,
+        defense=card_dict.get('defense'),
         type_line=text_ovr.get('type_line') or card_dict.get('type_line', ''),
         oracle_text=text_ovr.get('oracle_text') if 'oracle_text' in text_ovr else card_dict.get('oracle_text', ''),
         power=text_ovr.get('power') if 'power' in text_ovr else card_dict.get('power'),
@@ -4604,6 +4607,17 @@ def render_frame_layer(card_dict: dict, frame_settings: dict) -> bytes:
         Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0)).save(buf, 'PNG')
         return buf.getvalue()
 
+    # Battles: chrome + text render as one rotated layer (the text overlay
+    # returns empty for battles)
+    if _is_battle(card):
+        svg_content = _create_battle_frame_svg(card, fs)
+        png = cairosvg.svg2png(bytestring=svg_content.encode('utf-8'),
+                               output_width=BATTLE_W, output_height=BATTLE_H)
+        chrome = Image.open(io.BytesIO(png)).convert('RGBA').rotate(90, expand=True)
+        buf = io.BytesIO()
+        chrome.save(buf, 'PNG')
+        return buf.getvalue()
+
     if fs.get('mode') == 'image':
         # Image-based: frame + P/T box (without text), gradient-aware. Shares the
         # exact chrome path with the final composite so the WYSIWYG preview matches.
@@ -4626,6 +4640,12 @@ def render_text_overlay(card_dict: dict, frame_settings: dict) -> bytes:
     """
     fs = frame_settings
     card = _build_card_data(card_dict, fs)
+
+    # Battles: text is baked into the rotated chrome layer (render_frame_layer)
+    if _is_battle(card):
+        buf = io.BytesIO()
+        Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0, 0)).save(buf, 'PNG')
+        return buf.getvalue()
 
     if fs.get('mode') == 'image':
         if fs.get('layout') == 'iko' or fs.get('frame_set') == 'iko':
@@ -4686,6 +4706,171 @@ def render_text_overlay(card_dict: dict, frame_settings: dict) -> bytes:
         return buf.getvalue()
 
 
+# ===========================================================================
+# Battle (siege) frame — landscape, rotated into the portrait composite
+# ===========================================================================
+# Real battles are printed as portrait cards whose content is rotated 90°
+# (you turn the card sideways to play it). We render the frame on a landscape
+# canvas, composite the art, then rotate 90° CCW so the stored file is a
+# standard 750x1050 portrait — the grid, exports, printing, and the edhplay
+# extension all keep working unchanged.
+BATTLE_W, BATTLE_H = CARD_HEIGHT, CARD_WIDTH  # 1050 x 750 landscape
+
+
+def _is_battle(card: CardData) -> bool:
+    return 'battle' in (card.type_line or '').lower()
+
+
+def _battle_defense_shield_svg(defense: str, cx: float, cy: float,
+                               size: float = 96) -> list:
+    """Defense shield (heater-shield shape) with the defense number."""
+    w = size
+    h = size * 1.08
+    x0, y0 = cx - w / 2, cy - h / 2
+    # Heater shield: flat top, curved sides meeting in a bottom point
+    path = (f"M {x0} {y0} L {x0 + w} {y0} "
+            f"C {x0 + w} {y0 + h * 0.52} {x0 + w * 0.78} {y0 + h * 0.82} {cx} {y0 + h} "
+            f"C {x0 + w * 0.22} {y0 + h * 0.82} {x0} {y0 + h * 0.52} {x0} {y0} Z")
+    font = size * 0.46
+    return [
+        f'<path d="{path}" transform="translate(3,3)" fill="rgba(0,0,0,0.45)"/>',
+        f'<path d="{path}" fill="#1a1410" stroke="#cfd2d6" stroke-width="4"/>',
+        f'<text x="{cx}" y="{cy + h * 0.02 + font * 0.35}" text-anchor="middle" '
+        f'font-family="{PT_FONT_FAMILY}" font-size="{font:.0f}" font-weight="bold" '
+        f'fill="white">{defense}</text>',
+    ]
+
+
+def _create_battle_frame_svg(card: CardData, fs: dict) -> str:
+    """Landscape battle chrome + text: full-bleed art shows on the left; the
+    right side carries a type bar, rules panel, and defense shield."""
+    W, H = BATTLE_W, BATTLE_H
+    theme = get_color_theme(card)
+    _ovr = (fs.get('color_overrides', {}) or {}).get('text')
+    bar_text = _ovr or '#f4f2ec'
+    rules_col = _ovr or '#141210'
+
+    svg = ['<?xml version="1.0" encoding="UTF-8"?>',
+           f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
+           f'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">']
+    if _FONT_FACE_CSS:
+        svg.append(f'<style type="text/css">\n{_FONT_FACE_CSS}\n</style>')
+
+    # Black border ring with a theme pinline
+    svg.append(f'<rect x="0" y="0" width="{W}" height="{H}" rx="34" fill="none" '
+               f'stroke="#0b0b0c" stroke-width="52"/>')
+    svg.append(f'<rect x="27" y="27" width="{W - 54}" height="{H - 54}" rx="18" '
+               f'fill="none" stroke="{theme["bg"]}" stroke-width="5"/>')
+
+    # ── Title bar ──
+    tb_x, tb_y0, tb_y1 = 44, 40, 100
+    tb_w = W - 2 * tb_x
+    svg.append(f'<rect x="{tb_x}" y="{tb_y0}" width="{tb_w}" height="{tb_y1 - tb_y0}" '
+               f'rx="14" fill="rgba(12,12,14,0.88)" stroke="{theme["border"]}" stroke-width="2.5"/>')
+    mana_pips = parse_mana_cost(card.mana_cost)
+    pip_w = len(mana_pips) * (MANA_PIP_SIZE + MANA_PIP_GAP) + 14 if mana_pips else 0
+    # Real battles title only the front face, not the full "A // B" name
+    disp_name = card.name.split(' // ')[0]
+    esc_name = disp_name.replace('&', '&amp;').replace('<', '&lt;')
+    nf = 40
+    name_avail = tb_w - 40 - pip_w
+    if len(disp_name) * nf * 0.58 > name_avail and name_avail > 0:
+        nf = max(22, int(nf * name_avail / (len(disp_name) * nf * 0.58)))
+    ncy = (tb_y0 + tb_y1) / 2 + nf * 0.35
+    svg.append(f'<text x="{tb_x + 22}" y="{ncy}" font-family="{NAME_FONT_FAMILY}" '
+               f'font-size="{nf}" font-weight="bold" fill="{bar_text}">{esc_name}</text>')
+    if mana_pips:
+        pcy = (tb_y0 + tb_y1) / 2
+        px = tb_x + tb_w - 18
+        for pip in reversed(mana_pips):
+            pxx = px - MANA_PIP_SIZE
+            svg.append(f'<circle cx="{pxx + MANA_PIP_SIZE/2 + 0.5}" cy="{pcy + 1}" '
+                       f'r="{MANA_PIP_SIZE/2}" fill="rgba(0,0,0,0.3)"/>')
+            svg.append(_pip_image_tag(pip, pxx, pcy - MANA_PIP_SIZE / 2, MANA_PIP_SIZE))
+            px -= (MANA_PIP_SIZE + MANA_PIP_GAP)
+
+    # ── Right-side panel: type bar + rules box + defense shield ──
+    pn_x0, pn_x1 = 636, W - 44
+    pn_y0, pn_y1 = 120, H - 40
+    ty_h = 48
+    svg.append(f'<rect x="{pn_x0}" y="{pn_y0}" width="{pn_x1 - pn_x0}" height="{pn_y1 - pn_y0}" '
+               f'rx="12" fill="{hex_with_alpha(theme["textbox"], 0.93)}" '
+               f'stroke="{theme["border"]}" stroke-width="2.5"/>')
+    svg.append(f'<rect x="{pn_x0}" y="{pn_y0}" width="{pn_x1 - pn_x0}" height="{ty_h}" '
+               f'rx="12" fill="rgba(12,12,14,0.88)"/>')
+    esc_type = (card.type_line or '').replace('&', '&amp;').replace('<', '&lt;')
+    tf = 30
+    type_avail = (pn_x1 - pn_x0) - 36
+    if len(card.type_line or '') * tf * 0.50 > type_avail and type_avail > 0:
+        tf = max(18, int(tf * type_avail / (len(card.type_line) * tf * 0.50)))
+    svg.append(f'<text x="{pn_x0 + 18}" y="{pn_y0 + ty_h / 2 + tf * 0.35}" '
+               f'font-family="{TYPE_FONT_FAMILY}" font-size="{tf}" font-weight="bold" '
+               f'fill="{bar_text}">{esc_type}</text>')
+
+    # Rules text, wrapping around the defense shield in the bottom-right
+    if card.oracle_text:
+        rb_x = pn_x0 + 20
+        rb_w = (pn_x1 - 20) - rb_x
+        rb_top = pn_y0 + ty_h + 14
+        rb_h = (pn_y1 - 16) - rb_top
+        shield_size = 92
+        avoid = None
+        if card.defense is not None:
+            # (shield top - pad, narrow line width inside the panel)
+            avoid = (pn_y1 - shield_size * 1.08 - 14, rb_w - shield_size - 18)
+        desired = int(fs.get('rules_font_size') or RULES_FONT)
+
+        def _msr(f):
+            av = ((avoid[0] - (rb_top + f * 0.8), avoid[1]) if avoid else None)
+            return _measure_rules_text(card.oracle_text, rb_w, f,
+                                       int(RULES_LINE_H * f / RULES_FONT), avoid=av)
+
+        r_font = _max_fitting_rules_font(_msr, rb_h, desired)
+        r_line = int(RULES_LINE_H * r_font / RULES_FONT)
+        if _msr(r_font) > rb_h + 2:  # only possible at the hard floor
+            fs.setdefault('_quality', []).append(
+                f'rules_overflow: battle needs {_msr(r_font):.0f}px but box is {rb_h:.0f}px (font {r_font})')
+        rules_lines, _ = render_rules_text_svg(
+            card.oracle_text, rb_x, rb_top + r_font * 0.8, rb_w, rb_h,
+            r_font, r_line, text_color=rules_col, avoid=avoid)
+        svg.extend(rules_lines)
+
+    if card.defense is not None:
+        svg.extend(_battle_defense_shield_svg(
+            str(card.defense), pn_x1 - 62, pn_y1 - 54, size=92))
+
+    svg.append('</svg>')
+    return '\n'.join(svg)
+
+
+def _render_battle_composite(card_dict: dict, card: CardData, fs: dict,
+                             art: Image.Image) -> Image.Image:
+    """Battle front: landscape art + battle chrome, rotated to portrait."""
+    art_offset = fs.get('art_offset', {})
+    art_zoom = fs.get('art_zoom', 1.0)
+    if art_offset or art_zoom != 1.0:
+        art_l = _cover_crop_with_offset(art, BATTLE_W, BATTLE_H,
+                                        offset_x=art_offset.get('x', 0),
+                                        offset_y=art_offset.get('y', 0),
+                                        zoom=art_zoom)
+    else:
+        art_l = _cover_crop(art, BATTLE_W, BATTLE_H)
+
+    canvas = Image.new('RGBA', (BATTLE_W, BATTLE_H))
+    canvas.paste(art_l, (0, 0))
+
+    if not fs.get('no_frame'):
+        svg_content = _create_battle_frame_svg(card, fs)
+        png = cairosvg.svg2png(bytestring=svg_content.encode('utf-8'),
+                               output_width=BATTLE_W, output_height=BATTLE_H)
+        chrome = Image.open(io.BytesIO(png)).convert('RGBA')
+        canvas = Image.alpha_composite(canvas, chrome)
+
+    # Rotate 90° CCW: the title ends up reading bottom-to-top along the left
+    # edge, exactly like a printed battle card.
+    return canvas.rotate(90, expand=True)
+
+
 def composite_card(card_dict: dict, art_path, frame_path_or_none, output_path,
                    deck_frame_settings: dict = None) -> None:
     """Composite art image with card frame overlay.
@@ -4705,6 +4890,13 @@ def composite_card(card_dict: dict, art_path, frame_path_or_none, output_path,
 
     # Load art, cover-crop to card dimensions (with user offset/zoom)
     art = Image.open(art_path).convert('RGB')
+
+    # Battles (sieges): landscape frame rotated into the portrait composite
+    if 'battle' in (card_dict.get('type_line') or '').lower():
+        card = _build_card_data(card_dict, fs)
+        _render_battle_composite(card_dict, card, fs, art).save(output_path, 'PNG')
+        return
+
     art_offset = fs.get('art_offset', {})
     art_zoom = fs.get('art_zoom', 1.0)
     if art_offset or art_zoom != 1.0:
@@ -4748,6 +4940,14 @@ def composite_card_preview(card_dict: dict, art_path, frame_settings: dict) -> b
     Used by the live preview endpoint. frame_settings is already fully resolved.
     """
     art = Image.open(art_path).convert('RGB')
+
+    # Battles preview exactly like the final composite: landscape → rotated
+    if 'battle' in (card_dict.get('type_line') or '').lower():
+        card = _build_card_data(card_dict, frame_settings)
+        buf = io.BytesIO()
+        _render_battle_composite(card_dict, card, frame_settings, art).save(buf, 'PNG')
+        return buf.getvalue()
+
     art_offset = frame_settings.get('art_offset', {})
     art_zoom = frame_settings.get('art_zoom', 1.0)
     if art_offset or art_zoom != 1.0:

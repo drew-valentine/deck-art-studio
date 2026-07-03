@@ -335,3 +335,52 @@ class TestPlaneswalkerDetection:
         cd = CardData(name='Sol Ring', mana_cost='{1}', type_line='Artifact',
                       oracle_text='{T}: Add {C}{C}.', card_type='artifact')
         assert _is_planeswalker(cd) is False
+
+
+class TestBattleFrame:
+    BATTLE = {
+        'name': 'Invasion of Zendikar // Awakened Skyclave',
+        'layout': 'transform',
+        'mana_cost': '{3}{G}',
+        'type_line': 'Battle — Siege',
+        'oracle_text': 'When this Siege enters, search your library for up to two basic land cards.',
+        'defense': '3',
+        'colors': ['G'], 'color_identity': ['G'],
+        'card_type': 'battle',
+        'card_faces': [
+            {'name': 'Invasion of Zendikar', 'type_line': 'Battle — Siege',
+             'defense': '3', 'mana_cost': '{3}{G}'},
+            {'name': 'Awakened Skyclave', 'type_line': 'Creature — Elemental',
+             'power': '4', 'toughness': '4', 'defense': None, 'mana_cost': ''},
+        ],
+    }
+
+    def test_battle_detection_and_defense(self):
+        from card_frame_renderer import _build_card_data, _is_battle
+        cd = _build_card_data(self.BATTLE, {})
+        assert _is_battle(cd) is True
+        assert cd.defense == '3'
+        # Normal cards are not battles
+        cd2 = _build_card_data({'name': 'Sol Ring', 'type_line': 'Artifact',
+                                'mana_cost': '{1}', 'oracle_text': 'x'}, {})
+        assert _is_battle(cd2) is False
+
+    def test_battle_svg_contents(self):
+        from card_frame_renderer import _build_card_data, _create_battle_frame_svg
+        cd = _build_card_data(self.BATTLE, {})
+        svg = _create_battle_frame_svg(cd, {})
+        # Titles only the front face name
+        assert 'Invasion of Zendikar<' in svg
+        assert 'Awakened Skyclave' not in svg
+        assert 'Battle — Siege' in svg
+        assert '>3</text>' in svg  # defense shield number
+
+    def test_battle_composite_is_rotated_portrait(self, tmp_path):
+        from card_frame_renderer import composite_card, CARD_WIDTH, CARD_HEIGHT
+        from PIL import Image
+        art = tmp_path / 'art.png'
+        Image.new('RGB', (896, 672), (40, 90, 40)).save(art)
+        out = tmp_path / 'out.png'
+        composite_card(self.BATTLE, str(art), None, str(out))
+        img = Image.open(out)
+        assert img.size == (CARD_WIDTH, CARD_HEIGHT)  # portrait, like real prints
