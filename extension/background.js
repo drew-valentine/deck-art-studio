@@ -135,7 +135,8 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
     }
 
     // Resolve an unknown UUID → card name via Scryfall API, then match by name
-    // within the active deck only
+    // within the active deck only. Back faces of double-faced cards are stored
+    // under "<uuid>:back" keys and matched against the deck's ":back" entries.
     if (msg.type === 'resolve-uuid') {
       (async () => {
         try {
@@ -145,12 +146,22 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
           const name = card.name || '';
           if (!name) { sendResponse({ dataUrl: null }); return; }
 
-          // Search within active deck's cards by name
+          const isBack = msg.face === 'back';
+          const key = isBack ? `${msg.uuid}:back` : msg.uuid;
+
+          // Search within active deck's cards by name (same face). Decks
+          // imported before back-face support have no ':back' entries —
+          // fall back to the front entry so replacement keeps working.
           const deckCards = await getActiveDeckCards();
-          const match = deckCards.find(c => c.name === name);
+          let match = deckCards.find(c =>
+            c.name === name && (isBack === String(c.uuid).endsWith(':back')));
+          if (!match && isBack) {
+            match = deckCards.find(c =>
+              c.name === name && !String(c.uuid).endsWith(':back'));
+          }
           if (match) {
             // Cache this UUID under the same deck for future hits
-            await DeckArtDB.putCard(match.deck, msg.uuid, name, match.dataUrl, 'resolved');
+            await DeckArtDB.putCard(match.deck, key, name, match.dataUrl, 'resolved');
             sendResponse({ dataUrl: match.dataUrl, name });
           } else {
             sendResponse({ dataUrl: null });

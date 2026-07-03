@@ -225,3 +225,113 @@ class TestResolveFrameSettings:
         card = {'name': 'Test', 'frame_overrides': {}}
         result = resolve_frame_settings(card)
         assert result['style'] == 'basic'
+
+
+# ---------------------------------------------------------------------------
+# Split text layouts (adventure / split / room)
+# ---------------------------------------------------------------------------
+class TestSplitTextLayouts:
+    ADVENTURE = {
+        'name': 'Murderous Rider // Swift End',
+        'layout': 'adventure',
+        'mana_cost': '{1}{B}{B}',
+        'type_line': 'Creature — Zombie Knight',
+        'oracle_text': 'Lifelink',
+        'power': '2', 'toughness': '3',
+        'colors': ['B'], 'color_identity': ['B'],
+        'card_type': 'creature',
+        'card_faces': [
+            {'name': 'Murderous Rider', 'mana_cost': '{1}{B}{B}',
+             'type_line': 'Creature — Zombie Knight', 'oracle_text': 'Lifelink'},
+            {'name': 'Swift End', 'mana_cost': '{1}{B}{B}',
+             'type_line': 'Instant — Adventure',
+             'oracle_text': 'Destroy target creature or planeswalker. You lose 2 life.'},
+        ],
+    }
+    ROOM = {
+        'name': 'Smoky Lounge // Misty Salon',
+        'layout': 'split',
+        'mana_cost': '{2}{R}',
+        'type_line': 'Enchantment — Room',
+        'oracle_text': 'At the beginning of your first main phase, add {R}{R}.',
+        'colors': ['R', 'U'], 'color_identity': ['R', 'U'],
+        'card_type': 'enchantment',
+        'card_faces': [
+            {'name': 'Smoky Lounge', 'mana_cost': '{2}{R}',
+             'type_line': 'Enchantment — Room',
+             'oracle_text': 'At the beginning of your first main phase, add {R}{R}.'},
+            {'name': 'Misty Salon', 'mana_cost': '{3}{U}',
+             'type_line': 'Enchantment — Room',
+             'oracle_text': 'When you unlock this door, create a Spirit token.'},
+        ],
+    }
+
+    def test_adventure_card_data(self):
+        from card_frame_renderer import _build_card_data
+        cd = _build_card_data(self.ADVENTURE, {})
+        assert cd.layout == 'adventure'
+        assert cd.split_faces is not None
+        # Adventure cards title the creature half only
+        assert cd.name == 'Murderous Rider'
+        assert cd.mana_cost == '{1}{B}{B}'
+
+    def test_room_card_data_blanks_title_mana(self):
+        from card_frame_renderer import _build_card_data
+        cd = _build_card_data(self.ROOM, {})
+        assert cd.layout == 'split'
+        assert cd.split_faces is not None
+        # Per-half costs render in the column headers, not the title bar
+        assert cd.mana_cost == ''
+        assert cd.name == 'Smoky Lounge // Misty Salon'
+
+    def test_normal_card_has_no_split_faces(self):
+        from card_frame_renderer import _build_card_data
+        cd = _build_card_data({'name': 'Sol Ring', 'mana_cost': '{1}',
+                               'type_line': 'Artifact', 'oracle_text': 'x'}, {})
+        assert cd.split_faces is None
+
+    def test_transform_card_has_no_split_faces(self):
+        from card_frame_renderer import _build_card_data
+        cd = _build_card_data({'name': 'A // B', 'layout': 'transform',
+                               'mana_cost': '{1}', 'type_line': 'Creature',
+                               'oracle_text': 'x',
+                               'card_faces': [{'name': 'A'}, {'name': 'B'}]}, {})
+        assert cd.split_faces is None
+
+    def test_split_rules_svg_renders_both_halves(self):
+        from card_frame_renderer import _build_card_data, _render_split_rules_svg
+        cd = _build_card_data(self.ADVENTURE, {})
+        parts = _render_split_rules_svg(cd, {}, 60, 700, 620, 280, '#000', 30,
+                                        avoid=(920.0, 502.0))
+        blob = '\n'.join(parts)
+        assert 'Swift End' in blob                    # adventure header
+        assert 'Instant — Adventure' in blob          # adventure type
+        assert 'Lifelink' in blob                     # creature rules
+        assert 'Destroy' in blob                      # adventure rules (may wrap mid-phrase)
+        assert '<line' in blob                        # column divider
+
+    def test_split_rules_svg_room_headers(self):
+        from card_frame_renderer import _build_card_data, _render_split_rules_svg
+        cd = _build_card_data(self.ROOM, {})
+        parts = _render_split_rules_svg(cd, {}, 60, 700, 620, 280, '#000', 30)
+        blob = '\n'.join(parts)
+        assert 'Smoky Lounge' in blob
+        assert 'Misty Salon' in blob
+        assert 'unlock' in blob
+
+
+class TestPlaneswalkerDetection:
+    def test_back_face_planeswalker_without_loyalty(self):
+        from card_frame_renderer import _is_planeswalker, CardData
+        # Transform PW back faces have loyalty abilities but no loyalty value
+        cd = CardData(name='Arlinn, Embraced by the Moon', mana_cost='',
+                      type_line='Legendary Planeswalker — Arlinn',
+                      oracle_text='+1: Creatures you control get +1/+1.\n−1: Deal 3 damage.',
+                      loyalty=None, card_type='planeswalker')
+        assert _is_planeswalker(cd) is True
+
+    def test_normal_creature_not_planeswalker(self):
+        from card_frame_renderer import _is_planeswalker, CardData
+        cd = CardData(name='Sol Ring', mana_cost='{1}', type_line='Artifact',
+                      oracle_text='{T}: Add {C}{C}.', card_type='artifact')
+        assert _is_planeswalker(cd) is False

@@ -40,7 +40,8 @@ def fetch_card_by_name(name: str, use_cache: bool = True) -> Optional[dict]:
     Returns the full Scryfall card object, or None on failure.
     """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    slug = name.lower().replace(' ', '_').replace(',', '').replace("'", "").replace('-', '_')
+    slug = (name.lower().replace(' // ', '__').replace('/', '_').replace(' ', '_')
+            .replace(',', '').replace("'", "").replace('-', '_'))
     cache_path = CACHE_DIR / f"{slug}.json"
 
     if use_cache and cache_path.exists():
@@ -256,6 +257,31 @@ def normalize_card_type(type_line: str) -> str:
     return 'other'
 
 
+# Layouts where each face has its OWN art and image_uris (true double-faced
+# cards). Adventure/split/room faces share a single art, so they're not here.
+DFC_LAYOUTS = {'transform', 'modal_dfc'}
+
+
+def _face_entry(face: dict) -> dict:
+    """Distill one Scryfall card face into the fields we store per face."""
+    type_line = face.get('type_line', '')
+    return {
+        'name': face.get('name', ''),
+        'mana_cost': face.get('mana_cost', ''),
+        'type_line': type_line,
+        'oracle_text': face.get('oracle_text', ''),
+        'power': face.get('power'),
+        'toughness': face.get('toughness'),
+        'loyalty': face.get('loyalty'),
+        # Back faces of transform cards carry a color_indicator instead of a
+        # mana cost — fall back to it so frame coloring works.
+        'colors': face.get('colors', face.get('color_indicator', [])),
+        'flavor_text': face.get('flavor_text', ''),
+        'art_crop_url': (face.get('image_uris') or {}).get('art_crop', ''),
+        'card_type': normalize_card_type(type_line),
+    }
+
+
 def scryfall_to_card_entry(sf: dict, quantity: int = 1, is_commander: bool = False) -> dict:
     """Convert a Scryfall card object to our card_database format."""
     # Handle multi-face cards: use first face when top-level data is missing.
@@ -294,7 +320,7 @@ def scryfall_to_card_entry(sf: dict, quantity: int = 1, is_commander: bool = Fal
         if len(parts) == 2 and parts[0].strip().lower() == parts[1].strip().lower():
             card_name = parts[0].strip()
 
-    return {
+    entry = {
         'name': card_name,
         'mana_cost': mana_cost,
         'type_line': type_line,
@@ -314,6 +340,18 @@ def scryfall_to_card_entry(sf: dict, quantity: int = 1, is_commander: bool = Fal
         'set_name': sf.get('set_name', ''),
         'scryfall_id': sf.get('id', ''),
     }
+
+    # Alternative layouts: keep the layout + per-face data so downstream code
+    # can render/generate each face (transform, modal_dfc) or, later, special
+    # text layouts (adventure, split, room). Single-face cards stay unchanged.
+    layout = sf.get('layout', 'normal')
+    if layout != 'normal':
+        entry['layout'] = layout
+    if len(faces) >= 2 and card_name == sf.get('name', ''):
+        # (skip reversible_card duplicates whose name we collapsed above)
+        entry['card_faces'] = [_face_entry(f) for f in faces]
+
+    return entry
 
 
 def populate_cards(parsed_entries: list[dict], progress_callback=None) -> tuple[list[dict], list[str]]:
