@@ -226,6 +226,52 @@ class TestResolveFrameSettings:
         result = resolve_frame_settings(card)
         assert result['style'] == 'basic'
 
+    def test_live_settings_beat_saved_card_overrides(self):
+        # Preview endpoints pass the live designer state — a previously saved
+        # per-card frame must not shadow it (the designer froze on the saved
+        # frame after the first Save otherwise).
+        card = {
+            'name': 'Test',
+            'frame_overrides': {
+                'style': 'm15',
+                'layers': {'border': {'opacity': 0.3}},
+                'color_overrides': {'bg': '#111111'},
+                'frame_gradient': 'split',
+            },
+        }
+        live = {
+            'style': 'clean',
+            'layers': {'border': {'opacity': 0.9}},
+            'color_overrides': {'bg': '#eeeeee'},
+            'frame_gradient': 'off',
+        }
+        result = resolve_frame_settings(card, live, live=True)
+        assert result['style'] == 'clean'
+        assert result['layers']['border']['opacity'] == 0.9
+        assert result['color_overrides']['bg'] == '#eeeeee'
+        assert result['frame_gradient'] == 'off'
+
+    def test_live_keeps_saved_art_position(self):
+        # Art pan/zoom is never in the live payload — the saved values survive
+        card = {
+            'name': 'Test',
+            'frame_overrides': {
+                'style': 'm15',
+                'art_offset': {'x': 10, 'y': -20},
+                'art_zoom': 1.5,
+            },
+        }
+        result = resolve_frame_settings(card, {'style': 'clean'}, live=True)
+        assert result['style'] == 'clean'
+        assert result['art_offset'] == {'x': 10, 'y': -20}
+        assert result['art_zoom'] == 1.5
+
+    def test_final_render_still_prefers_saved_overrides(self):
+        # Default (live=False) is the composite path: card overrides beat deck
+        card = {'name': 'Test', 'frame_overrides': {'style': 'm15'}}
+        result = resolve_frame_settings(card, {'style': 'clean'})
+        assert result['style'] == 'm15'
+
 
 # ---------------------------------------------------------------------------
 # Split text layouts (adventure / split / room)

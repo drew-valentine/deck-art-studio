@@ -79,6 +79,19 @@
 
 ## In Review
 
+- [ ] BUG: WYSIWYG Frame Designer live preview freezes after saving a per-card frame | Priority: P1 | Started: 2026-07-03 | Review Started: 2026-07-03 | Owner: drew-valentine
+  - Branch: `fix/frame-designer-live-preview-after-save`
+  - Status: Implemented and validated; **PR #10 open, awaiting approval.**
+  - PR: https://github.com/drew-valentine/deck-art-studio/pull/10
+  - Symptom: In the WYSIWYG Frame Designer, the live preview canvas stops updating after the first "Save Frame" on a card. Subsequent live control changes (colors, gradients, art position, etc.) no longer reflect in the preview.
+  - Root cause: `/api/render-frame-layer` and `/api/render-text-overlay` pass the live designer settings into `resolve_frame_settings()`, where the saved `card.frame_overrides` take precedence. After the first Save Frame, the saved style shadows all live changes, so the preview endpoints keep rendering the saved frame instead of the in-flight designer state — the canvas never updates.
+  - Fix (implemented): Make the live designer settings authoritative for the preview endpoints (same treatment `text_overrides` already received), so live changes drive the preview even when `frame_overrides` are already persisted for the card.
+  - Acceptance criteria:
+    - Given a card with a previously saved per-card frame, when the user changes a live designer control (color/gradient/art position), then the preview canvas updates immediately to reflect the live change.
+    - Given the same card, when no live change is pending, then the preview still matches the saved frame.
+    - Validation gate: Playwright — save a per-card frame, then change a live control and confirm the preview canvas updates; full pytest suite passes.
+  - Validation status: **PASSED** — 213 unit tests pass + Playwright browser verification confirmed the preview canvas updates after saving a per-card frame.
+
 ## Done
 
 - [x] EPIC: Support Alternative Card Layouts (Scryfall multi-face / non-portrait) | Priority: P2 | Completed: 2026-07-03 | Owner: drew-valentine

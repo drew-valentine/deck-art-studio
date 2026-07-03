@@ -5364,8 +5364,9 @@ def preview_frame():
         return jsonify({'error': 'No art available for preview'}), 404
 
     try:
-        # Resolve frame settings so composite_card_preview gets full config
-        resolved_fs = resolve_frame_settings(card, frame_settings)
+        # Resolve frame settings so composite_card_preview gets full config.
+        # live=True: the designer's settings win over saved card overrides.
+        resolved_fs = resolve_frame_settings(card, frame_settings, live=True)
         png_bytes = composite_card_preview(card, art_path, resolved_fs)
         return Response(png_bytes, mimetype='image/png')
     except Exception as e:
@@ -5414,7 +5415,9 @@ def render_frame_layer_endpoint():
     if not card:
         return jsonify({'error': f'Card not found: {card_name}'}), 404
     try:
-        resolved_fs = resolve_frame_settings(card, frame_settings)
+        # live=True: the designer's settings win over saved card overrides —
+        # otherwise the preview freezes on the saved frame after Save Frame.
+        resolved_fs = resolve_frame_settings(card, frame_settings, live=True)
         png_bytes = render_frame_layer(card, resolved_fs)
         return Response(png_bytes, mimetype='image/png')
     except Exception as e:
@@ -5437,7 +5440,8 @@ def render_text_overlay_endpoint():
     if not card:
         return jsonify({'error': f'Card not found: {card_name}'}), 404
     try:
-        resolved_fs = resolve_frame_settings(card, frame_settings)
+        # live=True: the designer's settings win over saved card overrides.
+        resolved_fs = resolve_frame_settings(card, frame_settings, live=True)
         png_bytes = render_text_overlay(card, resolved_fs)
         return Response(png_bytes, mimetype='image/png')
     except Exception as e:

@@ -485,15 +485,24 @@ def _is_v2_format(settings: dict) -> bool:
     return 'layers' in settings or 'style' in settings
 
 
-def resolve_frame_settings(card_dict: dict, deck_settings: dict = None) -> dict:
+def resolve_frame_settings(card_dict: dict, deck_settings: dict = None,
+                           live: bool = False) -> dict:
     """Merge style → deck layers → card overrides into final frame settings.
 
     Handles both v1 (preset + alpha_overrides) and v2 (style + layers) formats.
     Returns a dict with: style, layers, use_card_colors, color_overrides,
     text_overrides, plus style-level flags (no_frame, type_y, show_oracle, etc.)
+
+    live=True: deck_settings is the LIVE designer state (preview endpoints),
+    which is authoritative — the card's SAVED overrides must not shadow it,
+    or the designer freezes on the saved frame after the first Save. Only art
+    pan/zoom (which the live payload never carries) survives from the card.
     """
     deck_settings = deck_settings or {}
     card_overrides = card_dict.get('frame_overrides', {})
+    if live:
+        card_overrides = {k: v for k, v in card_overrides.items()
+                          if k in ('art_offset', 'art_zoom')}
 
     # ── Migrate v1 deck settings if needed ──
     if deck_settings and not _is_v2_format(deck_settings):
