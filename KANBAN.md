@@ -11,9 +11,9 @@
     - Generation: one art image per card name. FLUX accepts arbitrary width/height; deck-level `art_orientation` (portrait/landscape) already exists for art aspect.
     - Extension (`extension/content.js`): replaces edhplay.com images by Scryfall UUID from image URL. DFC front and back share the same UUID (URLs differ by /front/ vs /back/), so back faces would currently be replaced with front art.
   - **Phasing (subtasks):**
-    - Phase 0 + Phase 1 — **IN REVIEW** on branch `feature/alt-layouts-dfc` (PR #7, completed 2026-07-02, owner drew-valentine). Split out as a dedicated "In Review" work item below. Remaining phases (2, 3) stay in this Backlog epic.
+    - Phases 0, 1 + 2 — **IN REVIEW** on branch `feature/alt-layouts-dfc` (PR #7 "feat: alternative card layouts — DFCs, adventures, rooms (Phases 0-2)", completed 2026-07-03, owner drew-valentine). Split out as a dedicated "In Review" work item below. Only Phase 3 (landscape) + the transform-indicator-pips polish remain in this Backlog epic.
     - [ ] Transform/MDFC face-indicator pips on frames | polish, carried from Phase 1 — a dedicated transform-indicator icon on the frame (front/back face indicator). Back-face composites currently render with the standard frame for the back face's own card data; a face-indicator icon was deferred out of Phase 1.
-    - Phase 2 — Adventure + Room text layouts — **IN PROGRESS** on branch `feature/alt-layouts-dfc` (started 2026-07-03, owner drew-valentine; continues PR #7, retitled to cover Phases 0-2). Split out as a dedicated "In Progress" work item below. Portrait, single art, split text-box rendering in `card_frame_renderer` (adventure: left sub-frame; room: two side-by-side door halves) + Frame Designer back-face support. Works across frame styles (split inside each style's rules-text region).
+    - Phase 2 — Adventure + Room text layouts — **IN REVIEW** on branch `feature/alt-layouts-dfc` (PR #7, completed 2026-07-03, owner drew-valentine; PR retitled "feat: alternative card layouts — DFCs, adventures, rooms (Phases 0-2)"). Split out as a dedicated "In Review" work item below. Portrait, single art, split text-box rendering in `card_frame_renderer` (adventure: left sub-frame; room: two side-by-side door halves) + Frame Designer back-face support. Works across frame styles (split inside each style's rules-text region).
     - [ ] Phase 3 — Landscape cards (battles, split cards): landscape frame rendering (new canvas orientation 1050x750); battle defense counter; split cards = two halves each with own art; extension/print output rotation handling.
   - **Open question:** clarify with requester what "PIP cards" means (likely Kamigawa flip cards). Blocks scoping any flip-layout work.
 
@@ -80,17 +80,19 @@
 
 ## In Progress
 
-- [ ] Alt Layouts Phase 2 — Adventure + Room split text rendering & Frame Designer face support | Priority: P2 | Started: 2026-07-03 | Owner: drew-valentine
-  - Branch: `feature/alt-layouts-dfc` (continues PR #7, which will be retitled to cover Phases 0-2)
-  - Part of EPIC: Support Alternative Card Layouts (see Backlog). Phase 3 (landscape) remains in the epic in Backlog.
-  - Acceptance criteria:
-    - [ ] Given an adventure card (e.g. Murderous Rider // Swift End), when the composite is rendered, then BOTH halves render: the adventure half (name, mana cost, type, rules) in a left text-box panel beside the creature half's rules text; the title shows the creature-half name like real cards.
-    - [ ] Given a room card (e.g. Smoky Lounge // Misty Salon), when the composite is rendered, then both door halves render side by side, each with its own name/cost header.
-    - [ ] Given any frame style, when an adventure/room card is rendered, then the split happens inside that style's existing rules-text region (works across styles).
-    - [ ] Given a DFC and the Art tab's Front/Back face selection, when the Frame Designer is opened, then it previews the back face's art + text and saves per-card back-face overrides stored separately from front overrides (e.g. `frame_overrides_back`).
-    - [ ] Validation gate: Playwright browser verification of the Murderous Rider composite showing Swift End text (+ screenshot), a room card render, and the Frame Designer back-face flow; pytest suite passes.
-
 ## In Review
+
+- [ ] Alt Layouts Phase 2 — Adventure + Room split text rendering & Frame Designer face support | Priority: P2 | Review Started: 2026-07-03 | Completed: 2026-07-03 | Owner: drew-valentine
+  - Branch: `feature/alt-layouts-dfc`
+  - PR: https://github.com/drew-valentine/deck-art-studio/pull/7 (retitled "feat: alternative card layouts — DFCs, adventures, rooms (Phases 0-2)", label `semver:minor`)
+  - Part of EPIC: Support Alternative Card Layouts (see Backlog). Only Phase 3 (landscape) + transform-indicator-pips polish remain in the epic in Backlog.
+  - Acceptance criteria:
+    - [x] Given an adventure card (e.g. Murderous Rider // Swift End), when the composite is rendered, then BOTH halves render: the adventure half (name, mana cost, type, rules) in a left text-box panel beside the creature half's rules text; the title shows the creature-half name like real cards.
+    - [x] Given a room card (e.g. Smoky Lounge // Misty Salon), when the composite is rendered, then both door halves render side by side, each with its own name/cost header.
+    - [x] Given any frame style, when an adventure/room card is rendered, then the split happens inside that style's existing rules-text region — hooked into every rules-text path (incl. iko/LOTR/Crystal/ABU), so it works across all frame styles.
+    - [x] Given a DFC and the Art tab's Front/Back face selection, when the Frame Designer is opened, then it previews the back face's art + text and saves per-card back-face overrides stored separately from front overrides via `frame_overrides_back` persistence.
+    - [x] Validation gate: Playwright browser verification of the adventure split render (creature-half title, adventure left column), room side-by-side door halves, and the Frame Designer Front/Back toggle flow; 200 unit tests pass.
+  - Bug fixed en route (pre-existing): Scryfall name-cache slug broke for "A // B" names (slash in the cache filename); now sanitized.
 
 - [ ] Alt Layouts Phase 0 + 1 — Data foundation + Double-faced cards (transform / MDFC) | Priority: P2 | Review Started: 2026-07-02 | Completed: 2026-07-02 | Owner: drew-valentine
   - Branch: `feature/alt-layouts-dfc`
