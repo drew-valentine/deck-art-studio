@@ -3340,7 +3340,10 @@ def _start_loyalty_badge_svg(loyalty: str, cx: float, cy: float,
         y = cy - g['cy'] * h
         parts.append(f'<image x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" '
                      f'xlink:href="{uri}"/>')
-        text_y = cy + loy_font * 0.35
+        # The plate's alpha center sits above the shield body's visual center
+        # of mass (the bottom point pulls it down) — drop the number ~10% of
+        # the shield height so it reads centered.
+        text_y = cy + h * 0.10 + loy_font * 0.35
     else:
         start_path_d = _LOYALTY_SVG_PATHS.get('loyalty_start')
         loy_w, loy_h = size, size * 0.82
