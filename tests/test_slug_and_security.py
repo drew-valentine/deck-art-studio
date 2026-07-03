@@ -213,7 +213,8 @@ class TestRotatedSplitHelpers:
     def test_rotated_split_detection(self):
         from deck_studio import is_rotated_split, has_second_art_face, is_dfc
         assert is_rotated_split(self.FIRE_ICE) is True
-        assert is_rotated_split(self.ROOM) is False        # rooms stay portrait
+        # Rooms print rotated with per-half art too (see DSK Smoky Lounge)
+        assert is_rotated_split(self.ROOM) is True
         assert has_second_art_face(self.FIRE_ICE) is True
         assert is_dfc(self.FIRE_ICE) is False              # not a DFC
 

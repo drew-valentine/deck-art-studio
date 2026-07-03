@@ -593,11 +593,10 @@ def back_face_card(card):
 
 
 def is_rotated_split(card) -> bool:
-    """Classic split cards (Fire // Ice): two rotated halves, EACH with its
-    own art. Rooms are also layout='split' but portrait with one art, so
-    they keep the side-by-side text treatment instead."""
+    """Split-layout cards print as two rotated halves, EACH with its own
+    art — classic splits (Fire // Ice) AND Rooms (Smoky Lounge // Misty
+    Salon) alike, per the real printings."""
     return (card.get('layout') == 'split'
-            and 'room' not in (card.get('type_line') or '').lower()
             and len(card.get('card_faces') or []) >= 2)
 
 
