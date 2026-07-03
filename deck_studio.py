@@ -10427,6 +10427,9 @@ class FrameCompositor {
     this.artOffset = { x: 0, y: 0 };
     this.artZoom = 1.0;
     this.artBaseScale = 1.0;  // cover-fit scale for the art
+    // Battle fronts compose art in LANDSCAPE space then rotate 90° — the
+    // designer mirrors that so pan/zoom is WYSIWYG for sideways cards
+    this.rotateArt = false;
     this.frameOpacity = 1.0;
     this._dragging = false;
     this._dragStart = { x: 0, y: 0 };
@@ -10453,8 +10456,14 @@ class FrameCompositor {
       const scaleY = 1050 / rect.height;
       const dx = (e.clientX - this._dragStart.x) * scaleX;
       const dy = (e.clientY - this._dragStart.y) * scaleY;
-      this.artOffset.x = this._dragStartOffset.x + dx;
-      this.artOffset.y = this._dragStartOffset.y + dy;
+      if (this.rotateArt) {
+        // Screen drag → landscape-space offset (art plane is rotated 90°)
+        this.artOffset.x = this._dragStartOffset.x - dy;
+        this.artOffset.y = this._dragStartOffset.y + dx;
+      } else {
+        this.artOffset.x = this._dragStartOffset.x + dx;
+        this.artOffset.y = this._dragStartOffset.y + dy;
+      }
       this.render();
     });
     const endDrag = () => {
@@ -10482,8 +10491,10 @@ class FrameCompositor {
       img.crossOrigin = 'anonymous';
       img.onload = () => {
         this.artImage = img;
-        // Compute base scale for cover-fit
-        this.artBaseScale = Math.max(750 / img.naturalWidth, 1050 / img.naturalHeight);
+        // Cover-fit scale — battle fronts cover the LANDSCAPE canvas
+        this.artBaseScale = this.rotateArt
+          ? Math.max(1050 / img.naturalWidth, 750 / img.naturalHeight)
+          : Math.max(750 / img.naturalWidth, 1050 / img.naturalHeight);
         resolve();
       };
       img.onerror = reject;
@@ -10526,10 +10537,22 @@ class FrameCompositor {
       const scale = this.artBaseScale * this.artZoom;
       const sw = img.naturalWidth * scale;
       const sh = img.naturalHeight * scale;
-      // Center the art, then apply user offset
-      const dx = (W - sw) / 2 + this.artOffset.x;
-      const dy = (H - sh) / 2 + this.artOffset.y;
-      ctx.drawImage(img, dx, dy, sw, sh);
+      if (this.rotateArt) {
+        // Compose in landscape space (1050x750), rotated 90° CCW onto the
+        // portrait canvas — same math as the server's battle composite
+        ctx.save();
+        ctx.translate(W / 2, H / 2);
+        ctx.rotate(-Math.PI / 2);
+        const dx = (1050 - sw) / 2 + this.artOffset.x - 525;
+        const dy = (750 - sh) / 2 + this.artOffset.y - 375;
+        ctx.drawImage(img, dx, dy, sw, sh);
+        ctx.restore();
+      } else {
+        // Center the art, then apply user offset
+        const dx = (W - sw) / 2 + this.artOffset.x;
+        const dy = (H - sh) / 2 + this.artOffset.y;
+        ctx.drawImage(img, dx, dy, sw, sh);
+      }
     }
 
     // Layer 1: Frame chrome
@@ -10552,8 +10575,13 @@ class FrameCompositor {
   }
 
   panArt(dx, dy) {
-    this.artOffset.x += dx;
-    this.artOffset.y += dy;
+    if (this.rotateArt) {
+      this.artOffset.x += -dy;
+      this.artOffset.y += dx;
+    } else {
+      this.artOffset.x += dx;
+      this.artOffset.y += dy;
+    }
     this.render();
   }
 
@@ -11042,6 +11070,9 @@ async function loadFrameDesignerForCard(cardName) {
   if (canvasWrap) canvasWrap.style.display = '';
   if (nameEl) nameEl.textContent = fdBack ? `${fdFace.name || card.name} (back face)` : card.name;
   if (loading) loading.classList.add('visible');
+
+  // Battle fronts compose sideways — mirror that in the art layer
+  _fdCompositor.rotateArt = (!fdBack && card.card_type === 'battle');
 
   // Load saved art position
   const ovr = (fdBack ? card.back_frame_overrides : card.frame_overrides) || {};
