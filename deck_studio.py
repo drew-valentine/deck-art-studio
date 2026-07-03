@@ -4128,6 +4128,7 @@ def get_cards():
         entry = {
             'name': name,
             'slug': slug,
+            'layout': card.get('layout', 'normal'),
             'mana_cost': card.get('mana_cost', ''),
             'type_line': card.get('type_line', ''),
             'card_type': card.get('card_type', ''),
@@ -6118,6 +6119,10 @@ button:active, .btn:active { transform: scale(0.97); }
 }
 .face-toggle-btn.active { background: var(--gold); color: #000; }
 .face-toggle-btn:hover:not(.active) { background: var(--surface3); }
+.face-hint {
+  font-size: 0.72em; color: var(--text-muted); margin-bottom: 8px;
+  padding: 3px 8px; border-left: 2px solid var(--border);
+}
 
 /* DFC badge on grid tiles — top-right, inboard of the status dot */
 .dfc-badge {
@@ -7618,6 +7623,8 @@ header .separator {
           <button class="face-toggle-btn active" id="faceBtnFront" onclick="setFace('front')">Front</button>
           <button class="face-toggle-btn" id="faceBtnBack" onclick="setFace('back')">Back</button>
         </div>
+        <!-- Hint for single-faced multi-part cards (adventure / room / split) -->
+        <div class="face-hint" id="faceHint" style="display:none;"></div>
 
         <!-- Zone 2: Hero Image with overlays -->
         <div class="detail-hero" id="detailHero">
@@ -7707,6 +7714,7 @@ header .separator {
             <button class="face-toggle-btn active" id="fdFaceBtnFront" onclick="setFace('front')">Front</button>
             <button class="face-toggle-btn" id="fdFaceBtnBack" onclick="setFace('back')">Back</button>
           </div>
+          <div class="face-hint" id="fdFaceHint" style="display:none;"></div>
           <div class="fd-canvas-container" id="fdCanvasContainer">
             <canvas id="fdCanvas" width="750" height="1050"></canvas>
             <div class="fd-canvas-loading" id="fdCanvasLoading">
@@ -9151,6 +9159,14 @@ function switchPanelTab(tab) {
 function viewingBack(card) {
   return !!(card && card.is_dfc && selectedFace === 'back');
 }
+// Hint for single-faced multi-part cards, where "A // B" names suggest a
+// flip side that doesn't exist (adventures, rooms, split cards).
+function faceHintFor(card) {
+  if (!card || card.is_dfc) return '';
+  if (card.layout === 'adventure') return 'Adventure card — single-faced: the adventure half renders beside the creature’s rules.';
+  if (card.layout === 'split') return 'Single-faced card — both halves render side by side in the text box.';
+  return '';
+}
 function faceKeyFor(card) {
   if (!card) return selectedCard;
   return viewingBack(card) ? card.name + ' [back]' : card.name;
@@ -9333,6 +9349,12 @@ function updateDetailPanel(card) {
     faceToggle.style.display = card.is_dfc ? 'flex' : 'none';
     document.getElementById('faceBtnFront').classList.toggle('active', selectedFace !== 'back');
     document.getElementById('faceBtnBack').classList.toggle('active', selectedFace === 'back');
+  }
+  const faceHint = document.getElementById('faceHint');
+  if (faceHint) {
+    const hint = faceHintFor(card);
+    faceHint.textContent = hint;
+    faceHint.style.display = hint ? '' : 'none';
   }
   const back = viewingBack(card);
   const bf = back ? (card.back_face || {}) : null;
@@ -11010,6 +11032,12 @@ function syncFdFaceToggle(card) {
   const bBtn = document.getElementById('fdFaceBtnBack');
   if (fBtn) fBtn.classList.toggle('active', selectedFace !== 'back');
   if (bBtn) bBtn.classList.toggle('active', selectedFace === 'back');
+  const hintEl = document.getElementById('fdFaceHint');
+  if (hintEl) {
+    const hint = faceHintFor(card);
+    hintEl.textContent = hint;
+    hintEl.style.display = hint ? '' : 'none';
+  }
 }
 
 function updateFrameTab() {
