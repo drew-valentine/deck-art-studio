@@ -835,7 +835,9 @@ def create_deck(deck_name: str, cards: list = None, prompts: list = None,
         'inspiration_image': None,           # filename in deck dir
         'inspiration_style_description': '',  # from GPT-4o vision analysis
         'cards': cards or [],
-        'frame_settings': {'style': 'basic'},
+        # Showcase is the default frame for new decks (full-art bars — the
+        # style key is 'godzilla' for historical reasons)
+        'frame_settings': {'style': 'godzilla'},
         'art_orientation': 'portrait',
     }
     with open(deck_dir / "deck.json", 'w') as f:
