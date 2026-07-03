@@ -88,8 +88,13 @@
 
     // Double-faced cards share one UUID; the back face's image URL contains
     // "/back/" and its art is stored under "<uuid>:back" in the manifest.
+    // Manifests exported before back-face support only have the bare UUID —
+    // fall back to it so those decks keep replacing (front art on the back,
+    // the pre-":back" behavior) instead of silently reverting to stock art.
     const isBack = src.includes('/back/');
-    const key = isBack ? `${uuid}:back` : uuid;
+    const key = (isBack && !cardMap.has(`${uuid}:back`) && cardMap.has(uuid))
+      ? uuid
+      : (isBack ? `${uuid}:back` : uuid);
 
     if (cardMap.has(key)) {
       // Direct UUID match

@@ -1073,22 +1073,27 @@ def revert_to_version(card_name: str, version_num: int) -> tuple[bool, str]:
     if versioned_meta.exists():
         shutil.copy2(versioned_meta, raw_path.with_suffix('.meta.json'))
 
-    # Re-composite with current frame renderer
-    card = next((c for c in cards_db if c['name'] == card_name), None)
+    # Re-composite with current frame renderer. "<name> [back]" keys resolve
+    # to the base card's back face so the composite actually re-renders.
+    render_card, base_card, _face, _slug = _resolve_card_ref(card_name)
     comp_path = COMPOSITE_DIR / f"{slug}.png"
-    if card:
+    if render_card:
         try:
-            render_composite(card, str(raw_path), None, str(comp_path),
+            render_composite(render_card, str(raw_path), None, str(comp_path),
                                  deck_frame_settings=active_deck_meta.get('frame_settings'))
         except Exception as e:
             return False, f"Reverted raw art but frame render failed: {e}"
 
+    # Status is keyed by the BASE card name and reports FRONT-face file state
+    # (the front drives the grid tile); back-face state rides via /api/status.
+    status_key = base_card['name'] if base_card else card_name
+    front_slug = name_to_slug(status_key)
     with generation_lock:
-        generation_status[card_name] = {
+        generation_status[status_key] = {
             'status': 'complete',
             'message': f'Reverted to version {version_num}',
-            'has_raw_art': True,
-            'has_composite': comp_path.exists(),
+            'has_raw_art': (RAW_ART_DIR / f"{front_slug}.png").exists(),
+            'has_composite': (COMPOSITE_DIR / f"{front_slug}.png").exists(),
         }
 
     return True, f"Reverted to version {version_num}"
@@ -1751,6 +1756,12 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
     raw_path = _raw_art_dir / f"{slug}.png"
     comp_path = _composite_dir / f"{slug}.png"
 
+    # Status entries always report FRONT-face file state — they drive the
+    # front tile/hero; back-face flags ride separately via /api/status.
+    _front_slug = name_to_slug(card_name)
+    _front_raw = _raw_art_dir / f"{_front_slug}.png"
+    _front_comp = _composite_dir / f"{_front_slug}.png"
+
     # Re-roll uses the existing local prompt as-is.
     # Users can click "Regenerate" on the local prompt field to get a fresh subject.
     # Re-distilling on every re-roll was overwriting user's manual edits.
@@ -1766,8 +1777,8 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
             _status[card_name] = {
                 'status': 'generating',
                 'message': f'Calling {model_name} ({quality}){face_label}...',
-                'has_raw_art': raw_path.exists(),
-                'has_composite': comp_path.exists(),
+                'has_raw_art': _front_raw.exists(),
+                'has_composite': _front_comp.exists(),
             }
 
         # ── Generate the image ──
@@ -1817,8 +1828,8 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
             _status[card_name] = {
                 'status': 'complete',
                 'message': 'Generated successfully',
-                'has_raw_art': True,
-                'has_composite': True,
+                'has_raw_art': _front_raw.exists(),
+                'has_composite': _front_comp.exists(),
             }
 
         return True, "Success"
@@ -1829,8 +1840,8 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
             _status[card_name] = {
                 'status': 'error',
                 'message': error_msg[:200],
-                'has_raw_art': raw_path.exists(),
-                'has_composite': comp_path.exists(),
+                'has_raw_art': _front_raw.exists(),
+                'has_composite': _front_comp.exists(),
             }
         return False, error_msg
 
@@ -1838,16 +1849,19 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
 PARALLEL_WORKERS = 2  # concurrent image generation threads (conservative for rate limits)
 
 
-def batch_generate_worker(card_names, feedback_map=None):
+def batch_generate_worker(card_names, feedback_map=None, face_map=None):
     """Background worker for batch generation — runs up to PARALLEL_WORKERS at once.
 
     Captures deck context (paths, cards_db) at spawn time so file I/O
     targets the correct deck even if the user switches decks mid-batch.
+    face_map: per-card face selection ('front'|'back'|'all'), so skip_existing
+    batches only generate the faces that are actually missing.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     global is_generating, batch_phase, batch_phase_detail
     global batch_deck_id, _batch_generation_status
     feedback_map = feedback_map or {}
+    face_map = face_map or {}
 
     # ── Capture deck context at spawn time ──
     _deck_id = active_deck_id
@@ -1916,6 +1930,7 @@ def batch_generate_worker(card_names, feedback_map=None):
             feedback = feedback_map.get(name)
             generate_card_all_faces(
                 name, feedback=feedback,
+                face=face_map.get(name, 'all'),
                 status_dict=_batch_generation_status,
                 raw_art_dir=_raw_art_dir,
                 composite_dir=_composite_dir,
@@ -2227,22 +2242,21 @@ def api_export_manifest(deck_id):
 
         slug = name_to_slug(card['name'])
         comp_path = comp_dir / f"{slug}.png"
-        if not comp_path.exists():
+        if comp_path.exists():
+            try:
+                cards_manifest[scryfall_id] = {
+                    'name': card['name'],
+                    'image': _encode_composite(comp_path),
+                }
+            except Exception as e:
+                print(f"  [export-manifest] Failed for {card['name']}: {e}")
+                skipped += 1
+        else:
             skipped += 1
-            continue
-
-        try:
-            cards_manifest[scryfall_id] = {
-                'name': card['name'],
-                'image': _encode_composite(comp_path),
-            }
-        except Exception as e:
-            print(f"  [export-manifest] Failed for {card['name']}: {e}")
-            skipped += 1
-            continue
 
         # Double-faced cards: the back face rides under "<uuid>:back", which
-        # the extension looks up for /back/ Scryfall image URLs.
+        # the extension looks up for /back/ Scryfall image URLs. Exported
+        # independently of the front so a back-only card still ships its art.
         if is_dfc(card):
             bslug = name_to_slug(face_key(card['name'], 'back'))
             bcomp = comp_dir / f"{bslug}.png"
@@ -4564,6 +4578,7 @@ def generate_batch():
         # Generate all
         card_names = [c['name'] for c in cards_db]
 
+    face_map = {}
     if skip_existing:
         def _back_face_missing(name):
             card = next((c for c in cards_db if c['name'] == name), None)
@@ -4572,10 +4587,26 @@ def generate_batch():
             back = name_to_slug(face_key(name, 'back'))
             return not (COMPOSITE_DIR / f"{back}.png").exists()
 
-        card_names = [n for n in card_names
-                      if generation_status.get(n, {}).get('status') != 'complete'
-                      or not generation_status.get(n, {}).get('has_composite')
-                      or _back_face_missing(n)]
+        def _front_incomplete(name):
+            s = generation_status.get(name, {})
+            return s.get('status') != 'complete' or not s.get('has_composite')
+
+        # Only generate the faces that are actually missing — a DFC whose
+        # front is done but back is absent must NOT re-roll the approved front
+        filtered = []
+        for n in card_names:
+            front_needed = _front_incomplete(n)
+            back_needed = _back_face_missing(n)
+            if not front_needed and not back_needed:
+                continue
+            filtered.append(n)
+            if front_needed and back_needed:
+                face_map[n] = 'all'
+            elif back_needed:
+                face_map[n] = 'back'
+            else:
+                face_map[n] = 'front'
+        card_names = filtered
 
     if not card_names:
         return jsonify({'success': True, 'message': 'All cards already generated'})
@@ -4587,7 +4618,8 @@ def generate_batch():
 
     # Apply same feedback to all selected cards
     feedback_map = {name: feedback for name in card_names} if feedback else {}
-    thread = threading.Thread(target=batch_generate_worker, args=(card_names, feedback_map))
+    thread = threading.Thread(target=batch_generate_worker,
+                              args=(card_names, feedback_map, face_map))
     thread.start()
 
     return jsonify({
@@ -4654,6 +4686,7 @@ def get_status():
             bslug = name_to_slug(face_key(name, 'back'))
             extra['has_back_composite'] = (COMPOSITE_DIR / f"{bslug}.png").exists()
             extra['has_back_raw'] = (RAW_ART_DIR / f"{bslug}.png").exists()
+            extra['has_back_ai_art'] = (RAW_ART_DIR / f"{bslug}.meta.json").exists()
             extra['back_composite_mtime'] = _composite_mtime_for(bslug)
         if extra:
             statuses[name] = {**s, **extra}
@@ -4831,15 +4864,22 @@ def recomposite_single():
 
         if not rendered:
             return jsonify({'error': 'No art exists for this face — generate art first'}), 400
+        # Status reports FRONT-face file state — a back-only re-render must
+        # not assert the front composite exists.
+        front_slug = name_to_slug(card_name)
         with generation_lock:
             generation_status[card_name] = {
                 'status': 'complete',
                 'message': 'Frame re-rendered',
-                'has_raw_art': True,
-                'has_composite': True,
+                'has_raw_art': (RAW_ART_DIR / f"{front_slug}.png").exists(),
+                'has_composite': (COMPOSITE_DIR / f"{front_slug}.png").exists(),
             }
-        return jsonify({'success': True, 'message': f'Frame re-rendered for {card_name}',
-                         'composite_mtime': _composite_mtime_for(name_to_slug(card_name))})
+        resp = {'success': True, 'message': f'Frame re-rendered for {card_name}',
+                'composite_mtime': _composite_mtime_for(front_slug)}
+        if is_dfc(card):
+            resp['back_composite_mtime'] = _composite_mtime_for(
+                name_to_slug(face_key(card_name, 'back')))
+        return jsonify(resp)
     except Exception as e:
         return jsonify({'error': str(e)[:200]}), 500
 
@@ -8672,6 +8712,7 @@ function startPolling() {
         if (card.is_dfc) {
           if (s.has_back_raw !== undefined) card.has_back_raw = s.has_back_raw;
           if (s.has_back_composite !== undefined) card.has_back_composite = s.has_back_composite;
+          if (s.has_back_ai_art !== undefined) card.has_back_ai_art = s.has_back_ai_art;
           card.back_composite_mtime = s.back_composite_mtime || card.back_composite_mtime || 0;
         }
       }
@@ -9397,11 +9438,15 @@ function updateDetailPanel(card) {
 
   let imgSrc;
   if (back) {
+    // Last resort is the FRONT image chain — a proxy URL for the back slug
+    // would always 404 (nothing generates back-face proxies)
     imgSrc = card.has_back_composite
       ? `/api/image/composite/${card.back_slug}?v=${card.back_composite_mtime || 0}`
       : card.has_back_scryfall_art
         ? `/api/image/scryfall/${card.back_slug}?d=${deckCacheBust}`
-        : `/api/image/proxy/${card.back_slug}?d=${deckCacheBust}`;
+        : card.has_composite
+          ? `/api/image/composite/${card.slug}?v=${card.composite_mtime || 0}`
+          : `/api/image/proxy/${card.slug}?d=${deckCacheBust}`;
   } else {
     imgSrc = card.has_composite
       ? `/api/image/composite/${card.slug}?v=${card.composite_mtime || 0}`
@@ -10105,7 +10150,10 @@ async function stopBatch() {
 async function recompositeCurrent() {
   if (!selectedCard) return;
   const card = allCards.find(c => c.name === selectedCard);
-  if (!card || (!card.has_raw_art && !card.has_scryfall_art)) {
+  const back = viewingBack(card);
+  const hasArt = back ? (card && (card.has_back_raw || card.has_back_scryfall_art))
+                      : (card && (card.has_raw_art || card.has_scryfall_art));
+  if (!hasArt) {
     showToast('No art exists yet — generate art first', 'warning');
     return;
   }
@@ -10117,8 +10165,12 @@ async function recompositeCurrent() {
   const data = await resp.json();
   if (data.success) {
     card.composite_mtime = data.composite_mtime || card.composite_mtime;
+    if (data.back_composite_mtime) card.back_composite_mtime = data.back_composite_mtime;
+    // Keep showing the face the user is viewing (cache-busted with ITS mtime)
     const img = document.getElementById('detailImage');
-    img.src = `/api/image/composite/${card.slug}?v=${card.composite_mtime || 0}`;
+    img.src = back
+      ? `/api/image/composite/${card.back_slug}?v=${card.back_composite_mtime || 0}`
+      : `/api/image/composite/${card.slug}?v=${card.composite_mtime || 0}`;
     showToast('Frame re-rendered', 'success');
   } else {
     showToast('Recomposite error: ' + (data.error || 'Unknown'), 'error');

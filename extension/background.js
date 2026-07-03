@@ -149,10 +149,16 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
           const isBack = msg.face === 'back';
           const key = isBack ? `${msg.uuid}:back` : msg.uuid;
 
-          // Search within active deck's cards by name (same face)
+          // Search within active deck's cards by name (same face). Decks
+          // imported before back-face support have no ':back' entries —
+          // fall back to the front entry so replacement keeps working.
           const deckCards = await getActiveDeckCards();
-          const match = deckCards.find(c =>
+          let match = deckCards.find(c =>
             c.name === name && (isBack === String(c.uuid).endsWith(':back')));
+          if (!match && isBack) {
+            match = deckCards.find(c =>
+              c.name === name && !String(c.uuid).endsWith(':back'));
+          }
           if (match) {
             // Cache this UUID under the same deck for future hits
             await DeckArtDB.putCard(match.deck, key, name, match.dataUrl, 'resolved');
