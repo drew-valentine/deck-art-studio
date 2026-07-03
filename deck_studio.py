@@ -8065,11 +8065,14 @@ header .separator {
 
           <!-- Actions (sticky bottom) -->
           <div class="fd-actions">
-            <button class="btn btn-gold btn-sm" id="frameSaveBtn" onclick="saveFrameSettings()" style="flex:1;">
-              Save Frame
+            <button class="btn btn-gold btn-sm" id="frameSaveBtn" onclick="saveFrameSettings()" style="flex:1;" title="Save this card's frame (style, colors, art position) as a per-card override — the deck default is not changed">
+              Save Card Frame
             </button>
-            <button class="btn btn-secondary btn-sm" id="frameApplyAllBtn" onclick="applyFrameToChecked()" title="Apply style &amp; colors to all checked cards">
+            <button class="btn btn-secondary btn-sm" id="frameApplyAllBtn" onclick="applyFrameToChecked()" title="Save these frame settings onto every checked card (per-card overrides)">
               Apply to Checked
+            </button>
+            <button class="btn btn-secondary btn-sm" id="frameDeckDefaultBtn" onclick="setDeckDefaultFrame()" title="Make these settings the deck default — used by new imports and any card without its own saved frame">
+              Set Deck Default
             </button>
           </div>
         </div>
@@ -10672,8 +10675,8 @@ function updateDeckStyleHint() {
   if (!hint) return;
   const deckStyle = _frameDeckSettings && _frameDeckSettings.style;
   const label = (deckStyle && _frameStyles[deckStyle]) ? _frameStyles[deckStyle].label : 'not set';
-  hint.innerHTML = `Deck default: <b>${escapeHtml(label)}</b> — new imports use it. ` +
-    `Saving a frame with a different style selected changes it for the whole deck.`;
+  hint.innerHTML = `Deck default: <b>${escapeHtml(label)}</b> — used by new imports ` +
+    `and cards without their own saved frame. Save Card Frame only affects this card.`;
 }
 
 function renderLayerList() {
@@ -11102,6 +11105,15 @@ async function loadFrameDesignerForCard(cardName) {
   // Battle fronts compose sideways — mirror that in the art layer
   _fdCompositor.rotateArt = (!fdBack && card.card_type === 'battle');
 
+  // Show the card's EFFECTIVE frame: deck default with this card's saved
+  // style/color overrides layered on top
+  const _co = (fdBack ? card.back_frame_overrides : card.frame_overrides) || {};
+  const _eff = { ...(_frameDeckSettings || {}) };
+  for (const k of Object.keys(_co)) {
+    if (!['text_overrides', 'art_offset', 'art_zoom'].includes(k)) _eff[k] = _co[k];
+  }
+  populateFrameFromSettings(_eff);
+
   // Load saved art position
   const ovr = (fdBack ? card.back_frame_overrides : card.frame_overrides) || {};
   if (ovr.art_offset || ovr.art_zoom) {
@@ -11366,12 +11378,13 @@ function resetTextOverrides() {
   scheduleFramePreview();
 }
 
-// Persist the selected card's WYSIWYG state (art pan/zoom + text overrides).
-// Shared by Save Frame and Apply to Checked so a repositioned art never
-// silently reverts when the composite re-renders.
-async function persistSelectedCardFrameState(textOverrides) {
+// Persist the selected card's frame state as PER-CARD overrides: the full
+// designer settings (style, colors, gradient, opacity, layers) plus text
+// overrides and art pan/zoom. The deck default is never touched here.
+async function persistSelectedCardFrameState(textOverrides, frameSettings) {
   if (!selectedCard) return;
-  const cardOverrides = {};
+  const cardOverrides = frameSettings ? { ...frameSettings } : {};
+  delete cardOverrides.text_overrides;
   if (textOverrides && Object.keys(textOverrides).length) {
     cardOverrides.text_overrides = textOverrides;
   }
@@ -11393,48 +11406,35 @@ async function persistSelectedCardFrameState(textOverrides) {
 }
 
 async function saveFrameSettings() {
+  // Saves THIS CARD's frame as a per-card override. The deck default is a
+  // separate, explicit action (Set Deck Default).
+  if (!selectedCard) {
+    showToast('Select a card first — or use Set Deck Default', 'warning');
+    return;
+  }
   const settings = gatherFrameSettings();
   const textOverrides = settings.text_overrides;
   delete settings.text_overrides;
-  const _prevDeckStyle = _frameDeckSettings && _frameDeckSettings.style;
 
   try {
-    // Save deck-level settings (style, colors, layers)
-    await fetch(`/api/decks/${document.getElementById('deckSelect').value}/frame-settings`, {
+    await persistSelectedCardFrameState(textOverrides, settings);
+
+    // Re-render composite on server (archive previous as version).
+    // On a DFC only the face being edited re-renders.
+    const _svCard = allCards.find(c => c.name === selectedCard);
+    const resp = await fetch('/api/recomposite', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(settings),
+      body: JSON.stringify({ card_name: selectedCard, archive_version: true,
+                             face: (_svCard && _svCard.is_dfc) ? selectedFace : 'all' }),
     });
-    _frameDeckSettings = settings;
-    renderStyleStrip();  // refresh the deck-default badge + hint
-
-    if (selectedCard) {
-      await persistSelectedCardFrameState(textOverrides);
-
-      // Re-render composite on server (archive previous as version).
-      // On a DFC only the face being edited re-renders.
-      const _svCard = allCards.find(c => c.name === selectedCard);
-      const resp = await fetch('/api/recomposite', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ card_name: selectedCard, archive_version: true,
-                               face: (_svCard && _svCard.is_dfc) ? selectedFace : 'all' }),
-      });
-      const data = await resp.json();
-      if (data.success) {
-        if (_prevDeckStyle && settings.style && settings.style !== _prevDeckStyle) {
-          const lbl = _frameStyles[settings.style] ? _frameStyles[settings.style].label : settings.style;
-          showToast(`Deck style set to ${lbl} — all cards & new imports use it`, 'info');
-        } else {
-          showToast('Frame saved', 'success');
-        }
-      } else {
-        // Settings persisted but the composite didn't re-render — say so
-        // instead of failing silently (looks like "my changes didn't save").
-        showToast('Frame saved, but re-render failed: ' + (data.error || 'unknown error'), 'error');
-      }
+    const data = await resp.json();
+    if (data.success) {
+      showToast('Frame saved for this card', 'success');
     } else {
-      showToast('Frame settings saved', 'success');
+      // Overrides persisted but the composite didn't re-render — say so
+      // instead of failing silently (looks like "my changes didn't save").
+      showToast('Frame saved, but re-render failed: ' + (data.error || 'unknown error'), 'error');
     }
 
     // Refresh card list to update grid thumbnails
@@ -11443,6 +11443,28 @@ async function saveFrameSettings() {
     renderGrid();
   } catch (e) {
     showToast('Error saving frame settings', 'error');
+  }
+}
+
+async function setDeckDefaultFrame() {
+  // Explicitly set the DECK default frame (used by new imports and any card
+  // without its own saved frame). Never touches per-card overrides.
+  const settings = gatherFrameSettings();
+  delete settings.text_overrides;
+  const deckId = document.getElementById('deckSelect').value;
+  if (!deckId) return;
+  try {
+    await fetch(`/api/decks/${deckId}/frame-settings`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(settings),
+    });
+    _frameDeckSettings = settings;
+    renderStyleStrip();  // refresh the deck-default badge + hint
+    const lbl = _frameStyles[settings.style] ? _frameStyles[settings.style].label : settings.style;
+    showToast(`Deck default set to ${lbl} — new imports and cards without their own frame use it`, 'info');
+  } catch (e) {
+    showToast('Error saving deck default', 'error');
   }
 }
 
@@ -11455,19 +11477,27 @@ async function applyFrameToChecked() {
   const textOverrides = settings.text_overrides;
   delete settings.text_overrides;
 
-  await fetch(`/api/decks/${document.getElementById('deckSelect').value}/frame-settings`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(settings),
-  });
-  _frameDeckSettings = settings;
+  // Write the designer settings onto each CHECKED card as per-card
+  // overrides, preserving that card's own text overrides and art position.
+  // The deck default is untouched (use Set Deck Default for that).
+  for (const n of checkedCards) {
+    if (n === selectedCard) continue;  // handled below with live art state
+    const c = allCards.find(x => x.name === n);
+    const merged = { ...((c && c.frame_overrides) || {}), ...settings };
+    await fetch('/api/cards/frame-overrides', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ card_name: n, frame_overrides: merged }),
+    }).catch(() => {});
+  }
 
-  // Persist the selected card's art pan/zoom BEFORE recompositing, so a
-  // repositioned art doesn't silently revert if that card is checked — but
-  // ONLY when it IS checked; otherwise an unsaved experiment on the selected
-  // card would be silently made permanent by an unrelated batch apply.
+  // Persist the selected card's live state (incl. art pan/zoom) BEFORE
+  // recompositing, so a repositioned art doesn't silently revert if that
+  // card is checked — but ONLY when it IS checked; otherwise an unsaved
+  // experiment on the selected card would be silently made permanent by an
+  // unrelated batch apply.
   if (selectedCard && checkedCards.has(selectedCard)) {
-    await persistSelectedCardFrameState(textOverrides);
+    await persistSelectedCardFrameState(textOverrides, settings);
   }
 
   const names = [...checkedCards];
