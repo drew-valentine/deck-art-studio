@@ -1608,7 +1608,9 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             raw_name = face.get('name') or ''
             fname = raw_name.replace('&', '&amp;').replace('<', '&lt;')
             pips = parse_mana_cost(face.get('mana_cost') or '')
-            ps = max(14, int(f * 0.72))
+            # Header pips match the half-name height (like the title bar's
+            # 36px pips against its 40px name)
+            ps = max(16, int(f * 0.9))
             pips_w = len(pips) * (ps + 2) + 6 if pips else 0
             nf = f
             est = len(raw_name) * nf * 0.55
