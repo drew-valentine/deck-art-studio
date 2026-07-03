@@ -11,11 +11,11 @@
     - Generation: one art image per card name. FLUX accepts arbitrary width/height; deck-level `art_orientation` (portrait/landscape) already exists for art aspect.
     - Extension (`extension/content.js`): replaces edhplay.com images by Scryfall UUID from image URL. DFC front and back share the same UUID (URLs differ by /front/ vs /back/), so back faces would currently be replaced with front art.
   - **Phasing (subtasks):**
-    - Phases 0, 1 + 2 — **IN REVIEW** on branch `feature/alt-layouts-dfc` (PR #7 "feat: alternative card layouts — DFCs, adventures, rooms (Phases 0-2)", completed 2026-07-03, owner drew-valentine). Split out as a dedicated "In Review" work item below. Only Phase 3 (landscape) + the transform-indicator-pips polish remain in this Backlog epic.
+    - Phases 0, 1 + 2 — **SHIPPED in v1.36.0** (2026-07-03, PR #7 squash-merged as commit 23a5d8c, owner drew-valentine). Moved to Done. Remaining epic scope: Phase 3 (landscape), the transform-indicator-pips polish, and a DRY cleanup pass (below).
     - [ ] Transform/MDFC face-indicator pips on frames | polish, carried from Phase 1 — a dedicated transform-indicator icon on the frame (front/back face indicator). Back-face composites currently render with the standard frame for the back face's own card data; a face-indicator icon was deferred out of Phase 1.
-    - Phase 2 — Adventure + Room text layouts — **IN REVIEW** on branch `feature/alt-layouts-dfc` (PR #7, completed 2026-07-03, owner drew-valentine; PR retitled "feat: alternative card layouts — DFCs, adventures, rooms (Phases 0-2)"). Split out as a dedicated "In Review" work item below. Portrait, single art, split text-box rendering in `card_frame_renderer` (adventure: left sub-frame; room: two side-by-side door halves) + Frame Designer back-face support. Works across frame styles (split inside each style's rules-text region).
-    - [ ] Phase 3 — Landscape cards (battles, split cards): landscape frame rendering (new canvas orientation 1050x750); battle defense counter; split cards = two halves each with own art; extension/print output rotation handling.
-  - **Open question:** clarify with requester what "PIP cards" means (likely Kamigawa flip cards). Blocks scoping any flip-layout work.
+    - [ ] Phase 3 — Landscape cards (battles, rotated split cards): landscape frame rendering (new canvas orientation 1050x750); battle defense counter; split cards = two halves each with own art; extension/print output rotation handling.
+    - [ ] DRY cleanup pass (flagged by the Phase 2 review) — de-duplicate the face-expansion logic (duplicated across paths) and consolidate the triple-copied download/slug helpers into a single shared implementation.
+  - **Open question — resolved (2026-07-03):** the friend's examples are all covered by Phases 0-3 except "PIP cards", which remains unclarified. Still need the requester to clarify what "PIP cards" means (likely Kamigawa flip cards) before scoping any flip-layout work.
 
 - [ ] Frame Designer UX polish + validation harness | Priority: P2
   - Carries forward the two unfinished work items from the Frame Editor Overhaul (merged as v1.34.0)
@@ -82,10 +82,13 @@
 
 ## In Review
 
-- [ ] Alt Layouts Phase 2 — Adventure + Room split text rendering & Frame Designer face support | Priority: P2 | Review Started: 2026-07-03 | Completed: 2026-07-03 | Owner: drew-valentine
-  - Branch: `feature/alt-layouts-dfc`
+## Done
+
+- [x] Alt Layouts Phase 2 — Adventure + Room split text rendering & Frame Designer face support | Priority: P2 | Completed: 2026-07-03 | Owner: drew-valentine
+  - Branch: `feature/alt-layouts-dfc` merged via PR #7 (squash-merged to main as commit 23a5d8c)
   - PR: https://github.com/drew-valentine/deck-art-studio/pull/7 (retitled "feat: alternative card layouts — DFCs, adventures, rooms (Phases 0-2)", label `semver:minor`)
-  - Part of EPIC: Support Alternative Card Layouts (see Backlog). Only Phase 3 (landscape) + transform-indicator-pips polish remain in the epic in Backlog.
+  - Tagged: v1.36.0 (released 2026-07-03)
+  - Part of EPIC: Support Alternative Card Layouts (see Backlog). Only Phase 3 (landscape) + transform-indicator-pips polish + a DRY cleanup pass remain in the epic in Backlog.
   - Acceptance criteria:
     - [x] Given an adventure card (e.g. Murderous Rider // Swift End), when the composite is rendered, then BOTH halves render: the adventure half (name, mana cost, type, rules) in a left text-box panel beside the creature half's rules text; the title shows the creature-half name like real cards.
     - [x] Given a room card (e.g. Smoky Lounge // Misty Salon), when the composite is rendered, then both door halves render side by side, each with its own name/cost header.
@@ -93,11 +96,13 @@
     - [x] Given a DFC and the Art tab's Front/Back face selection, when the Frame Designer is opened, then it previews the back face's art + text and saves per-card back-face overrides stored separately from front overrides via `frame_overrides_back` persistence.
     - [x] Validation gate: Playwright browser verification of the adventure split render (creature-half title, adventure left column), room side-by-side door halves, and the Frame Designer Front/Back toggle flow; 200 unit tests pass.
   - Bug fixed en route (pre-existing): Scryfall name-cache slug broke for "A // B" names (slash in the cache filename); now sanitized.
+  - Post-review hardening pass: fixed 9 verified findings — face-state conflation, art-destroying regens, and extension manifest migration among them — plus planeswalker loyalty badges on transform backs and shield-number centering.
 
-- [ ] Alt Layouts Phase 0 + 1 — Data foundation + Double-faced cards (transform / MDFC) | Priority: P2 | Review Started: 2026-07-02 | Completed: 2026-07-02 | Owner: drew-valentine
-  - Branch: `feature/alt-layouts-dfc`
+- [x] Alt Layouts Phase 0 + 1 — Data foundation + Double-faced cards (transform / MDFC) | Priority: P2 | Completed: 2026-07-03 | Owner: drew-valentine
+  - Branch: `feature/alt-layouts-dfc` merged via PR #7 (squash-merged to main as commit 23a5d8c)
   - PR: https://github.com/drew-valentine/deck-art-studio/pull/7 (label `semver:minor`)
-  - Part of EPIC: Support Alternative Card Layouts (see Backlog). Phases 2 (adventure/room) and 3 (landscape) remain in the epic in Backlog.
+  - Tagged: v1.36.0 (released 2026-07-03)
+  - Part of EPIC: Support Alternative Card Layouts (see Backlog). Phase 3 (landscape) + transform-indicator-pips polish + a DRY cleanup pass remain in the epic in Backlog.
   - Scope: Phase 0 (store `layout` + per-face data on import; backfill existing decks) merged with Phase 1 (per-face art generation + back-face composites + UI/extension/export support) as a single work item per Drew's approval.
   - Acceptance criteria:
     - [x] Given a DFC (transform/MDFC) is imported, when the deck is saved, then `layout` and the full `card_faces` array (per-face name, mana_cost, type_line, oracle_text, P/T, art_crop) are stored on the card entry; single-face cards are unchanged.
@@ -109,8 +114,6 @@
     - [x] Given a deck with DFCs, when export-manifest runs, then both front and back faces are included.
     - [x] Validation gate: verified in the actual browser via Playwright with local FLUX back-face generation and a fresh import containing transform/adventure cards; 194 unit tests pass.
   - Bugs fixed en route (both pre-existing): version endpoints returned 404 for "//" (multi-face) names; front-face text/art overrides were leaking onto back faces.
-
-## Done
 
 - [x] Planeswalker Frame Support | Priority: P1 | Completed: 2026-07-02 | Owner: drew-valentine
   - Branch merged via PR #5 (squash-merged to main as commit 4ee9899)
