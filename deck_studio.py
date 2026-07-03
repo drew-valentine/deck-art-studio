@@ -6325,6 +6325,12 @@ button:active, .btn:active { transform: scale(0.97); }
   pointer-events: none;
 }
 
+.fd-deck-mode-banner {
+  font-size: 0.78em; color: var(--text-dim); margin-bottom: 10px;
+  padding: 8px 10px; border: 1px solid var(--border); border-left: 2px solid var(--gold);
+  border-radius: 6px; background: var(--surface2);
+}
+.fd-deck-mode-banner b { color: var(--gold); }
 .fd-deck-style-hint {
   font-size: 0.72em; color: var(--text-muted); margin: 2px 0 6px;
 }
@@ -7585,6 +7591,7 @@ header .separator {
           <button class="deck-menu-item" onclick="closeDeckMenu();openAddCardModal();">Add Card</button>
           <button class="deck-menu-item" onclick="closeDeckMenu();addCardBack();">Add Card Back</button>
           <button class="deck-menu-item" onclick="closeDeckMenu();renameDeck();">Rename</button>
+          <button class="deck-menu-item" onclick="closeDeckMenu();clearSelection();switchPanelTab('frame');">Deck Frame Style</button>
           <div class="deck-menu-sep"></div>
           <a id="deckMenuExportZip" href="/api/export-all" class="deck-menu-item" style="text-decoration:none;">Export ZIP</a>
           <button class="deck-menu-item" onclick="closeDeckMenu();exportManifest();">Export for EDH Play</button>
@@ -7910,6 +7917,10 @@ header .separator {
 
         <!-- Canvas preview -->
         <div id="fdCanvasWrap" style="display:none;">
+          <div class="fd-deck-mode-banner" id="fdDeckModeBanner" style="display:none;">
+            Editing the <b>deck default frame</b> — used by new imports and any
+            card without its own saved frame. Select a card to edit just that card.
+          </div>
           <div class="fd-card-name" id="fdCardName"></div>
           <div class="face-toggle" id="fdFaceToggle" style="display:none;">
             <button class="face-toggle-btn active" id="fdFaceBtnFront" onclick="setFace('front')">Front</button>
@@ -7924,7 +7935,7 @@ header .separator {
           </div>
 
           <!-- Zoom controls -->
-          <div class="fd-zoom-bar">
+          <div class="fd-zoom-bar" id="fdZoomBar">
             <button class="fd-zoom-btn" id="fdZoomFit" title="Fit art to card">Fit</button>
             <button class="fd-zoom-btn" id="fdZoomOut" title="Zoom out">-</button>
             <input type="range" class="fd-zoom-slider" id="fdZoomSlider" min="30" max="300" value="100" step="1">
@@ -8066,13 +8077,13 @@ header .separator {
           <!-- Actions (sticky bottom) -->
           <div class="fd-actions">
             <button class="btn btn-gold btn-sm" id="frameSaveBtn" onclick="saveFrameSettings()" style="flex:1;" title="Save this card's frame (style, colors, art position) as a per-card override — the deck default is not changed">
-              Save Card Frame
+              Save Frame
             </button>
             <button class="btn btn-secondary btn-sm" id="frameApplyAllBtn" onclick="applyFrameToChecked()" title="Save these frame settings onto every checked card (per-card overrides)">
               Apply to Checked
             </button>
-            <button class="btn btn-secondary btn-sm" id="frameDeckDefaultBtn" onclick="setDeckDefaultFrame()" title="Make these settings the deck default — used by new imports and any card without its own saved frame">
-              Set Deck Default
+            <button class="btn btn-gold btn-sm" id="frameDeckDefaultBtn" onclick="setDeckDefaultFrame()" style="flex:1; display:none;" title="Save these settings as the deck default — used by new imports and any card without its own saved frame">
+              Save Deck Default
             </button>
           </div>
         </div>
@@ -10676,7 +10687,8 @@ function updateDeckStyleHint() {
   const deckStyle = _frameDeckSettings && _frameDeckSettings.style;
   const label = (deckStyle && _frameStyles[deckStyle]) ? _frameStyles[deckStyle].label : 'not set';
   hint.innerHTML = `Deck default: <b>${escapeHtml(label)}</b> — used by new imports ` +
-    `and cards without their own saved frame. Save Card Frame only affects this card.`;
+    `and cards without their own saved frame.` +
+    (selectedCard ? ' Save Frame only affects this card.' : '');
 }
 
 function renderLayerList() {
@@ -11360,13 +11372,40 @@ function updateFrameTab() {
   const emptyEl = document.getElementById('fdEmpty');
   const canvasWrap = document.getElementById('fdCanvasWrap');
 
+  if (emptyEl) emptyEl.style.display = 'none';
   syncFdFaceToggle(allCards.find(c => c.name === selectedCard));
   if (selectedCard) {
+    _setFdDeckMode(false);
     loadFrameDesignerForCard(selectedCard);
   } else {
-    if (emptyEl) emptyEl.style.display = '';
-    if (canvasWrap) canvasWrap.style.display = 'none';
+    // No card selected: the Frame tab edits the DECK DEFAULT frame
+    if (canvasWrap) canvasWrap.style.display = '';
+    _setFdDeckMode(true);
+    populateFrameFromSettings(_frameDeckSettings || {});
+    renderStyleStrip();
   }
+}
+
+function _setFdDeckMode(on) {
+  // Card-specific chrome hidden while editing the deck default
+  for (const id of ['fdCanvasContainer', 'fdZoomBar', 'fdTextSection', 'fdCardName']) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = on ? 'none' : '';
+  }
+  if (on) {
+    const ft = document.getElementById('fdFaceToggle');
+    const fh = document.getElementById('fdFaceHint');
+    if (ft) ft.style.display = 'none';
+    if (fh) fh.style.display = 'none';
+  }
+  const banner = document.getElementById('fdDeckModeBanner');
+  if (banner) banner.style.display = on ? '' : 'none';
+  const saveBtn = document.getElementById('frameSaveBtn');
+  const applyBtn = document.getElementById('frameApplyAllBtn');
+  const deckBtn = document.getElementById('frameDeckDefaultBtn');
+  if (saveBtn) saveBtn.style.display = on ? 'none' : '';
+  if (applyBtn) applyBtn.style.display = on ? 'none' : '';
+  if (deckBtn) deckBtn.style.display = on ? '' : 'none';
 }
 
 function resetTextOverrides() {
