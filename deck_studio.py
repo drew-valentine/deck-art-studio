@@ -6325,12 +6325,6 @@ button:active, .btn:active { transform: scale(0.97); }
   pointer-events: none;
 }
 
-.fd-deck-mode-banner {
-  font-size: 0.78em; color: var(--text-dim); margin-bottom: 10px;
-  padding: 8px 10px; border: 1px solid var(--border); border-left: 2px solid var(--gold);
-  border-radius: 6px; background: var(--surface2);
-}
-.fd-deck-mode-banner b { color: var(--gold); }
 .fd-deck-style-hint {
   font-size: 0.72em; color: var(--text-muted); margin: 2px 0 6px;
 }
@@ -7917,10 +7911,6 @@ header .separator {
 
         <!-- Canvas preview -->
         <div id="fdCanvasWrap" style="display:none;">
-          <div class="fd-deck-mode-banner" id="fdDeckModeBanner" style="display:none;">
-            Editing the <b>deck default frame</b> — used by new imports and any
-            card without its own saved frame. Select a card to edit just that card.
-          </div>
           <div class="fd-card-name" id="fdCardName"></div>
           <div class="face-toggle" id="fdFaceToggle" style="display:none;">
             <button class="face-toggle-btn active" id="fdFaceBtnFront" onclick="setFace('front')">Front</button>
@@ -11398,8 +11388,6 @@ function _setFdDeckMode(on) {
     if (ft) ft.style.display = 'none';
     if (fh) fh.style.display = 'none';
   }
-  const banner = document.getElementById('fdDeckModeBanner');
-  if (banner) banner.style.display = on ? '' : 'none';
   const saveBtn = document.getElementById('frameSaveBtn');
   const applyBtn = document.getElementById('frameApplyAllBtn');
   const deckBtn = document.getElementById('frameDeckDefaultBtn');
