@@ -228,5 +228,27 @@ class TestRotatedSplitHelpers:
         assert right['colors'] == ['U']
         # No layout/faces — halves render as normal mini cards
         assert 'layout' not in left and 'card_faces' not in left
-        # Combined-card art zoom must not leak onto halves
-        assert left['frame_overrides'] == {'frame_set': 'm15'}
+        # The FIRST half is the designer's "front": it keeps the card's own
+        # art pan/zoom; the second half doesn't inherit those
+        assert left['frame_overrides'] == {'frame_set': 'm15', 'art_zoom': 0.5}
+        assert right['frame_overrides'] == {'frame_set': 'm15'}
+
+    def test_split_second_half_uses_own_overrides(self):
+        from deck_studio import split_half_card
+        card = dict(self.FIRE_ICE)
+        card['frame_overrides_back'] = {'frame_set': 'etched',
+                                        'art_zoom': 1.3}
+        right = split_half_card(card, 1)
+        # A frame saved while viewing the second half renders on it
+        assert right['frame_overrides'] == {'frame_set': 'etched',
+                                            'art_zoom': 1.3}
+        # ...and never leaks onto the first half
+        left = split_half_card(card, 0)
+        assert left['frame_overrides']['frame_set'] == 'm15'
+
+    def test_split_flavor_text_renders_on_first_half(self):
+        from deck_studio import split_half_card
+        card = dict(self.FIRE_ICE)
+        card['flavor_text'] = 'Which do you want first?'
+        assert split_half_card(card, 0)['flavor_text'] == 'Which do you want first?'
+        assert split_half_card(card, 1)['flavor_text'] == ''

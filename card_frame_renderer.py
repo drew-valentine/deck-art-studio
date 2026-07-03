@@ -4946,13 +4946,17 @@ _BATTLE_STYLE_ALIASES = {'msa': 'mysticalArchive', 'artdeco': 'sncArtDeco',
 
 
 def _battle_frame_dir(fs: dict):
-    """Resolve the frame-asset directory for a battle, or None for SVG styles."""
+    """Resolve the frame-asset directory for a battle, or None when the
+    style has no band metadata (SVG styles, planeswalker, unknown) — those
+    fall back to the dedicated battle chrome. m15 band coordinates are only
+    used for the actual default m15 frame, never to slice another style's
+    very different chrome."""
     v = fs.get('frame_set') or fs.get('layout') or ''
     v = _BATTLE_STYLE_ALIASES.get(v, v)
     if v in _BATTLE_STYLE_BANDS:
         return v
-    if fs.get('mode') == 'image':
-        return 'm15'  # image-mode default frame
+    if fs.get('mode') == 'image' and not v:
+        return 'm15'  # image mode with no explicit frame set = m15 default
     return None
 
 

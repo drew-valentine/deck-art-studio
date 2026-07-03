@@ -468,14 +468,15 @@ def load_data():
         import urllib.request as _urlreq
         back_backfilled = 0
         for card in cards_db:
-            if not is_dfc(card):
+            if not has_second_art_face(card):
                 continue
             name = card['name']
             bslug = name_to_slug(face_key(name, 'back'))
             braw = RAW_ART_DIR / f"{bslug}.png"
             bcomp = COMPOSITE_DIR / f"{bslug}.png"
 
-            # Download the back face's Scryfall art crop once
+            # Download the second face's Scryfall art crop once (DFC backs
+            # always have one; split halves only when Scryfall provides it)
             back_url = card['card_faces'][1].get('art_crop_url', '')
             dest = scryfall_dir / f"{bslug}.jpg"
             if back_url and not dest.exists():
@@ -487,6 +488,30 @@ def load_data():
                         dest.write_bytes(resp.read())
                 except Exception as e:
                     print(f"  [backfill] Back art failed for {name}: {e}")
+
+            if is_rotated_split(card):
+                # Splits have ONE combined composite — seed the second
+                # half's raw art and re-render the combined card
+                if braw.exists():
+                    continue
+                sf_path = next((scryfall_dir / f"{bslug}{ext}"
+                                for ext in ('.jpg', '.png', '.jpeg')
+                                if (scryfall_dir / f"{bslug}{ext}").exists()), None)
+                if not sf_path:
+                    continue
+                try:
+                    img = Image.open(sf_path).convert('RGB')
+                    RAW_ART_DIR.mkdir(parents=True, exist_ok=True)
+                    img.save(braw, 'PNG')
+                    front_art = _front_art_with_fallback(name)
+                    if front_art is not None:
+                        render_composite_for_card(
+                            card, front_art, COMPOSITE_DIR / f"{name_to_slug(name)}.png",
+                            deck_fs=active_deck_meta.get('frame_settings'))
+                    back_backfilled += 1
+                except Exception as e:
+                    print(f"  [backfill] Split half art failed for {name}: {e}")
+                continue
 
             if braw.exists() and bcomp.exists():
                 continue
@@ -617,15 +642,24 @@ def has_second_art_face(card) -> bool:
 
 def split_half_card(card, idx):
     """Clean card dict for ONE half of a rotated split — renders as a normal
-    mini card (no layout/card_faces, so no column treatment)."""
+    mini card (no layout/card_faces, so no column treatment).
+
+    Overrides: the FIRST half is what the designer edits as the "front"
+    (card-level frame_overrides, including art pan/zoom and text overrides);
+    the SECOND half has its own set (frame_overrides_back), falling back to
+    the front's style-level settings when it has none."""
     faces = card.get('card_faces') or []
     if len(faces) <= idx:
         return None
     face = faces[idx]
     merged = dict(card)
     for k in ('name', 'mana_cost', 'type_line', 'oracle_text', 'power',
-              'toughness', 'loyalty', 'defense', 'flavor_text', 'card_type'):
+              'toughness', 'loyalty', 'defense', 'card_type'):
         merged[k] = face.get(k)
+    # Card-level flavor (saved/generated for the card) renders on the first
+    # half when the face itself has none — never silently dropped.
+    merged['flavor_text'] = (face.get('flavor_text')
+                             or (card.get('flavor_text') if idx == 0 else ''))
     # Split faces carry no colors on Scryfall — derive each half's frame
     # color from its own mana cost so Fire is red and Ice is blue.
     cost_colors = sorted({c for c in (face.get('mana_cost') or '') if c in 'WUBRG'},
@@ -637,16 +671,42 @@ def split_half_card(card, idx):
     if not merged.get('card_type'):
         from scryfall_client import normalize_card_type
         merged['card_type'] = normalize_card_type(merged.get('type_line') or '')
-    # Style-level frame overrides only — text/art overrides were authored
-    # against the combined card, not a half.
-    overrides = dict(card.get('frame_overrides') or {})
-    for k in ('text_overrides', 'art_offset', 'art_zoom'):
-        overrides.pop(k, None)
-    merged['frame_overrides'] = overrides
+    if idx == 1 and card.get('frame_overrides_back') is not None:
+        merged['frame_overrides'] = card['frame_overrides_back']
+    else:
+        overrides = dict(card.get('frame_overrides') or {})
+        if idx == 1:
+            # Front-authored per-card bits don't apply to the second half
+            for k in ('text_overrides', 'art_offset', 'art_zoom'):
+                overrides.pop(k, None)
+        merged['frame_overrides'] = overrides
     merged.pop('frame_overrides_back', None)
     merged.pop('card_faces', None)
     merged.pop('layout', None)
     return merged
+
+
+def _front_art_with_fallback(card_name, raw_art_dir=None):
+    """Front-slug raw art path, seeding from the deck's Scryfall art when the
+    raw is missing. Returns a Path or None."""
+    _raw = Path(raw_art_dir) if raw_art_dir else RAW_ART_DIR
+    slug = name_to_slug(card_name)
+    raw = _raw / f"{slug}.png"
+    if raw.exists():
+        return raw
+    sf_dir = DECKS_DIR / active_deck_id / "scryfall_art" if active_deck_id else None
+    if sf_dir:
+        for ext in ('.jpg', '.png', '.jpeg'):
+            p = sf_dir / f"{slug}{ext}"
+            if p.exists():
+                try:
+                    img = Image.open(p).convert('RGB')
+                    _raw.mkdir(parents=True, exist_ok=True)
+                    img.save(raw, 'PNG')
+                    return raw
+                except Exception:
+                    return None
+    return None
 
 
 def render_composite_for_card(card, art_path, comp_path, deck_fs=None,
@@ -1912,9 +1972,12 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
 
         if is_rotated_split(card):
             # Either half regenerating re-renders the COMBINED composite,
-            # stored at the front slug
-            front_art = _front_raw if _front_raw.exists() else raw_path
-            render_composite_for_card(card, front_art, _front_comp,
+            # stored at the front slug. A missing front raw seeds from the
+            # deck's Scryfall art — never from the just-generated second
+            # half, which would duplicate its art onto the first.
+            front_art = (_front_raw if _front_raw.exists()
+                         else _front_art_with_fallback(card_name, _raw_art_dir))
+            render_composite_for_card(card, front_art or raw_path, _front_comp,
                                       deck_fs=active_deck_meta.get('frame_settings'),
                                       raw_art_dir=_raw_art_dir)
         else:
@@ -2558,8 +2621,9 @@ def api_import_create():
                 slug = name_to_slug(card['name'])
                 _download_art(card.get('art_crop_url', ''),
                               scryfall_dir / f"{slug}.jpg")
-                # Double-faced cards: also fetch the back face's art
-                if is_dfc(card):
+                # Cards with a second art unit (DFC backs, split right
+                # halves): also fetch that face's art when Scryfall has one
+                if has_second_art_face(card):
                     bslug = name_to_slug(face_key(card['name'], 'back'))
                     _download_art(card['card_faces'][1].get('art_crop_url', ''),
                                   scryfall_dir / f"{bslug}.jpg")
@@ -3641,7 +3705,10 @@ def regenerate_prompts_from_inspiration(deck_id):
     # so the LLM describes the actual back-face scene.
     units = []
     for c in cards:
-        units.append((c['name'], c))
+        # Rotated splits: the front unit describes ONLY the first half —
+        # the combined card's oracle text would mix both halves' scenes
+        front = split_half_card(c, 0) if is_rotated_split(c) else c
+        units.append((c['name'], front))
         if has_second_art_face(c):
             second = (split_half_card(c, 1) if is_rotated_split(c)
                       else back_face_card(c))
@@ -4708,7 +4775,14 @@ def generate_batch():
 
         def _front_incomplete(name):
             s = generation_status.get(name, {})
-            return s.get('status') != 'complete' or not s.get('has_composite')
+            if s.get('status') != 'complete' or not s.get('has_composite'):
+                return True
+            # Rotated splits: the combined composite existing doesn't mean
+            # the FIRST half's art was ever generated
+            card = next((c for c in cards_db if c['name'] == name), None)
+            if card and is_rotated_split(card):
+                return not s.get('has_raw_art')
+            return False
 
         # Only generate the faces that are actually missing — a DFC whose
         # front is done but back is absent must NOT re-roll the approved front
@@ -4938,12 +5012,16 @@ def recomposite_single():
     # Rotated splits: one COMBINED composite regardless of requested face
     if is_rotated_split(card):
         front_slug = name_to_slug(card_name)
-        front_raw = RAW_ART_DIR / f"{front_slug}.png"
-        if not front_raw.exists():
+        front_raw = _front_art_with_fallback(card_name)
+        if front_raw is None:
             return jsonify({'error': 'No raw art exists for this card — generate art first'}), 400
         try:
-            render_composite_for_card(card, front_raw,
-                                      COMPOSITE_DIR / f"{front_slug}.png",
+            comp_path = COMPOSITE_DIR / f"{front_slug}.png"
+            if data.get('archive_version', False) and comp_path.exists():
+                archived = _archive_art(card_name)
+                if archived:
+                    print(f"  [{card_name}] Archived composition as v{archived['version']}")
+            render_composite_for_card(card, front_raw, comp_path,
                                       deck_fs=active_deck_meta.get('frame_settings'))
             with generation_lock:
                 generation_status[card_name] = {
@@ -5042,8 +5120,8 @@ def recomposite_all():
     for card in target_cards:
         if is_rotated_split(card):
             slug = name_to_slug(card['name'])
-            raw_path = RAW_ART_DIR / f"{slug}.png"
-            if raw_path.exists():
+            raw_path = _front_art_with_fallback(card['name'])
+            if raw_path is not None:
                 try:
                     render_composite_for_card(card, raw_path,
                                               COMPOSITE_DIR / f"{slug}.png",
@@ -11508,14 +11586,25 @@ async function applyFrameToChecked() {
   // overrides, preserving that card's own text overrides and art position.
   // The deck default is untouched (use Set Deck Default for that).
   for (const n of checkedCards) {
-    if (n === selectedCard) continue;  // handled below with live art state
     const c = allCards.find(x => x.name === n);
-    const merged = { ...((c && c.frame_overrides) || {}), ...settings };
-    await fetch('/api/cards/frame-overrides', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ card_name: n, frame_overrides: merged }),
-    }).catch(() => {});
+    if (n !== selectedCard) {  // selected card handled below with live art state
+      const merged = { ...((c && c.frame_overrides) || {}), ...settings };
+      await fetch('/api/cards/frame-overrides', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ card_name: n, frame_overrides: merged }),
+      }).catch(() => {});
+    }
+    // Second faces with their OWN override set would otherwise keep the old
+    // style (back_face_card/split_half_card prefer that set when present)
+    if (c && c.back_frame_overrides && Object.keys(c.back_frame_overrides).length) {
+      const mergedBack = { ...c.back_frame_overrides, ...settings };
+      await fetch('/api/cards/frame-overrides', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ card_name: n + ' [back]', frame_overrides: mergedBack }),
+      }).catch(() => {});
+    }
   }
 
   // Persist the selected card's live state (incl. art pan/zoom) BEFORE
