@@ -11,7 +11,7 @@
     - Generation: one art image per card name. FLUX accepts arbitrary width/height; deck-level `art_orientation` (portrait/landscape) already exists for art aspect.
     - Extension (`extension/content.js`): replaces edhplay.com images by Scryfall UUID from image URL. DFC front and back share the same UUID (URLs differ by /front/ vs /back/), so back faces would currently be replaced with front art.
   - **Phasing (subtasks):**
-    - Phases 0, 1 + 2 — **SHIPPED in v1.36.0** (2026-07-03, PR #7 squash-merged as commit 23a5d8c, owner drew-valentine). Phase 3a — **SHIPPED in v1.37.0** (2026-07-03, PR #8 squash-merged as commit dac763a, owner drew-valentine). Both moved to Done. Phase 3b (authentic rotated split cards with per-half art) — **IN PROGRESS** (started 2026-07-03, branch `feature/split-rotated`, owner drew-valentine; see In Progress). Remaining epic scope after 3b: the transform-indicator-pips polish, and a DRY cleanup pass (below).
+    - Phases 0, 1 + 2 — **SHIPPED in v1.36.0** (2026-07-03, PR #7 squash-merged as commit 23a5d8c, owner drew-valentine). Phase 3a — **SHIPPED in v1.37.0** (2026-07-03, PR #8 squash-merged as commit dac763a, owner drew-valentine). Both moved to Done. Phase 3b (authentic rotated split cards with per-half art) — **IN REVIEW** (completed 2026-07-03, branch `feature/split-rotated`, PR #9 `semver:minor`, owner drew-valentine; see In Review). **Rendering scope of the epic is now complete once 3b merges — DFCs, adventures, rooms, battles, and rotated splits all render authentically.** Remaining backlog items are polish only: the transform-indicator-pips polish, a DRY cleanup pass (below), and the "PIP cards" clarification still owed by the requester.
     - [ ] Transform/MDFC face-indicator pips on frames | polish, carried from Phase 1 — a dedicated transform-indicator icon on the frame (front/back face indicator). Back-face composites currently render with the standard frame for the back face's own card data; a face-indicator icon was deferred out of Phase 1.
     - Phase 3 split into two parts (Drew approved starting 3a on 2026-07-03):
       - Phase 3a — Battle cards (landscape sieges) — **SHIPPED in v1.37.0** (see Done). Battle fronts render a dedicated landscape battle frame rotated 90° into the standard portrait composite; battles are Scryfall `layout=transform`, so the v1.36.0 DFC machinery covered faces/toggle/extension automatically.
@@ -82,18 +82,20 @@
 
 ## In Progress
 
-- [ ] Alt Layouts Phase 3b — Authentic rotated split cards (per-half art) | Priority: P2 | Started: 2026-07-03 | Owner: drew-valentine
-  - Branch: `feature/split-rotated`
-  - Part of EPIC: Support Alternative Card Layouts (see Backlog). Drew approved starting Phase 3b on 2026-07-03. Fidelity upgrade — split cards already render usably today via the Phase 2 portrait side-by-side treatment.
-  - Acceptance criteria (Given/When/Then):
-    - [ ] Given a classic split card (`layout=split` WITHOUT "Room" in the type line, e.g. Fire // Ice), when the composite is rendered, then each half renders as a mini card (own title/mana/type/rules/art) at ~70% scale, both rotated 90° into the standard portrait composite — like real printed splits; Rooms keep the v1.36.0 portrait side-by-side treatment.
-    - [ ] Given either half of a rotated split, when art is generated, then each half has its own AI art + prompt + version history (right half reuses the existing second-face machinery: "<name> [back]" keys / "__back" slugs).
-    - [ ] Given either half is (re)generated, when generation completes, then the combined composite is re-rendered; batch generation covers both halves without regenerating finished ones.
-    - [ ] Given a rotated split is selected in the UI, when the face toggle appears, then it is labeled with the half names (not Front/Back) and the hero always shows the combined card.
-    - [ ] Known limitation (documented): Frame Designer preview for rotated splits falls back to the column layout; the final composite is authoritative.
-    - [ ] Validation gate: Playwright + live FLUX generation of both halves of a real split card + pytest.
-
 ## In Review
+
+- [ ] Alt Layouts Phase 3b — Authentic rotated split cards (per-half art) | Priority: P2 | Review Started: 2026-07-03 | Owner: drew-valentine
+  - Branch: `feature/split-rotated`
+  - PR: https://github.com/drew-valentine/deck-art-studio/pull/9 (label `semver:minor`)
+  - Completed: 2026-07-03 — awaiting review/merge.
+  - Part of EPIC: Support Alternative Card Layouts (see Backlog). Drew approved starting Phase 3b on 2026-07-03. Fidelity upgrade — split cards already render usably today via the Phase 2 portrait side-by-side treatment.
+  - Acceptance criteria (Given/When/Then) — all met:
+    - [x] Given a classic split card (`layout=split` WITHOUT "Room" in the type line, e.g. Fire // Ice), when the composite is rendered, then each half renders as a mini card (own title/mana/type/rules/art) at ~70% scale, both rotated 90° into the standard portrait composite — like real printed splits, with per-half frame colors (Fire red / Ice blue); Rooms keep the v1.36.0 portrait side-by-side treatment (regression-checked, unchanged).
+    - [x] Given either half of a rotated split, when art is generated, then each half has its own AI art + prompt + version history (right half reuses the existing second-face machinery: "<name> [back]" keys / "__back" slugs).
+    - [x] Given either half is (re)generated, when generation completes, then the combined composite is re-rendered from either half; batch generation covers both halves without regenerating finished ones.
+    - [x] Given a rotated split is selected in the UI, when the face toggle appears, then it is labeled with the half names (not Front/Back) and the hero always shows the combined card.
+    - [x] Known limitation (documented): Frame Designer preview for rotated splits falls back to the column layout; the final composite is authoritative.
+    - [x] Validation gate: Playwright + live FLUX generation of both halves of a real split card + 208 unit tests pass.
 
 ## Done
 
