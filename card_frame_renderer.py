@@ -475,7 +475,10 @@ def _migrate_v1_to_v2(settings: dict) -> dict:
     return {
         'style': style_key,
         'layers': layers,
-        'use_card_colors': settings.get('use_card_colors', True),
+        # No explicit choice in v1 data: the presence of color_overrides
+        # implies manual — v1 always honored them.
+        'use_card_colors': settings.get(
+            'use_card_colors', not settings.get('color_overrides')),
         'color_overrides': settings.get('color_overrides', {}),
     }
 
@@ -551,6 +554,18 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None,
     render = dict(DEFAULT_RENDER_PARAMS)
     render.update(style.get('render', {}))
 
+    # ── Auto-vs-manual colors: card override wins over deck ──
+    # A card saved with Auto must not inherit the deck's manual colors (that
+    # painted its title black while the designer preview showed auto/white).
+    # When NEITHER level carries the key — legacy v1 data, bare API payloads —
+    # the presence of color_overrides implies manual: those callers always
+    # had their colors honored.
+    use_card_colors = card_overrides.get(
+        'use_card_colors', deck_settings.get('use_card_colors'))
+    if use_card_colors is None:
+        use_card_colors = not (deck_settings.get('color_overrides')
+                               or card_overrides.get('color_overrides'))
+
     # ── Build result ──
     result = {
         'style': style_key,
@@ -559,11 +574,7 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None,
         'layout': style.get('layout'),
         'layers': layers,
         'render': render,
-        # Auto-vs-manual colors: card override wins over deck (a card saved
-        # with Auto must not inherit the deck's manual colors — that painted
-        # its title black while the designer preview showed auto/white).
-        'use_card_colors': card_overrides.get(
-            'use_card_colors', deck_settings.get('use_card_colors', True)),
+        'use_card_colors': use_card_colors,
         'color_overrides': {},
         # Text overrides: when the passed (live designer) settings carry a
         # text_overrides key, they are AUTHORITATIVE — merging saved values

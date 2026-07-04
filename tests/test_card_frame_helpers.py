@@ -306,6 +306,31 @@ class TestResolveFrameSettings:
         assert result['use_card_colors'] is False
         assert result['color_overrides']['text'] == '#000000'
 
+    def test_keyless_overrides_imply_manual(self):
+        # No use_card_colors key at EITHER level (legacy v1 data, bare API
+        # payloads): the presence of color_overrides implies manual — those
+        # callers always had their colors honored.
+        card = {'name': 'Test', 'frame_overrides': {}}
+        deck = {'color_overrides': {'text': '#000000'}}
+        result = resolve_frame_settings(card, deck)
+        assert result['use_card_colors'] is False
+        assert result['color_overrides']['text'] == '#000000'
+
+    def test_keyless_live_payload_overrides_honored(self):
+        # Bare preview payload: color_overrides without the flag still render
+        card = {'name': 'Test',
+                'frame_overrides': {'style': 'godzilla', 'use_card_colors': True}}
+        live = {'color_overrides': {'text': '#000000'}}
+        result = resolve_frame_settings(card, live, live=True)
+        assert result['use_card_colors'] is False
+        assert result['color_overrides']['text'] == '#000000'
+
+    def test_keyless_without_overrides_defaults_auto(self):
+        card = {'name': 'Test', 'frame_overrides': {'style': 'm15'}}
+        result = resolve_frame_settings(card, {'style': 'clean'})
+        assert result['use_card_colors'] is True
+        assert result['color_overrides'] == {}
+
 
 # ---------------------------------------------------------------------------
 # Split text layouts (adventure / split / room)
