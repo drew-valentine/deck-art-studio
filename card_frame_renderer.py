@@ -559,7 +559,11 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None,
         'layout': style.get('layout'),
         'layers': layers,
         'render': render,
-        'use_card_colors': deck_settings.get('use_card_colors', True),
+        # Auto-vs-manual colors: card override wins over deck (a card saved
+        # with Auto must not inherit the deck's manual colors — that painted
+        # its title black while the designer preview showed auto/white).
+        'use_card_colors': card_overrides.get(
+            'use_card_colors', deck_settings.get('use_card_colors', True)),
         'color_overrides': {},
         # Text overrides: when the passed (live designer) settings carry a
         # text_overrides key, they are AUTHORITATIVE — merging saved values
@@ -588,11 +592,15 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None,
             'rules_font_size', deck_settings.get('rules_font_size', None)),
     }
 
-    # Color overrides: deck, then card on top
-    if deck_settings.get('color_overrides'):
-        result['color_overrides'].update(deck_settings['color_overrides'])
-    if card_overrides.get('color_overrides'):
-        result['color_overrides'].update(card_overrides['color_overrides'])
+    # Color overrides: deck, then card on top — but ONLY when the effective
+    # choice is manual. The renderer applies color_overrides unconditionally
+    # (and disables showcase treatments when any are present), so an Auto
+    # card must resolve to NO overrides even if the deck default has some.
+    if not result['use_card_colors']:
+        if deck_settings.get('color_overrides'):
+            result['color_overrides'].update(deck_settings['color_overrides'])
+        if card_overrides.get('color_overrides'):
+            result['color_overrides'].update(card_overrides['color_overrides'])
 
     # Art position: per-card only
     if card_overrides.get('art_offset'):
