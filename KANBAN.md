@@ -77,6 +77,18 @@
 
 ## In Progress
 
+- [ ] BUG: Showcase (godzilla) frame — manual Colors > Border only recolors the rules box; title/type bars keep baked accent color | Priority: P1 | Started: 2026-07-05 | Owner: drew-valentine
+  - Branch: `fix/showcase-bar-border-color`
+  - Symptom: On the Showcase (godzilla) frame, setting a manual Colors > Border override only recolors the rules-box border. The title bar and type bar keep the baked-in accent color (e.g. blue on a blue card), so they mismatch the recolored rules border — visible in BOTH the WYSIWYG designer preview and the final composites.
+  - Root cause: The rules-box border is drawn dynamically in `_compose_image_frame_base` (honors `color_overrides.border`), but the title-bar and type-bar outlines are baked into the per-color iko frame PNG assets and are never recolored.
+  - Planned fix: Derive an accent mask from the `u.png` asset (unambiguous blue chroma; all iko frames share identical geometry), then composite the override color over any frame's accent pixels — preserving shading / anti-aliasing — before the type-bar relocation.
+  - Acceptance criteria (Given/When/Then):
+    - [ ] Given a Showcase (godzilla) card with a manual Colors > Border override, when the WYSIWYG designer preview renders, then the title bar, type bar, and rules-box border all show the override color (not the baked accent).
+    - [ ] Given the same card, when the final composite is rendered, then the title bar, type bar, and rules-box border all match the override color (parity with the designer preview).
+    - [ ] Given a Showcase card on ANY color's iko frame (WUBRG/gold/artifact/colorless/land), when the override is applied, then only the accent chrome recolors — art, shading, and anti-aliasing are preserved (no flat/aliased fill).
+    - [ ] Given no manual Border override, when the card renders, then the frame keeps its baked accent color (no regression).
+    - [ ] Validation gate: Playwright browser verification on a blue Showcase card — apply a Border override, confirm the title/type bars and rules border match in both the designer preview and the saved composite; full pytest suite passes.
+
 ## In Review
 
 ## Done

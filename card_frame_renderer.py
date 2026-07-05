@@ -4103,6 +4103,42 @@ def _create_abu_text_svg(card: CardData, fs: dict) -> str:
     return '\n'.join(svg)
 
 
+_IKO_ACCENT_MASK = None  # (mask 0..1, shade) — computed once, see below
+
+
+def _iko_accent_mask():
+    """Soft mask of the iko frame's baked accent trim (title/type bar
+    outlines and rails), derived from the U frame whose blue accent chroma
+    is unambiguous. All iko color frames share identical geometry, so the
+    mask transfers to any of them — including grayscale-accent frames
+    (W/B/A) where color matching alone can't isolate the trim. Returns
+    (mask, shade) float arrays, or None if the asset is unavailable.
+    'shade' preserves the trim's own shading/anti-aliasing when painting
+    a new color over it."""
+    global _IKO_ACCENT_MASK
+    if _IKO_ACCENT_MASK is None:
+        import numpy as np
+        u = _load_frame_image('iko', 'u')
+        if u is None:
+            return None
+        if u.size != (CARD_WIDTH, CARD_HEIGHT):
+            u = u.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+        arr = np.asarray(u, dtype=float)
+        rgb, alpha = arr[..., :3], arr[..., 3]
+        accent = np.array((0.0, 119.0, 195.0))  # the U trim blue
+        a_dir = accent / np.linalg.norm(accent)
+        norms = np.linalg.norm(rgb, axis=-1)
+        cos = (rgb @ a_dir) / (norms + 1e-6)
+        sat = rgb.max(-1) - rgb.min(-1)
+        # Soft thresholds keep the anti-aliased trim edges smooth
+        m_cos = np.clip((cos - 0.96) / (0.985 - 0.96), 0, 1)
+        m_sat = np.clip((sat - 20) / (60 - 20), 0, 1)
+        mask = m_cos * m_sat * (alpha / 255.0)
+        shade = np.clip(norms / np.linalg.norm(accent), 0, 1.6)
+        _IKO_ACCENT_MASK = (mask, shade)
+    return _IKO_ACCENT_MASK
+
+
 def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Image.Image:
     """Frame PNG + P/T box (gradient-aware), WITHOUT text.
 
@@ -4183,6 +4219,35 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
     # the user approved ("much much better").
     if frame_set == 'iko':
         import numpy as np
+        co = fs.get('color_overrides', {}) or {}
+
+        def _rgb(hexstr, default):
+            if not hexstr:
+                return default
+            h = hexstr.lstrip('#')
+            try:
+                return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+            except (ValueError, IndexError):
+                return default
+
+        # Colors > Border recolors the frame's BAKED accent trim too (title
+        # and type bar outlines), not just the dynamically drawn rules box —
+        # otherwise the bars keep the card color's trim (e.g. blue) and
+        # mismatch the overridden rules border. Applied BEFORE the type-bar
+        # relocation below so the mask (derived from the unshifted asset)
+        # stays aligned.
+        _bar_target = _rgb(co.get('border'), None)
+        if _bar_target is not None:
+            _am = _iko_accent_mask()
+            if _am is not None:
+                _mask, _shade = _am
+                _fa = np.asarray(result, dtype=float)
+                _overlay = np.clip(
+                    np.array(_bar_target, dtype=float) * _shade[..., None], 0, 255)
+                _mm = _mask[..., None]
+                _fa[..., :3] = _overlay * _mm + _fa[..., :3] * (1 - _mm)
+                result = Image.fromarray(_fa.astype(np.uint8), 'RGBA')
+
         # Taller text area (user request: parity with the other styles): the
         # asset's baked type bar (y726-804) is relocated 82px up over the art
         # and the cream box extends into the vacated space — text band grows
@@ -4204,17 +4269,6 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         # Honor the frame designer's settings, falling back to the approved
         # defaults when nothing is set: Colors > Textbox (box fill), Colors >
         # Border (box border), and the text-box layer opacity (transparency).
-        co = fs.get('color_overrides', {}) or {}
-
-        def _rgb(hexstr, default):
-            if not hexstr:
-                return default
-            h = hexstr.lstrip('#')
-            try:
-                return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
-            except (ValueError, IndexError):
-                return default
-
         box_fill = _rgb(co.get('textbox'), (245, 239, 225))
         box_border = _rgb(co.get('border'), tuple(accent_l))
         box_border_r = _rgb(co.get('border'), tuple(accent_r))

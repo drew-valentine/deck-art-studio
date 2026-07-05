@@ -489,3 +489,41 @@ class TestBattleFrame:
         composite_card(self.BATTLE, str(art), None, str(out))
         img = Image.open(out)
         assert img.size == (CARD_WIDTH, CARD_HEIGHT)  # portrait, like real prints
+
+
+class TestIkoAccentRecolor:
+    CARD = {
+        'name': 'Test Rift',
+        'mana_cost': '{1}{U}',
+        'type_line': 'Instant',
+        'oracle_text': 'Draw a card.',
+        'colors': ['U'], 'color_identity': ['U'],
+        'card_type': 'instant',
+        'frame_overrides': {},
+    }
+
+    @staticmethod
+    def _title_trim_pixel(fs):
+        import io
+        from PIL import Image
+        from card_frame_renderer import render_frame_layer
+        png = render_frame_layer(dict(TestIkoAccentRecolor.CARD), fs)
+        img = Image.open(io.BytesIO(png)).convert('RGB')
+        return img.getpixel((375, 47))  # title bar outline trim
+
+    def test_border_override_recolors_title_bar_trim(self):
+        # Colors > Border must recolor the BAKED title/type bar trim, not
+        # just the drawn rules box — a blue card's bars stayed blue while
+        # the rules border followed the override.
+        fs = resolve_frame_settings(dict(self.CARD), {
+            'style': 'godzilla', 'use_card_colors': False,
+            'color_overrides': {'border': '#d9cc71'},
+        })
+        r, g, b = self._title_trim_pixel(fs)
+        assert r > 140 and g > 120 and b < r, f'trim not gold: {(r, g, b)}'
+
+    def test_no_override_keeps_baked_trim(self):
+        fs = resolve_frame_settings(dict(self.CARD),
+                                    {'style': 'godzilla', 'use_card_colors': True})
+        r, g, b = self._title_trim_pixel(fs)
+        assert b > r, f'blue card trim should stay blue: {(r, g, b)}'
