@@ -527,3 +527,33 @@ class TestIkoAccentRecolor:
                                     {'style': 'godzilla', 'use_card_colors': True})
         r, g, b = self._title_trim_pixel(fs)
         assert b > r, f'blue card trim should stay blue: {(r, g, b)}'
+
+    @pytest.mark.parametrize('mana,colors,ctype', [
+        ('{1}{W}', ['W'], 'creature'),      # white: grayscale accent
+        ('{1}{U}', ['U'], 'instant'),
+        ('{1}{B}', ['B'], 'creature'),      # black: near-invisible accent
+        ('{1}{R}', ['R'], 'sorcery'),
+        ('{1}{G}', ['G'], 'creature'),
+        ('{W}{U}{B}', ['W', 'U', 'B'], 'creature'),  # gold frame
+        ('{2}', [], 'artifact'),            # artifact fallback frame
+        ('', [], 'land'),                   # land frame
+    ])
+    def test_border_override_recolors_every_frame_color(self, mana, colors, ctype):
+        # The accent mask is derived from the U frame and transferred — it
+        # must recolor the trim on EVERY iko frame variant, including the
+        # grayscale-accent ones (W/B/A) where color matching can't isolate it.
+        card = dict(self.CARD, mana_cost=mana, colors=colors,
+                    color_identity=colors, card_type=ctype,
+                    type_line=ctype.title())
+        fs = resolve_frame_settings(card, {
+            'style': 'godzilla', 'use_card_colors': False,
+            'color_overrides': {'border': '#d9cc71'},
+        })
+        import io
+        from PIL import Image
+        from card_frame_renderer import render_frame_layer
+        png = render_frame_layer(card, fs)
+        img = Image.open(io.BytesIO(png)).convert('RGB')
+        r, g, b = img.getpixel((375, 47))
+        assert r > 140 and g > 120 and b < r, \
+            f'{colors or ctype}: trim not gold: {(r, g, b)}'
