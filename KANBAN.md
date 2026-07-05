@@ -79,12 +79,15 @@
 
 ## In Review
 
-- [ ] BUG: Showcase (godzilla) frame — manual Colors > Border only recolors the rules box; title/type bars keep baked accent color | Priority: P1 | Review Started: 2026-07-05 | Owner: drew-valentine
-  - Branch: `fix/showcase-bar-border-color` — committed as 1870b75, opened as PR #12 (awaiting approval)
+## Done
+
+- [x] BUG: Showcase (godzilla) frame — manual Colors > Border only recolors the rules box; title/type bars keep baked accent color | Priority: P1 | Completed: 2026-07-05 | Owner: drew-valentine
+  - Branch: `fix/showcase-bar-border-color` merged via PR #12 (squash-merged to main as commit ffb60c4)
   - PR: https://github.com/drew-valentine/deck-art-studio/pull/12
+  - Tagged: v1.38.3 (released 2026-07-05) — https://github.com/drew-valentine/deck-art-studio/releases/tag/v1.38.3
   - Symptom: On the Showcase (godzilla) frame, setting a manual Colors > Border override only recolors the rules-box border. The title bar and type bar keep the baked-in accent color (e.g. blue on a blue card), so they mismatch the recolored rules border — visible in BOTH the WYSIWYG designer preview and the final composites.
   - Root cause: The rules-box border is drawn dynamically in `_compose_image_frame_base` (honors `color_overrides.border`), but the title-bar and type-bar outlines are baked into the per-color iko frame PNG assets and are never recolored.
-  - Planned fix: Derive an accent mask from the `u.png` asset (unambiguous blue chroma; all iko frames share identical geometry), then composite the override color over any frame's accent pixels — preserving shading / anti-aliasing — before the type-bar relocation.
+  - Fix: Derive an accent mask from the `u.png` asset (unambiguous blue chroma; all iko frames share identical geometry), then composite the override color over any frame's accent pixels — preserving shading / anti-aliasing — before the type-bar relocation.
   - Acceptance criteria (Given/When/Then):
     - [x] Given a Showcase (godzilla) card with a manual Colors > Border override, when the WYSIWYG designer preview renders, then the title bar, type bar, and rules-box border all show the override color (not the baked accent).
     - [x] Given the same card, when the final composite is rendered, then the title bar, type bar, and rules-box border all match the override color (parity with the designer preview).
@@ -92,8 +95,6 @@
     - [x] Given no manual Border override, when the card renders, then the frame keeps its baked accent color (no regression).
     - [x] Validation gate: Playwright browser verification on a blue Showcase card — apply a Border override, confirm the title/type bars and rules border match in both the designer preview and the saved composite; full pytest suite passes.
   - Validation status: **PASSED (2026-07-05)** — 229 unit tests pass. AC3 is now covered by a new parametrized regression test rendering all 8 frame variants (WUBRG, gold, artifact, land) through `render_frame_layer` with the border override and asserting gold trim (committed as 4ede8ba on PR #12); AC4 is covered by the existing `test_no_override_keeps_baked_trim` regression asserting the blue card's trim stays blue without an override. Playwright browser verification on Cyclonic Rift (demo-alela) confirmed matching gold trim on the title bar, type bar, and rules box against the gold swatch; the `/api/preview-frame` composite path renders identically.
-
-## Done
 
 - [x] BUG: Frame editor Auto color choice ignored in saved composites (title renders black instead of auto/white) | Priority: P1 | Completed: 2026-07-05 | Owner: drew-valentine
   - Branch: `fix/frame-save-auto-colors` merged via PR #11 (squash-merged to main as commit eac0666)
