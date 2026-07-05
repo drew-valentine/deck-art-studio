@@ -235,6 +235,7 @@ class TestResolveFrameSettings:
             'frame_overrides': {
                 'style': 'm15',
                 'layers': {'border': {'opacity': 0.3}},
+                'use_card_colors': False,
                 'color_overrides': {'bg': '#111111'},
                 'frame_gradient': 'split',
             },
@@ -242,6 +243,7 @@ class TestResolveFrameSettings:
         live = {
             'style': 'clean',
             'layers': {'border': {'opacity': 0.9}},
+            'use_card_colors': False,
             'color_overrides': {'bg': '#eeeeee'},
             'frame_gradient': 'off',
         }
@@ -271,6 +273,63 @@ class TestResolveFrameSettings:
         card = {'name': 'Test', 'frame_overrides': {'style': 'm15'}}
         result = resolve_frame_settings(card, {'style': 'clean'})
         assert result['style'] == 'm15'
+
+    def test_card_auto_colors_beat_deck_manual(self):
+        # A card saved with Auto colors must not inherit the deck default's
+        # manual colors — the deck's black text override painted the saved
+        # composite black while the preview correctly rendered auto.
+        card = {'name': 'Test',
+                'frame_overrides': {'style': 'godzilla', 'use_card_colors': True}}
+        deck = {'style': 'classic', 'use_card_colors': False,
+                'color_overrides': {'bg': '#3b90b9', 'text': '#000000'}}
+        result = resolve_frame_settings(card, deck)
+        assert result['use_card_colors'] is True
+        assert result['color_overrides'] == {}
+
+    def test_card_manual_colors_beat_deck(self):
+        card = {'name': 'Test',
+                'frame_overrides': {'use_card_colors': False,
+                                    'color_overrides': {'text': '#ffffff'}}}
+        deck = {'use_card_colors': False,
+                'color_overrides': {'text': '#000000', 'bg': '#3b90b9'}}
+        result = resolve_frame_settings(card, deck)
+        assert result['use_card_colors'] is False
+        # Card wins per key; deck still fills the gaps
+        assert result['color_overrides']['text'] == '#ffffff'
+        assert result['color_overrides']['bg'] == '#3b90b9'
+
+    def test_card_without_color_choice_inherits_deck_manual(self):
+        # Legacy card overrides (no use_card_colors key) keep deck behavior
+        card = {'name': 'Test', 'frame_overrides': {'style': 'm15'}}
+        deck = {'use_card_colors': False, 'color_overrides': {'text': '#000000'}}
+        result = resolve_frame_settings(card, deck)
+        assert result['use_card_colors'] is False
+        assert result['color_overrides']['text'] == '#000000'
+
+    def test_keyless_overrides_imply_manual(self):
+        # No use_card_colors key at EITHER level (legacy v1 data, bare API
+        # payloads): the presence of color_overrides implies manual — those
+        # callers always had their colors honored.
+        card = {'name': 'Test', 'frame_overrides': {}}
+        deck = {'color_overrides': {'text': '#000000'}}
+        result = resolve_frame_settings(card, deck)
+        assert result['use_card_colors'] is False
+        assert result['color_overrides']['text'] == '#000000'
+
+    def test_keyless_live_payload_overrides_honored(self):
+        # Bare preview payload: color_overrides without the flag still render
+        card = {'name': 'Test',
+                'frame_overrides': {'style': 'godzilla', 'use_card_colors': True}}
+        live = {'color_overrides': {'text': '#000000'}}
+        result = resolve_frame_settings(card, live, live=True)
+        assert result['use_card_colors'] is False
+        assert result['color_overrides']['text'] == '#000000'
+
+    def test_keyless_without_overrides_defaults_auto(self):
+        card = {'name': 'Test', 'frame_overrides': {'style': 'm15'}}
+        result = resolve_frame_settings(card, {'style': 'clean'})
+        assert result['use_card_colors'] is True
+        assert result['color_overrides'] == {}
 
 
 # ---------------------------------------------------------------------------

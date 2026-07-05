@@ -79,6 +79,21 @@
 
 ## In Review
 
+- [ ] BUG: Frame editor Auto color choice ignored in saved composites (title renders black instead of auto/white) | Priority: P1 | Started: 2026-07-04 | Review Started: 2026-07-04 | Owner: drew-valentine
+  - Branch: `fix/frame-save-auto-colors` — fix implemented, committed (1d553c0), and pushed
+  - PR: https://github.com/drew-valentine/deck-art-studio/pull/11 (open)
+  - Note: PR #11 open; /code-review (high) findings being addressed on the same branch: keyless color_overrides now infer manual mode (legacy/API compat) + regression tests.
+  - Symptom: A card saved with the Frame editor's "Auto" color choice renders its title black in the final saved composite, even though the live WYSIWYG preview correctly renders auto/white. The saved composite silently inherits the deck default's manual black text.
+  - Repro: Cyclonic Rift on the `demo-alela` deck (godzilla style, Auto colors). The deck default is classic style + manual colors with black title text. Live preview shows auto/white; saved composite shows black.
+  - Root cause: `resolve_frame_settings()` in `card_frame_renderer.py` read `use_card_colors` only from the DECK settings (never the card's saved override) and merged the deck's `color_overrides` unconditionally. A card saved with Auto colors therefore inherited the deck default's manual black text in the final composite, while the live preview (which uses the live designer settings) rendered auto correctly.
+  - Fix (implemented): `use_card_colors` resolves card-over-deck (card's saved override takes precedence over the deck default), and `color_overrides` only apply when the effective choice is manual (auto choice no longer inherits the deck's manual color overrides).
+  - Acceptance criteria (Given/When/Then):
+    - [x] Given a card saved with the Frame editor's Auto color choice on a deck whose default is manual colors, when the final composite is rendered, then the title renders with auto colors (matching the live preview), not the deck default's manual black text.
+    - [x] Given a card saved with a manual color choice, when the final composite is rendered, then its manual `color_overrides` are honored (no regression).
+    - [x] Given the saved composite and the live WYSIWYG preview for the same card, when both render, then the title color matches between them.
+    - [x] Validation gate: Playwright browser verification on Cyclonic Rift (demo-alela deck) — save with Auto colors, confirm the saved composite title matches the live preview; full pytest suite passes.
+  - Validation status: **PASSED (2026-07-04)** — 216 unit tests pass (3 new regression tests). Playwright browser validation on demo-alela confirmed Cyclonic Rift and Anointed Procession (both Auto colors) now composite with the correct white showcase titles matching the designer preview; Sol Ring (manual colors) re-rendered byte-identical as a control.
+
 ## Done
 
 - [x] BUG: WYSIWYG Frame Designer live preview freezes after saving a per-card frame | Priority: P1 | Completed: 2026-07-03 | Owner: drew-valentine
