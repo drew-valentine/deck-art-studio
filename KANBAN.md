@@ -84,17 +84,20 @@
 
 ## In Review
 
-- [ ] Split-rules headers need contrast (adventure/split/room mini titles) | Priority: P2 | Started: 2026-07-06 | Review Started: 2026-07-06 | Owner: drew-valentine
-  - Branch: `fix/split-rules-header-contrast`
-  - PR: #14 (https://github.com/drew-valentine/deck-art-studio/pull/14) — committed f361fff, pushed, awaiting approval
+## Done
+
+- [x] Split-rules headers need contrast (adventure/split/room mini titles) | Priority: P2 | Completed: 2026-07-06 | Owner: drew-valentine
+  - Branch: `fix/split-rules-header-contrast` merged via PR #14 (squash-merged to main as commit 10cc004)
+  - PR: https://github.com/drew-valentine/deck-art-studio/pull/14
+  - Tagged: v1.40.0 (released 2026-07-06) — https://github.com/drew-valentine/deck-art-studio/releases/tag/v1.40.0
+  - Minor bump (scope grew from a contrast fix into a feature): headers are now built from each frame's own chrome per half color, plus a split-card frame half-order fix.
   - Problem: On cards with two-column rules (Murderous Rider's adventure half, split/room halves), the mini name + type header renders as plain text on the rules box background. The real cards (e.g. SLD Murderous Rider reference) put the half's name on a dark contrasting banner with light text and the type line on a distinct lighter band — the current flat rendering has no separation and reads poorly.
   - Fix: Added contrasting header bands in `_render_split_rules_svg` — a dark name banner (light text) plus a lighter type band. Style-agnostic so it reads on both light parchment and dark stone/brushed panels.
+  - Scope evolution (per iterative reference-checking): flat contrast bands → transparency/container fill → text-grid plaques → frame-chrome material per half color → an independent trader-review round (fixed mirrored split frame halves, ornament bleed, identity tints).
   - Acceptance criteria (Given/When/Then):
     - [x] Given a two-column rules card (adventure/split/room), when a half's header is rendered, then the half name sits on a dark contrasting banner with light text and the type line sits on a distinct lighter band.
     - [x] Given both light (parchment) and dark (stone/brushed) frame styles, when the split-rules header renders, then the header bands remain legible against each background.
-  - Validation status: **PASSED (2026-07-06)** — 237 unit tests pass (2 new regression tests for the header bands). Murderous Rider and Smoky Lounge rendered in godzilla + crystal styles against the printed SLD reference; WYSIWYG designer browser-verified via Playwright; stored composite re-rendered.
-
-## Done
+  - Validation status: **PASSED (2026-07-06)** — 237 unit tests pass (2 new regression tests for the header bands). Murderous Rider and Smoky Lounge rendered in godzilla + crystal styles against the printed SLD reference; WYSIWYG designer browser-verified via Playwright; stored composite re-rendered. CI green on PR #14; released as v1.40.0.
 
 - [x] Saga card layout — real saga frame structure | Priority: P2 | Completed: 2026-07-06 | Owner: drew-valentine
   - Branch: `feat/saga-card-layout` merged via PR #13 (squash-merged to main as commit 14b0a6f)
