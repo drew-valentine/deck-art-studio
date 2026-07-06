@@ -77,6 +77,14 @@
 
 ## In Progress
 
+- [ ] Split-rules headers need contrast (adventure/split/room mini titles) | Priority: P2 | Started: 2026-07-06 | Owner: drew-valentine
+  - Branch: `fix/split-rules-header-contrast`
+  - Problem: On cards with two-column rules (Murderous Rider's adventure half, split/room halves), the mini name + type header renders as plain text on the rules box background. The real cards (e.g. SLD Murderous Rider reference) put the half's name on a dark contrasting banner with light text and the type line on a distinct lighter band — the current flat rendering has no separation and reads poorly.
+  - Fix in progress: Add contrasting header bands in `_render_split_rules_svg` — a dark name banner (light text) plus a lighter type band. Style-agnostic so it reads on both light parchment and dark stone/brushed panels.
+  - Acceptance criteria (Given/When/Then):
+    - [ ] Given a two-column rules card (adventure/split/room), when a half's header is rendered, then the half name sits on a dark contrasting banner with light text and the type line sits on a distinct lighter band.
+    - [ ] Given both light (parchment) and dark (stone/brushed) frame styles, when the split-rules header renders, then the header bands remain legible against each background.
+
 ## In Review
 
 ## Done

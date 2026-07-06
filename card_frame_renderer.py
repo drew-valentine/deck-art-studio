@@ -1606,11 +1606,18 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
         """Allowed line width inside the RIGHT column above the P/T plate."""
         return avoid[1] - (col_w + gap) if avoid is not None else None
 
+    # Header bands (real-card look): the half's name on a dark banner with
+    # light text, its type line on a light band with dark text — contrasting
+    # against BOTH light parchment and dark stone/brushed rules panels.
+    def _hdr_heights(line_h):
+        return line_h * 1.2, line_h * 0.9, line_h * 0.3  # banner, band, gap
+
     def measure(f):
         line_h = int(RULES_LINE_H * f / RULES_FONT)
         worst = 0.0
         for i, col in enumerate(cols):
-            hh = (line_h + line_h * 0.85) if col['face'] else 0.0
+            nh, th2, hgap = _hdr_heights(line_h)
+            hh = (nh + th2 + hgap) if col['face'] else 0.0
             need = hh
             if avoid is not None and i == 1:
                 narrow = _col_avoid_narrow()
@@ -1647,6 +1654,12 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             raw_name = face.get('name') or ''
             fname = raw_name.replace('&', '&amp;').replace('<', '&lt;')
             pips = parse_mana_cost(face.get('mana_cost') or '')
+            nh, th2, hgap = _hdr_heights(line_h)
+            top = y_top
+            # Name banner: dark with light text, like the printed mini title
+            parts.append(f'<rect x="{cx - 7:.1f}" y="{top:.1f}" width="{col_w + 14:.1f}" '
+                         f'height="{nh:.1f}" rx="5" fill="#1e1a15" '
+                         f'stroke="#4a443a" stroke-width="1.2"/>')
             # Half titles print larger than body text on real cards; their
             # cost pips match the body's inline pips so every symbol in the
             # rules area is the same size
@@ -1657,24 +1670,29 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             name_avail = col_w - pips_w
             if est > name_avail and name_avail > 0:
                 nf = max(12, int(nf * name_avail / est))
-            parts.append(f'<text x="{cx:.1f}" y="{cy:.1f}" font-family="{NAME_FONT_FAMILY}" '
-                         f'font-size="{nf}" font-weight="bold" fill="{text_color}">{fname}</text>')
+            ncy = top + nh / 2 + nf * 0.35
+            parts.append(f'<text x="{cx:.1f}" y="{ncy:.1f}" font-family="{NAME_FONT_FAMILY}" '
+                         f'font-size="{nf}" font-weight="bold" fill="#f4f2ec">{fname}</text>')
             if pips:
                 px = cx + col_w
-                pcy = cy - nf * 0.32
+                pcy = top + nh / 2
                 for pip in reversed(pips):
                     pxx = px - ps
                     parts.append(f'<circle cx="{pxx + ps/2:.1f}" cy="{pcy:.1f}" '
-                                 f'r="{ps/2 + 0.5:.1f}" fill="rgba(0,0,0,0.25)"/>')
+                                 f'r="{ps/2 + 0.5:.1f}" fill="rgba(255,255,255,0.85)"/>')
                     parts.append(_pip_image_tag(pip, pxx, pcy - ps / 2, ps))
                     px -= (ps + 2)
-            cy += line_h
+            # Type band: light with dark text, contrasting the name banner
             ftype = (face.get('type_line') or '').replace('&', '&amp;').replace('<', '&lt;')
             tf2 = max(11, int(f * 0.78))
-            parts.append(f'<text x="{cx:.1f}" y="{cy:.1f}" font-family="{TYPE_FONT_FAMILY}" '
-                         f'font-size="{tf2}" font-weight="bold" fill="{text_color}" '
-                         f'opacity="0.82">{ftype}</text>')
-            cy += line_h * 0.85
+            parts.append(f'<rect x="{cx - 7:.1f}" y="{top + nh:.1f}" width="{col_w + 14:.1f}" '
+                         f'height="{th2:.1f}" rx="3" fill="#d8d3c8" '
+                         f'stroke="#4a443a" stroke-width="1"/>')
+            tcy = top + nh + th2 / 2 + tf2 * 0.35
+            parts.append(f'<text x="{cx:.1f}" y="{tcy:.1f}" font-family="{TYPE_FONT_FAMILY}" '
+                         f'font-size="{tf2}" font-weight="bold" '
+                         f'fill="#1a1712">{ftype}</text>')
+            cy = top + nh + th2 + hgap + f * 0.8
 
         av_abs = None
         if avoid is not None and i == 1:

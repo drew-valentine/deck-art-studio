@@ -648,3 +648,24 @@ class TestSagaFrame:
         for img, style in ((m15, 'm15'), (godz, 'godzilla')):
             assert img.getpixel((200, 500))[3] > 200, f'{style}: panel not opaque'
             assert img.getpixel((550, 500))[3] < 30, f'{style}: window not transparent'
+
+
+class TestSplitRulesHeaders:
+    def test_adventure_header_bands(self):
+        # The half's mini header renders as contrasting bands: dark name
+        # banner + light type band (real-card look), not plain text
+        from card_frame_renderer import _build_card_data, _render_split_rules_svg
+        card = _build_card_data(TestSplitTextLayouts.ADVENTURE, {})
+        parts = _render_split_rules_svg(card, {}, 50, 700, 650, 280, '#000', 30)
+        svg = '\n'.join(parts)
+        assert svg.count('fill="#1e1a15"') == 1   # one name banner (adventure)
+        assert svg.count('fill="#d8d3c8"') == 1   # one type band
+        assert 'fill="#f4f2ec">Swift End</text>' in svg  # light name on dark
+
+    def test_room_header_bands_both_halves(self):
+        from card_frame_renderer import _build_card_data, _render_split_rules_svg
+        card = _build_card_data(TestSplitTextLayouts.ROOM, {})
+        parts = _render_split_rules_svg(card, {}, 50, 700, 650, 280, '#000', 30)
+        svg = '\n'.join(parts)
+        assert svg.count('fill="#1e1a15"') == 2   # both halves get banners
+        assert svg.count('fill="#d8d3c8"') == 2
