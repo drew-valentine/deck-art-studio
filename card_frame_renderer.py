@@ -1621,10 +1621,20 @@ def _split_header_bar_uris(fs: dict, face: dict, block_w: float,
             out.append(_SPLIT_BAR_CACHE[ck])
             continue
         strip = frame.crop((24, y0, CARD_WIDTH - 24, y1))
+        # Take the bar's MATERIAL, not its shape: trim transparent margins,
+        # then keep only the interior texture — the end caps are what made
+        # the mini headers read as shrunken pill-shaped title bars (and msa's
+        # ornament caps looked pasted-on). The plaque gets squared corners
+        # and a printed-style keyline in the caller instead.
+        bb = strip.getbbox()
+        if bb:
+            strip = strip.crop(bb)
+        sw = strip.size[0]
+        strip = strip.crop((int(sw * 0.24), 0, max(int(sw * 0.76), int(sw * 0.24) + 4),
+                            strip.size[1]))
         # Text color follows the BAR's actual luminance — a black half's bar
         # is near-black in every style, so per-style constants can't know
-        # (dark "Swift End" on m15's black bar was unreadable). Sample the
-        # strip's opaque center, alpha-weighted.
+        # (dark "Swift End" on m15's black bar was unreadable).
         import numpy as np
         arr = np.asarray(strip, dtype=float)
         ch = arr.shape[0]
@@ -1633,12 +1643,9 @@ def _split_header_bar_uris(fs: dict, face: dict, block_w: float,
         lum = (0.299 * core[..., 0] + 0.587 * core[..., 1] + 0.114 * core[..., 2])
         mean_lum = float((lum * a).sum() / max(a.sum(), 1.0))
         txt_col = '#f4f2ec' if mean_lum < 140 else '#1a1712'
-        # Raster width matched to the destination aspect so the texture is
-        # only mid-stretched horizontally (caps preserved), never distorted
+        # Interior texture stretches uniformly to the destination aspect
         raster_w = max(40, int(strip.size[1] * block_w / max(dest_h, 1)))
-        cap = min(56, max(8, raster_w // 4), strip.size[0] // 3)
-        strip = _hslice_to(strip, raster_w, cap, cap) if raster_w != strip.size[0] \
-            else strip
+        strip = strip.resize((raster_w, strip.size[1]), Image.Resampling.LANCZOS)
         buf = io.BytesIO()
         strip.save(buf, 'PNG')
         uri = 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode('ascii')
@@ -1759,13 +1766,13 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             # every caller guarantees around its text area.
             bx0, bx1 = cx - 6, cx + col_w + 6
             parts.append(f'<clipPath id="sphdr{i}"><rect x="{bx0:.1f}" y="{top:.1f}" '
-                         f'width="{bx1 - bx0:.1f}" height="{nh + th2:.1f}" rx="7"/></clipPath>')
+                         f'width="{bx1 - bx0:.1f}" height="{nh + th2:.1f}"/></clipPath>')
             parts.append(f'<g clip-path="url(#sphdr{i})">')
             # Header made of the frame's OWN chrome in the half's color when
             # the style has sliceable assets; flat high-contrast bands are
             # the fallback for the SVG styles.
             tex = _split_header_bar_uris(fs, face, bx1 - bx0, nh, th2)
-            hdr_inset = 14 if tex else 0  # bar end caps eat into the block
+            hdr_inset = 8 if tex else 0  # plaque padding inside the keyline
             if tex:
                 (title_uri, name_col), (type_uri, type_col) = tex
                 parts.append(f'<image x="{bx0:.1f}" y="{top:.1f}" '
@@ -1776,6 +1783,14 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
                              f'width="{bx1 - bx0:.1f}" height="{th2:.1f}" '
                              f'preserveAspectRatio="none" opacity="{band_alpha:.3f}" '
                              f'href="{type_uri}"/>')
+                # Printed-style finish: thin keyline around the plaque and a
+                # rule between the name and type rows
+                parts.append(f'<line x1="{bx0:.1f}" y1="{top + nh:.1f}" '
+                             f'x2="{bx1:.1f}" y2="{top + nh:.1f}" '
+                             f'stroke="#141210" stroke-width="1.4"/>')
+                parts.append(f'<rect x="{bx0:.1f}" y="{top:.1f}" '
+                             f'width="{bx1 - bx0:.1f}" height="{nh + th2:.1f}" '
+                             f'fill="none" stroke="#141210" stroke-width="1.8"/>')
             else:
                 name_col, type_col = HDR['name'], HDR['type']
                 # Name banner: high-contrast fill, borderless, box-transparency
