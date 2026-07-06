@@ -1606,11 +1606,31 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
         """Allowed line width inside the RIGHT column above the P/T plate."""
         return avoid[1] - (col_w + gap) if avoid is not None else None
 
-    # Header bands (real-card look): the half's name on a dark banner with
-    # light text, its type line on a light band with dark text — contrasting
-    # against BOTH light parchment and dark stone/brushed rules panels.
+    # Header bands (real-card look): the half's name on a high-contrast
+    # banner, its type line on a muted band below. The scheme follows the
+    # panel: light rules panels (dark body text) get a dark banner + light
+    # band; dark panels (crystal/samurai/etched render light body text) get
+    # a light banner + muted light band — a dark banner would melt into
+    # those panels with only its stroke visible.
     def _hdr_heights(line_h):
         return line_h * 1.2, line_h * 0.9, line_h * 0.3  # banner, band, gap
+
+    def _lum(color):
+        try:
+            hx = color.lstrip('#')
+            return (0.299 * int(hx[0:2], 16) + 0.587 * int(hx[2:4], 16)
+                    + 0.114 * int(hx[4:6], 16))
+        except (ValueError, IndexError):
+            return 0.0
+
+    if _lum(text_color) > 140:  # dark panel
+        HDR = {'banner': '#ece7dc', 'banner_stroke': '#1a1712', 'name': '#1a1712',
+               'pip_bg': 'rgba(0,0,0,0.25)', 'band': '#b5afa3',
+               'band_stroke': '#1a1712', 'type': '#1a1712'}
+    else:  # light panel
+        HDR = {'banner': '#1e1a15', 'banner_stroke': '#4a443a', 'name': '#f4f2ec',
+               'pip_bg': 'rgba(255,255,255,0.85)', 'band': '#d8d3c8',
+               'band_stroke': '#4a443a', 'type': '#1a1712'}
 
     def measure(f):
         line_h = int(RULES_LINE_H * f / RULES_FONT)
@@ -1658,8 +1678,8 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             top = y_top
             # Name banner: dark with light text, like the printed mini title
             parts.append(f'<rect x="{cx - 7:.1f}" y="{top:.1f}" width="{col_w + 14:.1f}" '
-                         f'height="{nh:.1f}" rx="5" fill="#1e1a15" '
-                         f'stroke="#4a443a" stroke-width="1.2"/>')
+                         f'height="{nh:.1f}" rx="5" fill="{HDR["banner"]}" '
+                         f'stroke="{HDR["banner_stroke"]}" stroke-width="1.2"/>')
             # Half titles print larger than body text on real cards; their
             # cost pips match the body's inline pips so every symbol in the
             # rules area is the same size
@@ -1672,26 +1692,26 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
                 nf = max(12, int(nf * name_avail / est))
             ncy = top + nh / 2 + nf * 0.35
             parts.append(f'<text x="{cx:.1f}" y="{ncy:.1f}" font-family="{NAME_FONT_FAMILY}" '
-                         f'font-size="{nf}" font-weight="bold" fill="#f4f2ec">{fname}</text>')
+                         f'font-size="{nf}" font-weight="bold" fill="{HDR["name"]}">{fname}</text>')
             if pips:
                 px = cx + col_w
                 pcy = top + nh / 2
                 for pip in reversed(pips):
                     pxx = px - ps
                     parts.append(f'<circle cx="{pxx + ps/2:.1f}" cy="{pcy:.1f}" '
-                                 f'r="{ps/2 + 0.5:.1f}" fill="rgba(255,255,255,0.85)"/>')
+                                 f'r="{ps/2 + 0.5:.1f}" fill="{HDR["pip_bg"]}"/>')
                     parts.append(_pip_image_tag(pip, pxx, pcy - ps / 2, ps))
                     px -= (ps + 2)
             # Type band: light with dark text, contrasting the name banner
             ftype = (face.get('type_line') or '').replace('&', '&amp;').replace('<', '&lt;')
             tf2 = max(11, int(f * 0.78))
             parts.append(f'<rect x="{cx - 7:.1f}" y="{top + nh:.1f}" width="{col_w + 14:.1f}" '
-                         f'height="{th2:.1f}" rx="3" fill="#d8d3c8" '
-                         f'stroke="#4a443a" stroke-width="1"/>')
+                         f'height="{th2:.1f}" rx="3" fill="{HDR["band"]}" '
+                         f'stroke="{HDR["band_stroke"]}" stroke-width="1"/>')
             tcy = top + nh + th2 / 2 + tf2 * 0.35
             parts.append(f'<text x="{cx:.1f}" y="{tcy:.1f}" font-family="{TYPE_FONT_FAMILY}" '
                          f'font-size="{tf2}" font-weight="bold" '
-                         f'fill="#1a1712">{ftype}</text>')
+                         f'fill="{HDR["type"]}">{ftype}</text>')
             cy = top + nh + th2 + hgap + f * 0.8
 
         av_abs = None

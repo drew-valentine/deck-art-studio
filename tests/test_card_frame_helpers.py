@@ -669,3 +669,14 @@ class TestSplitRulesHeaders:
         svg = '\n'.join(parts)
         assert svg.count('fill="#1e1a15"') == 2   # both halves get banners
         assert svg.count('fill="#d8d3c8"') == 2
+
+    def test_dark_panel_gets_light_banner(self):
+        # Dark rules panels (crystal/samurai/etched pass a light text color)
+        # invert the header scheme — a dark banner would melt into the panel
+        from card_frame_renderer import _build_card_data, _render_split_rules_svg
+        card = _build_card_data(TestSplitTextLayouts.ADVENTURE, {})
+        parts = _render_split_rules_svg(card, {}, 50, 700, 650, 280, '#f2f3f5', 30)
+        svg = '\n'.join(parts)
+        assert 'fill="#ece7dc"' in svg      # light banner
+        assert 'fill="#1e1a15"' not in svg  # no dark banner on dark panel
+        assert 'fill="#1a1712">Swift End</text>' in svg  # dark name on light
