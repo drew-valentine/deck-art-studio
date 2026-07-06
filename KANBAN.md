@@ -79,8 +79,12 @@
 
 ## In Review
 
-- [ ] Saga card layout — real saga frame structure | Priority: P2 | Started: 2026-07-06 | Review Started: 2026-07-06 | Owner: drew-valentine
-  - Branch: `feat/saga-card-layout` (PR #13 — awaiting approval)
+## Done
+
+- [x] Saga card layout — real saga frame structure | Priority: P2 | Completed: 2026-07-06 | Owner: drew-valentine
+  - Branch: `feat/saga-card-layout` merged via PR #13 (squash-merged to main as commit 14b0a6f)
+  - PR: https://github.com/drew-valentine/deck-art-studio/pull/13
+  - Tagged: v1.39.0 (released 2026-07-06) — https://github.com/drew-valentine/deck-art-studio/releases/tag/v1.39.0
   - Problem: Sagas (e.g. Urza's Saga) rendered with the normal card layout (art on top, rules crammed below), matching nothing about the printed saga frame.
   - Implemented: Dedicated portrait saga chrome in `card_frame_renderer.py` following the printed structure — title bar at top, a LEFT chapter panel with italic reminder text, roman-numeral chapter badges on a rail with dividers (combined "I, II" chapters stack their badges), a transparent RIGHT art window, and a full-width type bar at the BOTTOM. Art stays full-bleed under the chrome so pan/zoom, the WYSIWYG designer, printing, and the edhplay extension all work unchanged.
   - Chapter parsing: extracted from Scryfall oracle text ("I — ..." em-dash chapter lines after the parenthesized reminder text).
@@ -94,9 +98,6 @@
     - [x] Validation gate: 235 unit tests pass (new per-style saga regression test plus the 5 original saga tests — chapter parser incl. combined chapters, saga detection, geometry pixel checks, composite smoke); Urza's Saga and History of Benalia rendered against the real card reference; browser-verified the WYSIWYG designer on Urza's Saga in `heads-i-win` matches the stored composite; export manifest picks up the saga for the extension.
     - [x] Given the scope expansion, when a saga is rendered under any of the 11 frame styles, then it honors that style's chrome (image-mode styles get per-style sliced saga chrome from their own rules-box texture and rules text color; SVG styles keep the dedicated saga chrome; `clean` stays frameless).
   - Validation status: **PASSED (2026-07-06)** — 235 unit tests pass (new per-style saga regression test added). Urza's Saga contact sheet rendered across all 11 styles; live style switching browser-verified in the WYSIWYG designer; the stored composite was re-rendered with the deck's crystal default. Also rendered Urza's Saga + History of Benalia against real card references; export manifest includes the saga for the extension.
-  - Next: PR #13 open from `feat/saga-card-layout` → main; on approval, squash-merge + semantic version tag.
-
-## Done
 
 - [x] BUG: Showcase (godzilla) frame — manual Colors > Border only recolors the rules box; title/type bars keep baked accent color | Priority: P1 | Completed: 2026-07-05 | Owner: drew-valentine
   - Branch: `fix/showcase-bar-border-color` merged via PR #12 (squash-merged to main as commit ffb60c4)
