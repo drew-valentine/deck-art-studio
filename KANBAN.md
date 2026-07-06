@@ -2,6 +2,11 @@
 
 ## Backlog
 
+- [ ] BUG: Planeswalker frame style drops adventure/split half rules text | Priority: P3 | Found: 2026-07-06 | Owner: unassigned
+  - Found during the split-header full-style review. Pre-existing on main (verified by rendering Murderous Rider // Swift End in the planeswalker style from main — only the creature half's Lifelink/dies text renders in the loyalty-style ability bands; the Swift End adventure half is silently omitted).
+  - Root cause area: the planeswalker style's text renderer (`_create_pw_frame_text_svg` in `card_frame_renderer.py`) renders `card.oracle_text` into loyalty-style ability bands and never checks `card.split_faces`, unlike the other styles which route through `_render_split_rules_svg`.
+  - Edge case: user must deliberately pick the planeswalker frame for an adventure/split card, hence P3.
+
 - [ ] Alt Layouts: transform/MDFC face-indicator pips on frames | Priority: P3 | Created: 2026-07-03 | Owner: unassigned
   - Polish leftover from the now-complete "Support Alternative Card Layouts" epic (see Done). A dedicated transform-indicator icon on the frame (front/back face indicator). Back-face composites currently render with the standard frame for the back face's own card data; a face-indicator icon was deferred out of Phase 1.
 
