@@ -8,6 +8,7 @@ Output: 750×1050 PNG at 300 DPI (standard proxy print size).
 """
 
 import copy
+import base64
 import io
 import json
 import re
@@ -1570,6 +1571,82 @@ def _max_fitting_rules_font(measure, box_h: float, desired: int,
     return f
 
 
+
+# Raw-asset type-bar coords for styles whose composited chrome RELOCATES the
+# bar (the battle band metadata records the post-relocation position).
+_SPLIT_RAW_TYPE_Y = {'iko': (722, 808)}
+
+# (frame_dir, color_key, out_w, out_h, band) -> data URI; strips are tiny so
+# the cache stays small while measure/draw loops stay cheap.
+_SPLIT_BAR_CACHE = {}
+
+
+def _split_header_bar_uris(fs: dict, face: dict, block_w: float,
+                           nh: float, th2: float):
+    """Mini title-bar + type-bar textures for one split/adventure half,
+    sliced from the HALF'S OWN color variant of the current style's frame
+    assets — so the header is made of the frame's real chrome (m15 silver,
+    iko gold-trimmed, crystal stone...) in the half's color identity.
+
+    Returns ((title_uri, title_text_col), (type_uri, type_text_col)) or None
+    when the style has no sliceable assets (SVG styles keep the flat scheme).
+    Text colors are sampled from each bar's actual luminance."""
+    frame_dir = _battle_frame_dir(fs)
+    if frame_dir is None:
+        return None
+    L, bar_col, _ = _BATTLE_STYLE_BANDS[frame_dir]
+
+    # Face color key from its own mana cost (like real split halves print)
+    cost = (face.get('mana_cost') or '')
+    ordered = [c for c in _WUBRG if c in cost]
+    if len(ordered) == 1:
+        key = _COLOR_TO_KEY[ordered[0]]
+    elif len(ordered) >= 2:
+        key = 'm'
+    else:
+        key = 'a'
+    frame = (_load_frame_image(frame_dir, key) or _load_frame_image(frame_dir, 'c')
+             or _load_frame_image(frame_dir, 'a') or _load_frame_image(frame_dir, 'l'))
+    if frame is None:
+        return None
+    if frame.size != (CARD_WIDTH, CARD_HEIGHT):
+        frame = frame.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+
+    ty0, ty1 = _SPLIT_RAW_TYPE_Y.get(frame_dir, (L['type_y0'], L['type_y1']))
+    out = []
+    for band, (y0, y1, dest_h) in (('title', (L['title_y0'], L['title_y1'], nh)),
+                                   ('type', (ty0, ty1, th2))):
+        ck = (frame_dir, key, band, int(block_w), int(dest_h))
+        if ck in _SPLIT_BAR_CACHE:
+            out.append(_SPLIT_BAR_CACHE[ck])
+            continue
+        strip = frame.crop((24, y0, CARD_WIDTH - 24, y1))
+        # Text color follows the BAR's actual luminance — a black half's bar
+        # is near-black in every style, so per-style constants can't know
+        # (dark "Swift End" on m15's black bar was unreadable). Sample the
+        # strip's opaque center, alpha-weighted.
+        import numpy as np
+        arr = np.asarray(strip, dtype=float)
+        ch = arr.shape[0]
+        core = arr[ch // 4: max(ch // 4 + 1, 3 * ch // 4), :, :]
+        a = core[..., 3] / 255.0
+        lum = (0.299 * core[..., 0] + 0.587 * core[..., 1] + 0.114 * core[..., 2])
+        mean_lum = float((lum * a).sum() / max(a.sum(), 1.0))
+        txt_col = '#f4f2ec' if mean_lum < 140 else '#1a1712'
+        # Raster width matched to the destination aspect so the texture is
+        # only mid-stretched horizontally (caps preserved), never distorted
+        raster_w = max(40, int(strip.size[1] * block_w / max(dest_h, 1)))
+        cap = min(56, max(8, raster_w // 4), strip.size[0] // 3)
+        strip = _hslice_to(strip, raster_w, cap, cap) if raster_w != strip.size[0] \
+            else strip
+        buf = io.BytesIO()
+        strip.save(buf, 'PNG')
+        uri = 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode('ascii')
+        _SPLIT_BAR_CACHE[ck] = (uri, txt_col)
+        out.append((uri, txt_col))
+    return out[0], out[1]
+
+
 def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
                             w: float, h: float, text_color: str,
                             desired_font: int,
@@ -1684,10 +1761,27 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             parts.append(f'<clipPath id="sphdr{i}"><rect x="{bx0:.1f}" y="{top:.1f}" '
                          f'width="{bx1 - bx0:.1f}" height="{nh + th2:.1f}" rx="7"/></clipPath>')
             parts.append(f'<g clip-path="url(#sphdr{i})">')
-            # Name banner: high-contrast fill, borderless, box-transparency
-            parts.append(f'<rect x="{bx0:.1f}" y="{top:.1f}" width="{bx1 - bx0:.1f}" '
-                         f'height="{nh:.1f}" fill="{HDR["banner"]}" '
-                         f'fill-opacity="{band_alpha:.3f}"/>')
+            # Header made of the frame's OWN chrome in the half's color when
+            # the style has sliceable assets; flat high-contrast bands are
+            # the fallback for the SVG styles.
+            tex = _split_header_bar_uris(fs, face, bx1 - bx0, nh, th2)
+            hdr_inset = 14 if tex else 0  # bar end caps eat into the block
+            if tex:
+                (title_uri, name_col), (type_uri, type_col) = tex
+                parts.append(f'<image x="{bx0:.1f}" y="{top:.1f}" '
+                             f'width="{bx1 - bx0:.1f}" height="{nh:.1f}" '
+                             f'preserveAspectRatio="none" opacity="{band_alpha:.3f}" '
+                             f'href="{title_uri}"/>')
+                parts.append(f'<image x="{bx0:.1f}" y="{top + nh:.1f}" '
+                             f'width="{bx1 - bx0:.1f}" height="{th2:.1f}" '
+                             f'preserveAspectRatio="none" opacity="{band_alpha:.3f}" '
+                             f'href="{type_uri}"/>')
+            else:
+                name_col, type_col = HDR['name'], HDR['type']
+                # Name banner: high-contrast fill, borderless, box-transparency
+                parts.append(f'<rect x="{bx0:.1f}" y="{top:.1f}" width="{bx1 - bx0:.1f}" '
+                             f'height="{nh:.1f}" fill="{HDR["banner"]}" '
+                             f'fill-opacity="{band_alpha:.3f}"/>')
             # Half titles print larger than body text on real cards; their
             # cost pips match the body's inline pips so every symbol in the
             # rules area is the same size
@@ -1695,14 +1789,15 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             ps = _rules_pip_size(f)
             pips_w = len(pips) * (ps + 2) + 6 if pips else 0
             est = len(raw_name) * nf * 0.55
-            name_avail = col_w - pips_w
+            name_avail = col_w - pips_w - 2 * hdr_inset
             if est > name_avail and name_avail > 0:
                 nf = max(12, int(nf * name_avail / est))
             ncy = top + nh / 2 + nf * 0.35
-            parts.append(f'<text x="{cx:.1f}" y="{ncy:.1f}" font-family="{NAME_FONT_FAMILY}" '
-                         f'font-size="{nf}" font-weight="bold" fill="{HDR["name"]}">{fname}</text>')
+            parts.append(f'<text x="{cx + hdr_inset:.1f}" y="{ncy:.1f}" '
+                         f'font-family="{NAME_FONT_FAMILY}" '
+                         f'font-size="{nf}" font-weight="bold" fill="{name_col}">{fname}</text>')
             if pips:
-                px = cx + col_w
+                px = cx + col_w - hdr_inset
                 pcy = top + nh / 2
                 for pip in reversed(pips):
                     pxx = px - ps
@@ -1713,14 +1808,16 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             # Type band: light with dark text, contrasting the name banner
             ftype = (face.get('type_line') or '').replace('&', '&amp;').replace('<', '&lt;')
             tf2 = max(11, int(f * 0.78))
-            parts.append(f'<rect x="{bx0:.1f}" y="{top + nh:.1f}" width="{bx1 - bx0:.1f}" '
-                         f'height="{th2:.1f}" fill="{HDR["band"]}" '
-                         f'fill-opacity="{band_alpha:.3f}"/>')
+            if not tex:
+                parts.append(f'<rect x="{bx0:.1f}" y="{top + nh:.1f}" width="{bx1 - bx0:.1f}" '
+                             f'height="{th2:.1f}" fill="{HDR["band"]}" '
+                             f'fill-opacity="{band_alpha:.3f}"/>')
             parts.append('</g>')
             tcy = top + nh + th2 / 2 + tf2 * 0.35
-            parts.append(f'<text x="{cx:.1f}" y="{tcy:.1f}" font-family="{TYPE_FONT_FAMILY}" '
+            parts.append(f'<text x="{cx + hdr_inset:.1f}" y="{tcy:.1f}" '
+                         f'font-family="{TYPE_FONT_FAMILY}" '
                          f'font-size="{tf2}" font-weight="bold" '
-                         f'fill="{HDR["type"]}">{ftype}</text>')
+                         f'fill="{type_col}">{ftype}</text>')
             cy = top + nh + th2 + hgap + f * 0.8
 
         av_abs = None
