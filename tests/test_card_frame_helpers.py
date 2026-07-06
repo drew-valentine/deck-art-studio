@@ -628,3 +628,23 @@ class TestSagaFrame:
         composite_card(dict(self.URZA), str(art), None, str(out))
         img = Image.open(out)
         assert img.size == (CARD_WIDTH, CARD_HEIGHT)
+
+    def test_saga_honors_frame_styles(self):
+        # Per-style saga chrome: image styles slice their own frame assets
+        # (title bar, type bar, rules-box texture panel), so each style's
+        # saga must differ from the dedicated chrome and from each other
+        import io
+        from PIL import Image
+        from card_frame_renderer import render_frame_layer, resolve_frame_settings
+
+        def render(style):
+            fs = resolve_frame_settings(dict(self.URZA), {'style': style})
+            png = render_frame_layer(dict(self.URZA), fs)
+            return Image.open(io.BytesIO(png)).convert('RGBA')
+
+        basic, m15, godz = render('basic'), render('m15'), render('godzilla')
+        assert m15.tobytes() != basic.tobytes()
+        assert godz.tobytes() != m15.tobytes()
+        for img, style in ((m15, 'm15'), (godz, 'godzilla')):
+            assert img.getpixel((200, 500))[3] > 200, f'{style}: panel not opaque'
+            assert img.getpixel((550, 500))[3] < 30, f'{style}: window not transparent'

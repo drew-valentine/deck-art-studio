@@ -4710,9 +4710,9 @@ def render_frame_layer(card_dict: dict, frame_settings: dict) -> bytes:
     # Sagas: chrome + chapter text render as one portrait layer (the text
     # overlay returns empty for sagas)
     if _is_saga(card):
-        return cairosvg.svg2png(
-            bytestring=_create_saga_frame_svg(card, fs).encode('utf-8'),
-            output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
+        buf = io.BytesIO()
+        _saga_overlay(card_dict, card, fs).save(buf, 'PNG')
+        return buf.getvalue()
 
     if fs.get('mode') == 'image':
         # Image-based: frame + P/T box (without text), gradient-aware. Shares the
@@ -4913,66 +4913,33 @@ def _saga_badge_svg(numeral: str, cx: float, cy: float,
     ]
 
 
-def _create_saga_frame_svg(card: CardData, fs: dict) -> str:
-    """Full saga chrome + text as one portrait SVG (art shows through the
-    transparent right-side window). Dark title/type bars with light text and
-    a parchment chapter panel — the same dedicated-chrome aesthetic as the
-    battle frame, in the real saga structure."""
-    W, H = CARD_WIDTH, CARD_HEIGHT
-    L = _SAGA_L
-    theme = dict(get_color_theme(card))
-    for key in ('bg', 'field', 'textbox', 'border', 'text'):
-        if key in fs.get('color_overrides', {}):
-            theme[key] = fs['color_overrides'][key]
-    _ovr = (fs.get('color_overrides', {}) or {}).get('text')
-    bar_text = _ovr or '#f4f2ec'
-    rules_col = _ovr or '#141210'
+def _saga_svg_parts(card: CardData, fs: dict, SL: dict, bar_text: str,
+                    rules_col: str, theme: dict, draw_panel: bool = True) -> list:
+    """Saga content as SVG parts positioned by the SL layout dict: chapter
+    panel (optional — the per-style path builds it from the frame's own rules
+    texture), badge rail, dividers, reminder + chapter text, title name +
+    mana pips, and the bottom type line. Shared by the dedicated chrome and
+    the per-style sliced chrome so both render identical content."""
+    svg = []
+    px0, px1 = SL['panel_x0'], SL['panel_x1']
+    py0, py1 = SL['panel_y0'], SL['panel_y1']
+    rail_x1 = SL['rail_x1']
 
-    svg = ['<?xml version="1.0" encoding="UTF-8"?>',
-           f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
-           f'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">']
-    if _FONT_FACE_CSS:
-        svg.append(f'<style type="text/css">\n{_FONT_FACE_CSS}\n</style>')
-
-    # Black border ring with a theme pinline (matches the battle chrome)
-    svg.append(f'<rect x="0" y="0" width="{W}" height="{H}" rx="34" fill="none" '
-               f'stroke="#0b0b0c" stroke-width="52"/>')
-    svg.append(f'<rect x="27" y="27" width="{W - 54}" height="{H - 54}" rx="18" '
-               f'fill="none" stroke="{theme["bg"]}" stroke-width="5"/>')
-
-    # Title bar
-    svg.append(f'<rect x="{L["panel_x0"]}" y="{L["title_y0"]}" '
-               f'width="{L["art_x1"] - L["panel_x0"]}" height="{L["title_y1"] - L["title_y0"]}" '
-               f'rx="14" fill="rgba(12,12,14,0.88)" stroke="{theme["border"]}" stroke-width="2.5"/>')
-
-    # Left chapter panel: parchment with a slightly darker badge rail
-    px0, px1 = L['panel_x0'], L['panel_x1']
-    py0, py1 = L['panel_y0'], L['panel_y1']
-    # Near-opaque like the printed parchment panel — chapter text must stay
-    # readable over any art
-    svg.append(f'<rect x="{px0}" y="{py0}" width="{px1 - px0}" height="{py1 - py0}" '
-               f'rx="12" fill="{hex_with_alpha(theme["textbox"], 0.97)}" '
-               f'stroke="{theme["border"]}" stroke-width="2.5"/>')
+    if draw_panel:
+        # Near-opaque like the printed parchment panel — chapter text must
+        # stay readable over any art
+        svg.append(f'<rect x="{px0}" y="{py0}" width="{px1 - px0}" height="{py1 - py0}" '
+                   f'rx="12" fill="{hex_with_alpha(theme["textbox"], 0.97)}" '
+                   f'stroke="{theme["border"]}" stroke-width="2.5"/>')
+    # Badge rail: slightly darker strip with a separator line
     svg.append(f'<path d="M {px0} {py0 + 12} A 12 12 0 0 1 {px0 + 12} {py0} '
-               f'L {L["rail_x1"]} {py0} L {L["rail_x1"]} {py1} L {px0 + 12} {py1} '
+               f'L {rail_x1} {py0} L {rail_x1} {py1} L {px0 + 12} {py1} '
                f'A 12 12 0 0 1 {px0} {py1 - 12} Z" fill="rgba(0,0,0,0.10)"/>')
-    svg.append(f'<line x1="{L["rail_x1"]}" y1="{py0}" x2="{L["rail_x1"]}" y2="{py1}" '
+    svg.append(f'<line x1="{rail_x1}" y1="{py0}" x2="{rail_x1}" y2="{py1}" '
                f'stroke="{theme["border"]}" stroke-width="1.5" opacity="0.7"/>')
 
-    # Right art window: transparent, thin frame stroke only
-    svg.append(f'<rect x="{px1}" y="{py0}" width="{L["art_x1"] - px1}" height="{py1 - py0}" '
-               f'fill="none" stroke="{theme["border"]}" stroke-width="2.5"/>')
-
-    # Bottom type bar + dark filler down to the border ring
-    svg.append(f'<rect x="{L["panel_x0"]}" y="{L["type_y1"] - 14}" '
-               f'width="{L["art_x1"] - L["panel_x0"]}" height="{H - 26 - (L["type_y1"] - 14)}" '
-               f'fill="#0b0b0c"/>')
-    svg.append(f'<rect x="{L["panel_x0"]}" y="{L["type_y0"]}" '
-               f'width="{L["art_x1"] - L["panel_x0"]}" height="{L["type_y1"] - L["type_y0"]}" '
-               f'rx="14" fill="rgba(12,12,14,0.92)" stroke="{theme["border"]}" stroke-width="2.5"/>')
-
     # ── Title text + mana pips ──
-    tx, xr = L['x_margin'], L['x_right']
+    tx, xr = SL['x_margin'], SL['x_right']
     mana_pips = parse_mana_cost(card.mana_cost)
     pip_w = len(mana_pips) * (MANA_PIP_SIZE + MANA_PIP_GAP) + 14 if mana_pips else 0
     disp_name = card.name.split(' // ')[0]
@@ -4981,11 +4948,11 @@ def _create_saga_frame_svg(card: CardData, fs: dict) -> str:
     name_avail = (xr - tx) - pip_w
     if len(disp_name) * nf * 0.58 > name_avail and name_avail > 0:
         nf = max(22, int(nf * name_avail / (len(disp_name) * nf * 0.58)))
-    ncy = (L['title_y0'] + L['title_y1']) / 2 + nf * 0.35
+    ncy = (SL['title_y0'] + SL['title_y1']) / 2 + nf * 0.35
     svg.append(f'<text x="{tx}" y="{ncy}" font-family="{NAME_FONT_FAMILY}" '
                f'font-size="{nf}" font-weight="bold" fill="{bar_text}">{esc_name}</text>')
     if mana_pips:
-        pcy = (L['title_y0'] + L['title_y1']) / 2
+        pcy = (SL['title_y0'] + SL['title_y1']) / 2
         px = xr + 4
         for pip in reversed(mana_pips):
             pxx = px - MANA_PIP_SIZE
@@ -5000,16 +4967,16 @@ def _create_saga_frame_svg(card: CardData, fs: dict) -> str:
     type_avail = (xr - tx) - 10
     if len(card.type_line or '') * tf * 0.50 > type_avail and type_avail > 0:
         tf = max(17, int(tf * type_avail / (len(card.type_line) * tf * 0.50)))
-    tcy = (L['type_y0'] + L['type_y1']) / 2 + tf * 0.35
+    tcy = (SL['type_y0'] + SL['type_y1']) / 2 + tf * 0.35
     svg.append(f'<text x="{tx}" y="{tcy}" font-family="{TYPE_FONT_FAMILY}" '
                f'font-size="{tf}" font-weight="bold" fill="{bar_text}">{esc_type}</text>')
 
     # ── Chapter panel content ──
     reminder, chapters = _parse_saga_chapters(card.oracle_text or '')
-    text_x = L['rail_x1'] + 14
+    text_x = SL['rail_x1'] + 14
     text_w = (px1 - 12) - text_x
     inner_y0, inner_y1 = py0 + 14, py1 - 12
-    badge_cx = (px0 + L['rail_x1']) / 2 + 1
+    badge_cx = (px0 + SL['rail_x1']) / 2 + 1
 
     if not chapters:
         # No chapter markers (custom text override): plain rules block
@@ -5025,8 +4992,7 @@ def _create_saga_frame_svg(card: CardData, fs: dict) -> str:
                 card.oracle_text, text_x, inner_y0 + r_font * 0.8, text_w,
                 inner_y1 - inner_y0, r_font, r_line, text_color=rules_col)
             svg.extend(lines)
-        svg.append('</svg>')
-        return '\n'.join(svg)
+        return svg
 
     BADGE_H, SEC_PAD = 56, 14
 
@@ -5083,8 +5049,168 @@ def _create_saga_frame_svg(card: CardData, fs: dict) -> str:
             svg.extend(lines)
         y += sec_h
 
+    return svg
+
+
+
+def _create_saga_frame_svg(card: CardData, fs: dict) -> str:
+    """Dedicated saga chrome (used by the SVG-mode styles and as the fallback
+    when a style has no sliceable assets): dark title/type bars with light
+    text and a parchment chapter panel — the same dedicated-chrome aesthetic
+    as the battle frame, in the real saga structure."""
+    W, H = CARD_WIDTH, CARD_HEIGHT
+    L = _SAGA_L
+    theme = dict(get_color_theme(card))
+    for key in ('bg', 'field', 'textbox', 'border', 'text'):
+        if key in fs.get('color_overrides', {}):
+            theme[key] = fs['color_overrides'][key]
+    _ovr = (fs.get('color_overrides', {}) or {}).get('text')
+    bar_text = _ovr or '#f4f2ec'
+    rules_col = _ovr or '#141210'
+
+    svg = ['<?xml version="1.0" encoding="UTF-8"?>',
+           f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
+           f'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">']
+    if _FONT_FACE_CSS:
+        svg.append(f'<style type="text/css">\n{_FONT_FACE_CSS}\n</style>')
+
+    # Black border ring with a theme pinline (matches the battle chrome)
+    svg.append(f'<rect x="0" y="0" width="{W}" height="{H}" rx="34" fill="none" '
+               f'stroke="#0b0b0c" stroke-width="52"/>')
+    svg.append(f'<rect x="27" y="27" width="{W - 54}" height="{H - 54}" rx="18" '
+               f'fill="none" stroke="{theme["bg"]}" stroke-width="5"/>')
+
+    # Title bar
+    svg.append(f'<rect x="{L["panel_x0"]}" y="{L["title_y0"]}" '
+               f'width="{L["art_x1"] - L["panel_x0"]}" height="{L["title_y1"] - L["title_y0"]}" '
+               f'rx="14" fill="rgba(12,12,14,0.88)" stroke="{theme["border"]}" stroke-width="2.5"/>')
+
+    # Right art window: transparent, thin frame stroke only
+    svg.append(f'<rect x="{L["panel_x1"]}" y="{L["panel_y0"]}" '
+               f'width="{L["art_x1"] - L["panel_x1"]}" height="{L["panel_y1"] - L["panel_y0"]}" '
+               f'fill="none" stroke="{theme["border"]}" stroke-width="2.5"/>')
+
+    # Bottom type bar + dark filler down to the border ring
+    svg.append(f'<rect x="{L["panel_x0"]}" y="{L["type_y1"] - 14}" '
+               f'width="{L["art_x1"] - L["panel_x0"]}" height="{H - 26 - (L["type_y1"] - 14)}" '
+               f'fill="#0b0b0c"/>')
+    svg.append(f'<rect x="{L["panel_x0"]}" y="{L["type_y0"]}" '
+               f'width="{L["art_x1"] - L["panel_x0"]}" height="{L["type_y1"] - L["type_y0"]}" '
+               f'rx="14" fill="rgba(12,12,14,0.92)" stroke="{theme["border"]}" stroke-width="2.5"/>')
+
+    svg.extend(_saga_svg_parts(card, fs, L, bar_text, rules_col, theme,
+                               draw_panel=True))
     svg.append('</svg>')
     return '\n'.join(svg)
+
+
+def _compose_saga_frame_from_style(card_dict: dict, card: CardData, fs: dict):
+    """Slice a style's portrait frame PNG into saga chrome.
+
+    Portrait stays portrait, so bands paste at full width with no horizontal
+    re-slicing: [top border + title bar] unscaled, [art-window side borders]
+    stretched to fill down to the relocated type bar, [type bar] unscaled at
+    the bottom, [bottom border] unscaled. The chapter panel is built from the
+    frame's OWN rules-box texture (stretched vertically), so each style's
+    box look — m15 parchment, crystal stone, samurai brushed dark — carries
+    over, along with its rules text color.
+
+    Returns (chrome RGBA 750x1050, saga layout dict, bar_col, rules_col) or
+    None when the style has no sliceable assets."""
+    frame_dir = _battle_frame_dir(fs)
+    if frame_dir is None:
+        return None
+    L, bar_col, rules_col = _BATTLE_STYLE_BANDS[frame_dir]
+    try:
+        frame = _compose_image_frame_base(card_dict, card, fs)
+    except Exception:
+        return None
+    if frame is None:
+        return None
+
+    W, H = CARD_WIDTH, CARD_HEIGHT
+    pw, ph = frame.size
+    pad = 8
+    top_h = L['title_y1'] + pad
+    type_h = (L['type_y1'] - L['type_y0']) + 2 * pad
+    bottom_h = ph - L['rules_y1']
+    mid_target = H - top_h - type_h - bottom_h
+
+    top = frame.crop((0, 0, pw, top_h))
+    mid = frame.crop((0, top_h, pw, max(top_h + 1, L['type_y0'] - pad)))
+    mid = mid.resize((pw, max(1, mid_target)), Image.Resampling.LANCZOS)
+    typebar = frame.crop((0, L['type_y0'] - pad, pw, L['type_y1'] + pad))
+    bottom = frame.crop((0, L['rules_y1'], pw, ph))
+
+    chrome = Image.new('RGBA', (W, H))
+    y = 0
+    for band in (top, mid, typebar, bottom):
+        chrome.paste(band, (0, y))
+        y += band.size[1]
+
+    SL = {
+        'title_y0': L['title_y0'], 'title_y1': L['title_y1'],
+        'panel_y0': L['title_y1'] + 12, 'panel_y1': top_h + mid_target - 4,
+        'panel_x0': max(40, L['x_margin'] - 22), 'panel_x1': 390,
+        'type_y0': top_h + mid_target + pad,
+        'type_y1': top_h + mid_target + type_h - pad,
+        'x_margin': L['x_margin'], 'x_right': L['x_right'],
+    }
+    SL['rail_x1'] = SL['panel_x0'] + 38
+
+    # Chapter panel from the frame's own rules-box texture: crop the box
+    # interior (inset from its rounded corners) at panel width and stretch
+    # it vertically over the panel area, finished with a thin border stroke.
+    panel_w = SL['panel_x1'] - SL['panel_x0']
+    panel_h = SL['panel_y1'] - SL['panel_y0']
+    src_y0, src_y1 = L['type_y1'] + pad + 6, L['rules_y1'] - 6
+    if src_y1 > src_y0 + 10:
+        tex = frame.crop((SL['panel_x0'], src_y0, SL['panel_x0'] + panel_w, src_y1))
+        tex = tex.resize((panel_w, panel_h), Image.Resampling.LANCZOS)
+        panel_layer = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+        panel_layer.paste(tex, (SL['panel_x0'], SL['panel_y0']))
+        chrome = Image.alpha_composite(chrome, panel_layer)
+
+    return chrome, SL, bar_col, rules_col
+
+
+def _saga_overlay(card_dict: dict, card: CardData, fs: dict) -> Image.Image:
+    """Full saga chrome + text as a portrait RGBA overlay (no art)."""
+    if fs.get('mode') == 'image':
+        res = _compose_saga_frame_from_style(card_dict, card, fs)
+        if res is not None:
+            chrome, SL, bar_col, rules_col = res
+            theme = dict(get_color_theme(card))
+            for key in ('bg', 'field', 'textbox', 'border', 'text'):
+                if key in fs.get('color_overrides', {}):
+                    theme[key] = fs['color_overrides'][key]
+            _ovr = (fs.get('color_overrides', {}) or {}).get('text')
+            bar_text = _ovr or bar_col or theme['text']
+            rules_txt = _ovr or rules_col or theme['text']
+            parts = ['<?xml version="1.0" encoding="UTF-8"?>',
+                     f'<svg width="{CARD_WIDTH}" height="{CARD_HEIGHT}" '
+                     f'viewBox="0 0 {CARD_WIDTH} {CARD_HEIGHT}" '
+                     f'xmlns="http://www.w3.org/2000/svg" '
+                     f'xmlns:xlink="http://www.w3.org/1999/xlink">']
+            if _FONT_FACE_CSS:
+                parts.append(f'<style type="text/css">\n{_FONT_FACE_CSS}\n</style>')
+            # Panel border stroke over the texture panel edges
+            parts.append(f'<rect x="{SL["panel_x0"]}" y="{SL["panel_y0"]}" '
+                         f'width="{SL["panel_x1"] - SL["panel_x0"]}" '
+                         f'height="{SL["panel_y1"] - SL["panel_y0"]}" rx="10" '
+                         f'fill="none" stroke="{theme["border"]}" stroke-width="2.5"/>')
+            parts.extend(_saga_svg_parts(card, fs, SL, bar_text, rules_txt,
+                                         theme, draw_panel=False))
+            parts.append('</svg>')
+            png = cairosvg.svg2png(bytestring='\n'.join(parts).encode('utf-8'),
+                                   output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
+            text_img = Image.open(io.BytesIO(png)).convert('RGBA')
+            return Image.alpha_composite(chrome, text_img)
+
+    svg_content = _create_saga_frame_svg(card, fs)
+    png = cairosvg.svg2png(bytestring=svg_content.encode('utf-8'),
+                           output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
+    return Image.open(io.BytesIO(png)).convert('RGBA')
 
 
 def _battle_defense_shield_svg(defense: str, cx: float, cy: float,
@@ -5471,12 +5597,9 @@ def composite_card(card_dict: dict, art_path, frame_path_or_none, output_path,
     art_rgba.paste(art_resized, (0, 0))
 
     if _is_saga(card):
-        # Sagas: dedicated portrait chrome for every style — art shows
+        # Sagas: saga chrome (per-style sliced or dedicated) — art shows
         # through the transparent right-side window
-        png_data = cairosvg.svg2png(
-            bytestring=_create_saga_frame_svg(card, fs).encode('utf-8'),
-            output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
-        frame = Image.open(io.BytesIO(png_data)).convert('RGBA')
+        frame = _saga_overlay(card_dict, card, fs)
     elif fs.get('mode') == 'image':
         # Image-based: pre-rendered frame PNG + text SVG
         frame = _render_image_frame(card_dict, card, fs)
@@ -5524,10 +5647,7 @@ def composite_card_preview(card_dict: dict, art_path, frame_settings: dict) -> b
     art_rgba.paste(art_resized, (0, 0))
 
     if _is_saga(card):
-        png_data = cairosvg.svg2png(
-            bytestring=_create_saga_frame_svg(card, frame_settings).encode('utf-8'),
-            output_width=CARD_WIDTH, output_height=CARD_HEIGHT)
-        frame = Image.open(io.BytesIO(png_data)).convert('RGBA')
+        frame = _saga_overlay(card_dict, card, frame_settings)
     elif frame_settings.get('mode') == 'image':
         frame = _render_image_frame(card_dict, card, frame_settings)
     else:
