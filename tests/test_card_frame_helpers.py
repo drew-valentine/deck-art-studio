@@ -557,3 +557,74 @@ class TestIkoAccentRecolor:
         r, g, b = img.getpixel((375, 47))
         assert r > 140 and g > 120 and b < r, \
             f'{colors or ctype}: trim not gold: {(r, g, b)}'
+
+
+class TestSagaFrame:
+    URZA = {
+        'name': "Urza's Saga",
+        'mana_cost': '',
+        'type_line': "Enchantment Land — Urza's Saga",
+        'oracle_text': ('(As this Saga enters and after your draw step, add a lore '
+                        'counter. Sacrifice after III.)\n'
+                        'I — This Saga gains "{T}: Add {C}."\n'
+                        'II — This Saga gains "{2}, {T}: Create a 0/0 colorless '
+                        'Construct artifact creature token."\n'
+                        'III — Search your library for an artifact card with mana '
+                        'cost {0} or {1}, put it onto the battlefield, then shuffle.'),
+        'colors': [], 'color_identity': [],
+        'card_type': 'enchantment', 'layout': 'saga', 'frame_overrides': {},
+    }
+
+    def test_parse_chapters(self):
+        from card_frame_renderer import _parse_saga_chapters
+        reminder, chapters = _parse_saga_chapters(self.URZA['oracle_text'])
+        assert reminder.startswith('(As this Saga enters')
+        assert [c[0] for c in chapters] == [['I'], ['II'], ['III']]
+        assert chapters[2][1].startswith('Search your library')
+
+    def test_parse_combined_chapters(self):
+        from card_frame_renderer import _parse_saga_chapters
+        text = ('(As this Saga enters and after your draw step, add a lore counter. '
+                'Sacrifice after III.)\n'
+                'I, II — Create a 2/2 white Knight creature token with vigilance.\n'
+                'III — Knights you control get +2/+1 until end of turn.')
+        reminder, chapters = _parse_saga_chapters(text)
+        assert chapters[0][0] == ['I', 'II']
+        assert chapters[1][0] == ['III']
+
+    def test_is_saga_detection(self):
+        from card_frame_renderer import _is_saga, _build_card_data
+        assert _is_saga(_build_card_data(dict(self.URZA), {}))
+        plain = {'name': 'X', 'type_line': 'Enchantment — Saga', 'oracle_text': '',
+                 'colors': [], 'card_type': 'enchantment'}
+        assert _is_saga(_build_card_data(plain, {}))
+        inst = {'name': 'X', 'type_line': 'Instant', 'oracle_text': '',
+                'colors': [], 'card_type': 'instant'}
+        assert not _is_saga(_build_card_data(inst, {}))
+
+    def test_saga_frame_layer_geometry(self):
+        # Left panel opaque (chapter text readable), right art window
+        # transparent (art shows through), text baked into the chrome layer
+        import io
+        from PIL import Image
+        from card_frame_renderer import (render_frame_layer, render_text_overlay,
+                                         resolve_frame_settings)
+        fs = resolve_frame_settings(dict(self.URZA), {'style': 'basic'})
+        png = render_frame_layer(dict(self.URZA), fs)
+        img = Image.open(io.BytesIO(png)).convert('RGBA')
+        assert img.size == (750, 1050)
+        assert img.getpixel((200, 500))[3] > 200, 'chapter panel should be opaque'
+        assert img.getpixel((550, 500))[3] == 0, 'art window should be transparent'
+        text = render_text_overlay(dict(self.URZA), fs)
+        timg = Image.open(io.BytesIO(text)).convert('RGBA')
+        assert timg.getpixel((375, 525))[3] == 0, 'saga text overlay must be empty'
+
+    def test_saga_composite(self, tmp_path):
+        from PIL import Image
+        from card_frame_renderer import composite_card, CARD_WIDTH, CARD_HEIGHT
+        art = tmp_path / 'art.png'
+        Image.new('RGB', (896, 1152), (90, 60, 40)).save(art)
+        out = tmp_path / 'out.png'
+        composite_card(dict(self.URZA), str(art), None, str(out))
+        img = Image.open(out)
+        assert img.size == (CARD_WIDTH, CARD_HEIGHT)

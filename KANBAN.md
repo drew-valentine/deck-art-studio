@@ -79,6 +79,21 @@
 
 ## In Review
 
+- [ ] Saga card layout — real saga frame structure | Priority: P2 | Started: 2026-07-06 | Review Started: 2026-07-06 | Owner: drew-valentine
+  - Branch: `feat/saga-card-layout` (PR to follow immediately — DO NOT commit yet; KANBAN update only)
+  - Problem: Sagas (e.g. Urza's Saga) rendered with the normal card layout (art on top, rules crammed below), matching nothing about the printed saga frame.
+  - Implemented: Dedicated portrait saga chrome in `card_frame_renderer.py` following the printed structure — title bar at top, a LEFT chapter panel with italic reminder text, roman-numeral chapter badges on a rail with dividers (combined "I, II" chapters stack their badges), a transparent RIGHT art window, and a full-width type bar at the BOTTOM. Art stays full-bleed under the chrome so pan/zoom, the WYSIWYG designer, printing, and the edhplay extension all work unchanged.
+  - Chapter parsing: extracted from Scryfall oracle text ("I — ..." em-dash chapter lines after the parenthesized reminder text).
+  - Wiring: `render_frame_layer` (chrome + text baked), `render_text_overlay` (empty — text is baked into the frame layer), `composite_card`, and `composite_card_preview`.
+  - Acceptance criteria (Given/When/Then):
+    - [x] Given a saga card (e.g. Urza's Saga), when the composite is rendered, then it uses the dedicated portrait saga chrome (top title bar, left chapter panel with italic reminder text, roman-numeral chapter badges on a divided rail, transparent right art window, full-width bottom type bar) — not the normal art-on-top/rules-below layout.
+    - [x] Given a saga with a combined chapter (e.g. "I, II — ..."), when the chapter rail is drawn, then the combined chapters stack their badges on the shared rail segment.
+    - [x] Given a saga's Scryfall oracle text, when chapters are parsed, then the em-dash chapter lines after the parenthesized reminder are extracted into their numbered chapters.
+    - [x] Given the saga chrome renders, when art is composited, then the art stays full-bleed under the chrome so pan/zoom, the WYSIWYG designer, printing, and the edhplay extension work unchanged.
+    - [x] Validation gate: 234 unit tests pass (5 new saga tests — chapter parser incl. combined chapters, saga detection, geometry pixel checks, composite smoke); Urza's Saga and History of Benalia rendered against the real card reference; browser-verified the WYSIWYG designer on Urza's Saga in `heads-i-win` matches the stored composite; export manifest picks up the saga for the extension.
+  - Validation status: **PASSED (2026-07-06)** — 234 unit tests pass (5 new saga tests). Rendered Urza's Saga + History of Benalia against real card references; Playwright browser-verified the WYSIWYG designer on Urza's Saga (`heads-i-win`) matches the stored composite; export manifest includes the saga for the extension.
+  - Next: open PR from `feat/saga-card-layout` → main; on approval, squash-merge + semantic version tag.
+
 ## Done
 
 - [x] BUG: Showcase (godzilla) frame — manual Colors > Border only recolors the rules box; title/type bars keep baked accent color | Priority: P1 | Completed: 2026-07-05 | Owner: drew-valentine
