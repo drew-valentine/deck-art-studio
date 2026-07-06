@@ -1573,7 +1573,9 @@ def _max_fitting_rules_font(measure, box_h: float, desired: int,
 def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
                             w: float, h: float, text_color: str,
                             desired_font: int,
-                            avoid: Optional[Tuple[float, float]] = None) -> List[str]:
+                            avoid: Optional[Tuple[float, float]] = None,
+                            container: Optional[Tuple[float, float, float]] = None,
+                            band_alpha: float = 1.0) -> List[str]:
     """Two-column rules area for single-art multi-part cards.
 
     Adventure (Murderous Rider // Swift End): LEFT column = the adventure half
@@ -1601,6 +1603,10 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
     gap = max(16.0, w * 0.03)
     col_w = (w - gap) / 2
     xs = [x, x + col_w + gap]
+    # Header bands fill their container (the rules box) edge-to-edge and take
+    # its transparency; callers that know the real box pass (x0, y0, x1),
+    # others fall back to a slight bleed past the text area.
+    cbx0, cby0, cbx1 = container if container is not None else (x - 8, y_top - 6, x + w + 8)
 
     def _col_avoid_narrow():
         """Allowed line width inside the RIGHT column above the P/T plate."""
@@ -1624,13 +1630,11 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             return 0.0
 
     if _lum(text_color) > 140:  # dark panel
-        HDR = {'banner': '#ece7dc', 'banner_stroke': '#1a1712', 'name': '#1a1712',
-               'pip_bg': 'rgba(0,0,0,0.25)', 'band': '#b5afa3',
-               'band_stroke': '#1a1712', 'type': '#1a1712'}
+        HDR = {'banner': '#ece7dc', 'name': '#1a1712',
+               'pip_bg': 'rgba(0,0,0,0.25)', 'band': '#b5afa3', 'type': '#1a1712'}
     else:  # light panel
-        HDR = {'banner': '#1e1a15', 'banner_stroke': '#4a443a', 'name': '#f4f2ec',
-               'pip_bg': 'rgba(255,255,255,0.85)', 'band': '#d8d3c8',
-               'band_stroke': '#4a443a', 'type': '#1a1712'}
+        HDR = {'banner': '#1e1a15', 'name': '#f4f2ec',
+               'pip_bg': 'rgba(255,255,255,0.85)', 'band': '#d8d3c8', 'type': '#1a1712'}
 
     def measure(f):
         line_h = int(RULES_LINE_H * f / RULES_FONT)
@@ -1675,11 +1679,14 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             fname = raw_name.replace('&', '&amp;').replace('<', '&lt;')
             pips = parse_mana_cost(face.get('mana_cost') or '')
             nh, th2, hgap = _hdr_heights(line_h)
-            top = y_top
-            # Name banner: dark with light text, like the printed mini title
-            parts.append(f'<rect x="{cx - 7:.1f}" y="{top:.1f}" width="{col_w + 14:.1f}" '
-                         f'height="{nh:.1f}" rx="5" fill="{HDR["banner"]}" '
-                         f'stroke="{HDR["banner_stroke"]}" stroke-width="1.2"/>')
+            top = cby0
+            # Band x-extent: container edge to the column divider (flush fill)
+            bx0 = cbx0 if i == 0 else mid + 1
+            bx1 = (mid - 1) if i == 0 else cbx1
+            # Name banner: high-contrast fill, borderless, box-transparency
+            parts.append(f'<rect x="{bx0:.1f}" y="{top:.1f}" width="{bx1 - bx0:.1f}" '
+                         f'height="{nh:.1f}" fill="{HDR["banner"]}" '
+                         f'fill-opacity="{band_alpha:.3f}"/>')
             # Half titles print larger than body text on real cards; their
             # cost pips match the body's inline pips so every symbol in the
             # rules area is the same size
@@ -1705,9 +1712,9 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             # Type band: light with dark text, contrasting the name banner
             ftype = (face.get('type_line') or '').replace('&', '&amp;').replace('<', '&lt;')
             tf2 = max(11, int(f * 0.78))
-            parts.append(f'<rect x="{cx - 7:.1f}" y="{top + nh:.1f}" width="{col_w + 14:.1f}" '
-                         f'height="{th2:.1f}" rx="3" fill="{HDR["band"]}" '
-                         f'stroke="{HDR["band_stroke"]}" stroke-width="1"/>')
+            parts.append(f'<rect x="{bx0:.1f}" y="{top + nh:.1f}" width="{bx1 - bx0:.1f}" '
+                         f'height="{th2:.1f}" fill="{HDR["band"]}" '
+                         f'fill-opacity="{band_alpha:.3f}"/>')
             tcy = top + nh + th2 / 2 + tf2 * 0.35
             parts.append(f'<text x="{cx:.1f}" y="{tcy:.1f}" font-family="{TYPE_FONT_FAMILY}" '
                          f'font-size="{tf2}" font-weight="bold" '
@@ -2414,7 +2421,8 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
         rules_svg = _render_split_rules_svg(
             card, fs, fx + RULES_PADDING, rules_y + RULES_PADDING,
             rules_inner_w, rules_max_h, text_color,
-            int(fs.get('rules_font_size') or RULES_FONT))
+            int(fs.get('rules_font_size') or RULES_FONT),
+            container=(fx, rules_y, fx + fw), band_alpha=text_box_opacity)
         rules_used_h = rules_max_h
         rules_text_y_start = rules_y + RULES_PADDING
     elif show_oracle and rules_max_h > 0:
@@ -2993,7 +3001,8 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
         rules_svg = _render_split_rules_svg(
             card, fs, art_m + RULES_PADDING, rules_y + RULES_PADDING,
             rules_inner_w, rules_max_h, text_color,
-            int(fs.get('rules_font_size') or RULES_FONT))
+            int(fs.get('rules_font_size') or RULES_FONT),
+            container=(art_m, rules_y, art_m + fw))
         rules_used_h = rules_max_h
         rules_text_y_start = rules_y + RULES_PADDING
     elif show_oracle and rules_max_h > 0:
@@ -3260,10 +3269,13 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
         # Adventure / split / room: two-column rules area
         _av = ((956.0, 532.0) if card.power is not None
                and card.toughness is not None else None)
+        _bop = fs.get('box_opacity')
         svg.extend(_render_split_rules_svg(
             card, fs, tx, L['rules_y0'] + 8, L['x_right'] - tx,
             (L['rules_y1'] - L['rules_y0']) - 16, dark,
-            int(fs.get('rules_font_size') or 30), avoid=_av))
+            int(fs.get('rules_font_size') or 30), avoid=_av,
+            container=(54, L['rules_y0'] + 2, 696),
+            band_alpha=(_bop if _bop is not None else 236 / 255)))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8
@@ -4005,10 +4017,13 @@ def _create_crystal_text_svg(card: CardData, fs: dict) -> str:
         # Adventure / split / room: two-column rules area
         _av = ((915.0, 506.0) if card.power is not None
                and card.toughness is not None else None)
+        _bop = fs.get('box_opacity')
         svg.extend(_render_split_rules_svg(
             card, fs, tx, L['rules_y0'] + 8, L['x_right'] - tx,
             (L['rules_y1'] - L['rules_y0']) - 16, rules_col,
-            int(fs.get('rules_font_size') or 30), avoid=_av))
+            int(fs.get('rules_font_size') or 30), avoid=_av,
+            container=(tx - 10, L['rules_y0'] + 2, L['x_right'] + 10),
+            band_alpha=(_bop if _bop is not None else 0.84)))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8

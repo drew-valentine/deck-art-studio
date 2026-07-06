@@ -680,3 +680,15 @@ class TestSplitRulesHeaders:
         assert 'fill="#ece7dc"' in svg      # light banner
         assert 'fill="#1e1a15"' not in svg  # no dark banner on dark panel
         assert 'fill="#1a1712">Swift End</text>' in svg  # dark name on light
+
+    def test_bands_borderless_and_transparency(self):
+        # Bands carry the rules box's transparency and draw no stroke
+        from card_frame_renderer import _build_card_data, _render_split_rules_svg
+        card = _build_card_data(TestSplitTextLayouts.ADVENTURE, {})
+        parts = _render_split_rules_svg(card, {}, 50, 700, 650, 280, '#000', 30,
+                                        band_alpha=0.62)
+        svg = '\n'.join(parts)
+        assert svg.count('fill-opacity="0.620"') == 2  # banner + type band
+        for p in parts:
+            if '#1e1a15' in p or '#d8d3c8' in p:
+                assert 'stroke' not in p, f'band should be borderless: {p}'
