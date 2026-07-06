@@ -663,12 +663,16 @@ class TestSplitRulesHeaders:
         assert 'fill="#f4f2ec">Swift End</text>' in svg  # light name on dark
 
     def test_room_header_bands_both_halves(self):
+        # Each half's banner carries ITS color identity (Smoky Lounge red,
+        # Misty Salon blue), not a shared neutral
         from card_frame_renderer import _build_card_data, _render_split_rules_svg
         card = _build_card_data(TestSplitTextLayouts.ROOM, {})
         parts = _render_split_rules_svg(card, {}, 50, 700, 650, 280, '#000', 30)
         svg = '\n'.join(parts)
-        assert svg.count('fill="#1e1a15"') == 2   # both halves get banners
-        assert svg.count('fill="#d8d3c8"') == 2
+        assert svg.count('fill="#4a1a12"') == 1   # red half banner
+        assert svg.count('fill="#16324a"') == 1   # blue half banner
+        assert svg.count('fill="#eacfc4"') == 1   # red half type band
+        assert svg.count('fill="#c7dbeb"') == 1   # blue half type band
 
     def test_dark_panel_gets_light_banner(self):
         # Dark rules panels (crystal/samurai/etched pass a light text color)
@@ -688,7 +692,30 @@ class TestSplitRulesHeaders:
         parts = _render_split_rules_svg(card, {}, 50, 700, 650, 280, '#000', 30,
                                         band_alpha=0.62)
         svg = '\n'.join(parts)
-        assert svg.count('fill-opacity="0.620"') == 2  # banner + type band
+        # Legibility floor: very translucent boxes still back the header text
+        assert svg.count('fill-opacity="0.850"') == 2  # banner + type band
         for p in parts:
             if '#1e1a15' in p or '#d8d3c8' in p:
                 assert 'stroke' not in p, f'band should be borderless: {p}'
+
+
+class TestSplitFrameHalfOrder:
+    def test_split_gradient_follows_column_order(self):
+        # Fire (left, red) // Ice (right, blue) — the frame gradient must
+        # follow the halves' column order, not WUBRG order (which put the
+        # blue frame side around Fire on every gradient style)
+        from card_frame_renderer import _two_color_keys
+        fire_ice = {
+            'name': 'Fire // Ice', 'layout': 'split',
+            'colors': ['R', 'U'], 'color_identity': ['R', 'U'],
+            'card_faces': [
+                {'name': 'Fire', 'mana_cost': '{1}{R}'},
+                {'name': 'Ice', 'mana_cost': '{1}{U}'},
+            ],
+        }
+        assert _two_color_keys(fire_ice) == ('r', 'u')
+
+    def test_non_split_keeps_wubrg_order(self):
+        from card_frame_renderer import _two_color_keys
+        card = {'name': 'X', 'colors': ['R', 'U'], 'color_identity': ['R', 'U']}
+        assert _two_color_keys(card) == ('u', 'r')
