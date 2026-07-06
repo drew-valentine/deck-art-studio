@@ -1574,7 +1574,6 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
                             w: float, h: float, text_color: str,
                             desired_font: int,
                             avoid: Optional[Tuple[float, float]] = None,
-                            container: Optional[Tuple[float, float, float]] = None,
                             band_alpha: float = 1.0) -> List[str]:
     """Two-column rules area for single-art multi-part cards.
 
@@ -1603,10 +1602,6 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
     gap = max(16.0, w * 0.03)
     col_w = (w - gap) / 2
     xs = [x, x + col_w + gap]
-    # Header bands fill their container (the rules box) edge-to-edge and take
-    # its transparency; callers that know the real box pass (x0, y0, x1),
-    # others fall back to a slight bleed past the text area.
-    cbx0, cby0, cbx1 = container if container is not None else (x - 8, y_top - 6, x + w + 8)
 
     def _col_avoid_narrow():
         """Allowed line width inside the RIGHT column above the P/T plate."""
@@ -1679,10 +1674,16 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             fname = raw_name.replace('&', '&amp;').replace('<', '&lt;')
             pips = parse_mana_cost(face.get('mana_cost') or '')
             nh, th2, hgap = _hdr_heights(line_h)
-            top = cby0
-            # Band x-extent: container edge to the column divider (flush fill)
-            bx0 = cbx0 if i == 0 else mid + 1
-            bx1 = (mid - 1) if i == 0 else cbx1
+            top = y_top
+            # Header block geometry: aligned to the TEXT GRID — the one bound
+            # that is already pixel-correct inside every style's painted box
+            # (guessed per-style box edges left slivers or overlapped border
+            # decorations). A small symmetric bleed stays within the padding
+            # every caller guarantees around its text area.
+            bx0, bx1 = cx - 6, cx + col_w + 6
+            parts.append(f'<clipPath id="sphdr{i}"><rect x="{bx0:.1f}" y="{top:.1f}" '
+                         f'width="{bx1 - bx0:.1f}" height="{nh + th2:.1f}" rx="7"/></clipPath>')
+            parts.append(f'<g clip-path="url(#sphdr{i})">')
             # Name banner: high-contrast fill, borderless, box-transparency
             parts.append(f'<rect x="{bx0:.1f}" y="{top:.1f}" width="{bx1 - bx0:.1f}" '
                          f'height="{nh:.1f}" fill="{HDR["banner"]}" '
@@ -1715,6 +1716,7 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             parts.append(f'<rect x="{bx0:.1f}" y="{top + nh:.1f}" width="{bx1 - bx0:.1f}" '
                          f'height="{th2:.1f}" fill="{HDR["band"]}" '
                          f'fill-opacity="{band_alpha:.3f}"/>')
+            parts.append('</g>')
             tcy = top + nh + th2 / 2 + tf2 * 0.35
             parts.append(f'<text x="{cx:.1f}" y="{tcy:.1f}" font-family="{TYPE_FONT_FAMILY}" '
                          f'font-size="{tf2}" font-weight="bold" '
@@ -2422,7 +2424,7 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
             card, fs, fx + RULES_PADDING, rules_y + RULES_PADDING,
             rules_inner_w, rules_max_h, text_color,
             int(fs.get('rules_font_size') or RULES_FONT),
-            container=(fx, rules_y, fx + fw), band_alpha=text_box_opacity)
+            band_alpha=text_box_opacity)
         rules_used_h = rules_max_h
         rules_text_y_start = rules_y + RULES_PADDING
     elif show_oracle and rules_max_h > 0:
@@ -3001,8 +3003,7 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
         rules_svg = _render_split_rules_svg(
             card, fs, art_m + RULES_PADDING, rules_y + RULES_PADDING,
             rules_inner_w, rules_max_h, text_color,
-            int(fs.get('rules_font_size') or RULES_FONT),
-            container=(art_m, rules_y, art_m + fw))
+            int(fs.get('rules_font_size') or RULES_FONT))
         rules_used_h = rules_max_h
         rules_text_y_start = rules_y + RULES_PADDING
     elif show_oracle and rules_max_h > 0:
@@ -3274,7 +3275,6 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
             card, fs, tx, L['rules_y0'] + 8, L['x_right'] - tx,
             (L['rules_y1'] - L['rules_y0']) - 16, dark,
             int(fs.get('rules_font_size') or 30), avoid=_av,
-            container=(54, L['rules_y0'] + 2, 696),
             band_alpha=(_bop if _bop is not None else 236 / 255)))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
@@ -4022,7 +4022,6 @@ def _create_crystal_text_svg(card: CardData, fs: dict) -> str:
             card, fs, tx, L['rules_y0'] + 8, L['x_right'] - tx,
             (L['rules_y1'] - L['rules_y0']) - 16, rules_col,
             int(fs.get('rules_font_size') or 30), avoid=_av,
-            container=(tx - 10, L['rules_y0'] + 2, L['x_right'] + 10),
             band_alpha=(_bop if _bop is not None else 0.84)))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
