@@ -8,6 +8,7 @@ Output: 750×1050 PNG at 300 DPI (standard proxy print size).
 """
 
 import copy
+import base64
 import io
 import json
 import re
@@ -1570,10 +1571,143 @@ def _max_fitting_rules_font(measure, box_h: float, desired: int,
     return f
 
 
+
+# Raw-asset type-bar coords for styles whose composited chrome RELOCATES the
+# bar (the battle band metadata records the post-relocation position).
+_SPLIT_RAW_TYPE_Y = {'iko': (722, 808)}
+
+
+def _face_color_key(face: dict) -> str:
+    '''Frame color key for one split/adventure half, from its own mana cost.'''
+    ordered = [c for c in _WUBRG if c in (face.get('mana_cost') or '')]
+    if len(ordered) == 1:
+        return _COLOR_TO_KEY[ordered[0]]
+    return 'm' if len(ordered) >= 2 else 'a'
+
+
+# Per-half banner tints for the FLAT fallback scheme (SVG styles): the halves
+# must carry their color identity — two identical neutral bars made Fire and
+# Ice indistinguishable at arm's length.
+_FLAT_BANNER = {
+    'light': {'u': '#16324a', 'r': '#4a1a12', 'g': '#14381f',
+              'w': '#494331', 'm': '#3f3312'},
+    'dark': {'u': '#c7dbeb', 'r': '#eacfc4', 'g': '#c9e2cd',
+             'w': '#f1ead6', 'm': '#eadfae'},
+}
+
+# Solid tints blended over low-chroma bar material (crystal's stone is nearly
+# achromatic for every color) so a red half still reads red. Black stays
+# untinted — its printed identity IS dark neutral.
+_MATERIAL_TINTS = {'u': (30, 90, 150), 'r': (165, 45, 28), 'g': (25, 105, 55),
+                   'w': (205, 192, 158), 'm': (185, 148, 58)}
+
+# (frame_dir, color_key, out_w, out_h, band) -> data URI; strips are tiny so
+# the cache stays small while measure/draw loops stay cheap.
+_SPLIT_BAR_CACHE = {}
+
+
+def _split_header_bar_uris(fs: dict, face: dict, block_w: float,
+                           nh: float, th2: float):
+    """Mini title-bar + type-bar textures for one split/adventure half,
+    sliced from the HALF'S OWN color variant of the current style's frame
+    assets — so the header is made of the frame's real chrome (m15 silver,
+    iko gold-trimmed, crystal stone...) in the half's color identity.
+
+    Returns ((title_uri, title_text_col), (type_uri, type_text_col)) or None
+    when the style has no sliceable assets (SVG styles keep the flat scheme).
+    Text colors are sampled from each bar's actual luminance."""
+    frame_dir = _battle_frame_dir(fs)
+    if frame_dir is None:
+        return None
+    L, bar_col, _ = _BATTLE_STYLE_BANDS[frame_dir]
+
+    # Face color key from its own mana cost (like real split halves print)
+    key = _face_color_key(face)
+    frame = (_load_frame_image(frame_dir, key) or _load_frame_image(frame_dir, 'c')
+             or _load_frame_image(frame_dir, 'a') or _load_frame_image(frame_dir, 'l'))
+    if frame is None:
+        return None
+    if frame.size != (CARD_WIDTH, CARD_HEIGHT):
+        frame = frame.resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+
+    ty0, ty1 = _SPLIT_RAW_TYPE_Y.get(frame_dir, (L['type_y0'], L['type_y1']))
+    out = []
+    for band, (y0, y1, dest_h) in (('title', (L['title_y0'], L['title_y1'], nh)),
+                                   ('type', (ty0, ty1, th2))):
+        ck = (frame_dir, key, band, int(block_w), int(dest_h))
+        if ck in _SPLIT_BAR_CACHE:
+            out.append(_SPLIT_BAR_CACHE[ck])
+            continue
+        strip = frame.crop((24, y0, CARD_WIDTH - 24, y1))
+        # Take the bar's MATERIAL, not its shape: trim transparent margins,
+        # then keep only the interior texture — the end caps are what made
+        # the mini headers read as shrunken pill-shaped title bars (and msa's
+        # ornament caps looked pasted-on). The plaque gets squared corners
+        # and a printed-style keyline in the caller instead.
+        bb = strip.getbbox()
+        if bb:
+            strip = strip.crop(bb)
+        # Pick the CLEANEST interior window, not a fixed center crop —
+        # several styles stamp a crest at the bar's center (etched's chevron,
+        # samurai's swooshes), which a center crop drags onto the plaque.
+        # Lowest per-column deviation from the bar's median color wins.
+        import numpy as np
+        sw = strip.size[0]
+        rgb = np.asarray(strip.convert('RGB'), dtype=float)
+        col_med = np.median(rgb, axis=0)
+        cost_cols = np.abs(col_med - np.median(col_med, axis=0)).sum(axis=1)
+        win = max(12, int(sw * 0.22))
+        lo, hi = int(sw * 0.12), max(int(sw * 0.88) - win, int(sw * 0.12))
+        csum = np.concatenate([[0.0], np.cumsum(cost_cols)])
+        best_x = min(range(lo, hi + 1), key=lambda x0: csum[x0 + win] - csum[x0])
+        strip = strip.crop((best_x, 0, best_x + win, strip.size[1]))
+        # The material must READ as the half's color. Keying on low chroma
+        # alone missed msa (saturated but yellow — wrong hue entirely) and
+        # godzilla (gray bar body whose colored trim rails inflate mean
+        # saturation). Key on hue-direction match with the identity color:
+        # no match or no chroma -> strong tint; mediocre match -> gentle
+        # nudge; true match (m15's salmon/powder bars) -> untouched.
+        if key in _MATERIAL_TINTS:
+            srgb = np.asarray(strip.convert('RGB'), dtype=float).reshape(-1, 3)
+            mean_rgb = srgb.mean(0)
+            mc = mean_rgb - mean_rgb.mean()
+            t = np.asarray(_MATERIAL_TINTS[key], dtype=float)
+            tc = t - t.mean()
+            chroma = float(np.abs(mc).sum())
+            match = float(mc @ tc / (np.linalg.norm(mc) * np.linalg.norm(tc) + 1e-6))
+            blend = 0.38 if (chroma < 30 or match < 0.55) else \
+                (0.18 if match < 0.8 else 0.0)
+            if blend:
+                tint = Image.new('RGB', strip.size, _MATERIAL_TINTS[key])
+                a = strip.getchannel('A')
+                strip = Image.blend(strip.convert('RGB'), tint, blend).convert('RGBA')
+                strip.putalpha(a)
+        # Text color follows the BAR's actual luminance — a black half's bar
+        # is near-black in every style, so per-style constants can't know
+        # (dark "Swift End" on m15's black bar was unreadable).
+        arr = np.asarray(strip, dtype=float)
+        ch = arr.shape[0]
+        core = arr[ch // 4: max(ch // 4 + 1, 3 * ch // 4), :, :]
+        a = core[..., 3] / 255.0
+        lum = (0.299 * core[..., 0] + 0.587 * core[..., 1] + 0.114 * core[..., 2])
+        mean_lum = float((lum * a).sum() / max(a.sum(), 1.0))
+        txt_col = '#f4f2ec' if mean_lum < 140 else '#1a1712'
+        # Interior texture stretches uniformly to the destination aspect
+        raster_w = max(40, int(strip.size[1] * block_w / max(dest_h, 1)))
+        strip = strip.resize((raster_w, strip.size[1]), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        strip.save(buf, 'PNG')
+        uri = 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode('ascii')
+        _SPLIT_BAR_CACHE[ck] = (uri, txt_col)
+        out.append((uri, txt_col))
+    return out[0], out[1]
+
+
 def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
                             w: float, h: float, text_color: str,
                             desired_font: int,
-                            avoid: Optional[Tuple[float, float]] = None) -> List[str]:
+                            avoid: Optional[Tuple[float, float]] = None,
+                            band_alpha: float = 1.0) -> List[str]:
     """Two-column rules area for single-art multi-part cards.
 
     Adventure (Murderous Rider // Swift End): LEFT column = the adventure half
@@ -1606,11 +1740,36 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
         """Allowed line width inside the RIGHT column above the P/T plate."""
         return avoid[1] - (col_w + gap) if avoid is not None else None
 
+    # Header bands (real-card look): the half's name on a high-contrast
+    # banner, its type line on a muted band below. The scheme follows the
+    # panel: light rules panels (dark body text) get a dark banner + light
+    # band; dark panels (crystal/samurai/etched render light body text) get
+    # a light banner + muted light band — a dark banner would melt into
+    # those panels with only its stroke visible.
+    def _hdr_heights(line_h):
+        return line_h * 1.2, line_h * 0.9, line_h * 0.3  # banner, band, gap
+
+    def _lum(color):
+        try:
+            hx = color.lstrip('#')
+            return (0.299 * int(hx[0:2], 16) + 0.587 * int(hx[2:4], 16)
+                    + 0.114 * int(hx[4:6], 16))
+        except (ValueError, IndexError):
+            return 0.0
+
+    if _lum(text_color) > 140:  # dark panel
+        HDR = {'scheme': 'dark', 'banner': '#ece7dc', 'name': '#1a1712',
+               'pip_bg': 'rgba(0,0,0,0.25)', 'band': '#b5afa3', 'type': '#1a1712'}
+    else:  # light panel
+        HDR = {'scheme': 'light', 'banner': '#1e1a15', 'name': '#f4f2ec',
+               'pip_bg': 'rgba(255,255,255,0.85)', 'band': '#d8d3c8', 'type': '#1a1712'}
+
     def measure(f):
         line_h = int(RULES_LINE_H * f / RULES_FONT)
         worst = 0.0
         for i, col in enumerate(cols):
-            hh = (line_h + line_h * 0.85) if col['face'] else 0.0
+            nh, th2, hgap = _hdr_heights(line_h)
+            hh = (nh + th2 + hgap) if col['face'] else 0.0
             need = hh
             if avoid is not None and i == 1:
                 narrow = _col_avoid_narrow()
@@ -1647,6 +1806,65 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             raw_name = face.get('name') or ''
             fname = raw_name.replace('&', '&amp;').replace('<', '&lt;')
             pips = parse_mana_cost(face.get('mana_cost') or '')
+            nh, th2, hgap = _hdr_heights(line_h)
+            top = y_top
+            # Header block geometry: aligned to the TEXT GRID — the one bound
+            # that is already pixel-correct inside every style's painted box
+            # (guessed per-style box edges left slivers or overlapped border
+            # decorations). A small symmetric bleed stays within the padding
+            # every caller guarantees around its text area.
+            bx0, bx1 = cx - 6, cx + col_w + 6
+            parts.append(f'<clipPath id="sphdr{i}"><rect x="{bx0:.1f}" y="{top:.1f}" '
+                         f'width="{bx1 - bx0:.1f}" height="{nh + th2:.1f}"/></clipPath>')
+            parts.append(f'<g clip-path="url(#sphdr{i})">')
+            # Header made of the frame's OWN chrome in the half's color when
+            # the style has sliceable assets; flat high-contrast bands are
+            # the fallback for the SVG styles.
+            tex = _split_header_bar_uris(fs, face, bx1 - bx0, nh, th2)
+            hdr_inset = 8 if tex else 0  # plaque padding inside the keyline
+            if tex:
+                (title_uri, name_col), (type_uri, type_col) = tex
+                parts.append(f'<image x="{bx0:.1f}" y="{top:.1f}" '
+                             f'width="{bx1 - bx0:.1f}" height="{nh:.1f}" '
+                             f'preserveAspectRatio="none" opacity="{band_alpha:.3f}" '
+                             f'href="{title_uri}"/>')
+                parts.append(f'<image x="{bx0:.1f}" y="{top + nh:.1f}" '
+                             f'width="{bx1 - bx0:.1f}" height="{th2:.1f}" '
+                             f'preserveAspectRatio="none" opacity="{band_alpha:.3f}" '
+                             f'href="{type_uri}"/>')
+                # Printed-style finish: thin keyline around the plaque and a
+                # rule between the name and type rows
+                parts.append(f'<line x1="{bx0:.1f}" y1="{top + nh:.1f}" '
+                             f'x2="{bx1:.1f}" y2="{top + nh:.1f}" '
+                             f'stroke="#141210" stroke-width="1.4"/>')
+                parts.append(f'<rect x="{bx0:.1f}" y="{top:.1f}" '
+                             f'width="{bx1 - bx0:.1f}" height="{nh + th2:.1f}" '
+                             f'fill="none" stroke="#141210" stroke-width="1.8"/>')
+            else:
+                # Per-half color identity for BOTH rows of the flat scheme —
+                # a neutral type row left Fire's and Ice's headers reading
+                # identical below the name. Hierarchy flips with the panel:
+                # dark banner + light band on light panels, inverse on dark.
+                _fk = _face_color_key(face)
+                if _fk in _FLAT_BANNER['light']:
+                    if HDR['scheme'] == 'light':
+                        banner_fill = _FLAT_BANNER['light'][_fk]
+                        band_fill = _FLAT_BANNER['dark'][_fk]
+                        name_col, type_col = '#f4f2ec', '#1a1712'
+                    else:
+                        banner_fill = _FLAT_BANNER['dark'][_fk]
+                        band_fill = _FLAT_BANNER['light'][_fk]
+                        name_col, type_col = '#1a1712', '#f4f2ec'
+                else:
+                    banner_fill, band_fill = HDR['banner'], HDR['band']
+                    name_col, type_col = HDR['name'], HDR['type']
+                # Legibility floor: the plaque backs its text even when the
+                # rules box is very translucent
+                _pa = max(band_alpha, 0.85)
+                # Name banner: high-contrast fill, borderless
+                parts.append(f'<rect x="{bx0:.1f}" y="{top:.1f}" width="{bx1 - bx0:.1f}" '
+                             f'height="{nh:.1f}" fill="{banner_fill}" '
+                             f'fill-opacity="{_pa:.3f}"/>')
             # Half titles print larger than body text on real cards; their
             # cost pips match the body's inline pips so every symbol in the
             # rules area is the same size
@@ -1654,27 +1872,36 @@ def _render_split_rules_svg(card: CardData, fs: dict, x: float, y_top: float,
             ps = _rules_pip_size(f)
             pips_w = len(pips) * (ps + 2) + 6 if pips else 0
             est = len(raw_name) * nf * 0.55
-            name_avail = col_w - pips_w
+            name_avail = col_w - pips_w - 2 * hdr_inset
             if est > name_avail and name_avail > 0:
                 nf = max(12, int(nf * name_avail / est))
-            parts.append(f'<text x="{cx:.1f}" y="{cy:.1f}" font-family="{NAME_FONT_FAMILY}" '
-                         f'font-size="{nf}" font-weight="bold" fill="{text_color}">{fname}</text>')
+            ncy = top + nh / 2 + nf * 0.35
+            parts.append(f'<text x="{cx + hdr_inset:.1f}" y="{ncy:.1f}" '
+                         f'font-family="{NAME_FONT_FAMILY}" '
+                         f'font-size="{nf}" font-weight="bold" fill="{name_col}">{fname}</text>')
             if pips:
-                px = cx + col_w
-                pcy = cy - nf * 0.32
+                px = cx + col_w - hdr_inset
+                pcy = top + nh / 2
                 for pip in reversed(pips):
                     pxx = px - ps
                     parts.append(f'<circle cx="{pxx + ps/2:.1f}" cy="{pcy:.1f}" '
-                                 f'r="{ps/2 + 0.5:.1f}" fill="rgba(0,0,0,0.25)"/>')
+                                 f'r="{ps/2 + 0.5:.1f}" fill="{HDR["pip_bg"]}"/>')
                     parts.append(_pip_image_tag(pip, pxx, pcy - ps / 2, ps))
                     px -= (ps + 2)
-            cy += line_h
+            # Type band: light with dark text, contrasting the name banner
             ftype = (face.get('type_line') or '').replace('&', '&amp;').replace('<', '&lt;')
             tf2 = max(11, int(f * 0.78))
-            parts.append(f'<text x="{cx:.1f}" y="{cy:.1f}" font-family="{TYPE_FONT_FAMILY}" '
-                         f'font-size="{tf2}" font-weight="bold" fill="{text_color}" '
-                         f'opacity="0.82">{ftype}</text>')
-            cy += line_h * 0.85
+            if not tex:
+                parts.append(f'<rect x="{bx0:.1f}" y="{top + nh:.1f}" width="{bx1 - bx0:.1f}" '
+                             f'height="{th2:.1f}" fill="{band_fill}" '
+                             f'fill-opacity="{max(band_alpha, 0.85):.3f}"/>')
+            parts.append('</g>')
+            tcy = top + nh + th2 / 2 + tf2 * 0.35
+            parts.append(f'<text x="{cx + hdr_inset:.1f}" y="{tcy:.1f}" '
+                         f'font-family="{TYPE_FONT_FAMILY}" '
+                         f'font-size="{tf2}" font-weight="bold" '
+                         f'fill="{type_col}">{ftype}</text>')
+            cy = top + nh + th2 + hgap + f * 0.8
 
         av_abs = None
         if avoid is not None and i == 1:
@@ -2376,7 +2603,8 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
         rules_svg = _render_split_rules_svg(
             card, fs, fx + RULES_PADDING, rules_y + RULES_PADDING,
             rules_inner_w, rules_max_h, text_color,
-            int(fs.get('rules_font_size') or RULES_FONT))
+            int(fs.get('rules_font_size') or RULES_FONT),
+            band_alpha=text_box_opacity)
         rules_used_h = rules_max_h
         rules_text_y_start = rules_y + RULES_PADDING
     elif show_oracle and rules_max_h > 0:
@@ -2773,8 +3001,21 @@ _COLOR_TO_KEY = {'W': 'w', 'U': 'u', 'B': 'b', 'R': 'r', 'G': 'g'}
 
 
 def _two_color_keys(card_dict: dict) -> Optional[tuple]:
-    """If the card is exactly two colors, return the (left, right) frame keys in
-    WUBRG order (e.g. a W/U card -> ('w', 'u')); else None."""
+    """If the card is exactly two colors, return the (left, right) frame keys.
+
+    Split/room cards follow their COLUMN order — Fire (left half, red) gets
+    the red frame side, Ice (right, blue) the blue side. WUBRG sorting put
+    blue around Fire on every gradient style ("Fire living in a blue house").
+    Everything else keeps WUBRG order (e.g. a W/U card -> ('w', 'u'))."""
+    if (card_dict.get('layout') == 'split'
+            and len(card_dict.get('card_faces') or []) >= 2):
+        faces = card_dict['card_faces']
+        halves = []
+        for f in faces[:2]:
+            fc = [c for c in _WUBRG if c in (f.get('mana_cost') or '')]
+            halves.append(_COLOR_TO_KEY[fc[0]] if len(fc) == 1 else None)
+        if halves[0] and halves[1] and halves[0] != halves[1]:
+            return halves[0], halves[1]
     colors = card_dict.get('color_identity', []) or card_dict.get('colors', [])
     ordered = [c for c in _WUBRG if c in colors]
     if len(ordered) == 2:
@@ -3222,10 +3463,12 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
         # Adventure / split / room: two-column rules area
         _av = ((956.0, 532.0) if card.power is not None
                and card.toughness is not None else None)
+        _bop = fs.get('box_opacity')
         svg.extend(_render_split_rules_svg(
             card, fs, tx, L['rules_y0'] + 8, L['x_right'] - tx,
             (L['rules_y1'] - L['rules_y0']) - 16, dark,
-            int(fs.get('rules_font_size') or 30), avoid=_av))
+            int(fs.get('rules_font_size') or 30), avoid=_av,
+            band_alpha=(_bop if _bop is not None else 236 / 255)))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8
@@ -3967,10 +4210,12 @@ def _create_crystal_text_svg(card: CardData, fs: dict) -> str:
         # Adventure / split / room: two-column rules area
         _av = ((915.0, 506.0) if card.power is not None
                and card.toughness is not None else None)
+        _bop = fs.get('box_opacity')
         svg.extend(_render_split_rules_svg(
             card, fs, tx, L['rules_y0'] + 8, L['x_right'] - tx,
             (L['rules_y1'] - L['rules_y0']) - 16, rules_col,
-            int(fs.get('rules_font_size') or 30), avoid=_av))
+            int(fs.get('rules_font_size') or 30), avoid=_av,
+            band_alpha=(_bop if _bop is not None else 0.84)))
     elif card.oracle_text:
         rbox_w = L['x_right'] - tx
         rbox_top = L['rules_y0'] + 8

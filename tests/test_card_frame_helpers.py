@@ -648,3 +648,74 @@ class TestSagaFrame:
         for img, style in ((m15, 'm15'), (godz, 'godzilla')):
             assert img.getpixel((200, 500))[3] > 200, f'{style}: panel not opaque'
             assert img.getpixel((550, 500))[3] < 30, f'{style}: window not transparent'
+
+
+class TestSplitRulesHeaders:
+    def test_adventure_header_bands(self):
+        # The half's mini header renders as contrasting bands: dark name
+        # banner + light type band (real-card look), not plain text
+        from card_frame_renderer import _build_card_data, _render_split_rules_svg
+        card = _build_card_data(TestSplitTextLayouts.ADVENTURE, {})
+        parts = _render_split_rules_svg(card, {}, 50, 700, 650, 280, '#000', 30)
+        svg = '\n'.join(parts)
+        assert svg.count('fill="#1e1a15"') == 1   # one name banner (adventure)
+        assert svg.count('fill="#d8d3c8"') == 1   # one type band
+        assert 'fill="#f4f2ec">Swift End</text>' in svg  # light name on dark
+
+    def test_room_header_bands_both_halves(self):
+        # Each half's banner carries ITS color identity (Smoky Lounge red,
+        # Misty Salon blue), not a shared neutral
+        from card_frame_renderer import _build_card_data, _render_split_rules_svg
+        card = _build_card_data(TestSplitTextLayouts.ROOM, {})
+        parts = _render_split_rules_svg(card, {}, 50, 700, 650, 280, '#000', 30)
+        svg = '\n'.join(parts)
+        assert svg.count('fill="#4a1a12"') == 1   # red half banner
+        assert svg.count('fill="#16324a"') == 1   # blue half banner
+        assert svg.count('fill="#eacfc4"') == 1   # red half type band
+        assert svg.count('fill="#c7dbeb"') == 1   # blue half type band
+
+    def test_dark_panel_gets_light_banner(self):
+        # Dark rules panels (crystal/samurai/etched pass a light text color)
+        # invert the header scheme — a dark banner would melt into the panel
+        from card_frame_renderer import _build_card_data, _render_split_rules_svg
+        card = _build_card_data(TestSplitTextLayouts.ADVENTURE, {})
+        parts = _render_split_rules_svg(card, {}, 50, 700, 650, 280, '#f2f3f5', 30)
+        svg = '\n'.join(parts)
+        assert 'fill="#ece7dc"' in svg      # light banner
+        assert 'fill="#1e1a15"' not in svg  # no dark banner on dark panel
+        assert 'fill="#1a1712">Swift End</text>' in svg  # dark name on light
+
+    def test_bands_borderless_and_transparency(self):
+        # Bands carry the rules box's transparency and draw no stroke
+        from card_frame_renderer import _build_card_data, _render_split_rules_svg
+        card = _build_card_data(TestSplitTextLayouts.ADVENTURE, {})
+        parts = _render_split_rules_svg(card, {}, 50, 700, 650, 280, '#000', 30,
+                                        band_alpha=0.62)
+        svg = '\n'.join(parts)
+        # Legibility floor: very translucent boxes still back the header text
+        assert svg.count('fill-opacity="0.850"') == 2  # banner + type band
+        for p in parts:
+            if '#1e1a15' in p or '#d8d3c8' in p:
+                assert 'stroke' not in p, f'band should be borderless: {p}'
+
+
+class TestSplitFrameHalfOrder:
+    def test_split_gradient_follows_column_order(self):
+        # Fire (left, red) // Ice (right, blue) — the frame gradient must
+        # follow the halves' column order, not WUBRG order (which put the
+        # blue frame side around Fire on every gradient style)
+        from card_frame_renderer import _two_color_keys
+        fire_ice = {
+            'name': 'Fire // Ice', 'layout': 'split',
+            'colors': ['R', 'U'], 'color_identity': ['R', 'U'],
+            'card_faces': [
+                {'name': 'Fire', 'mana_cost': '{1}{R}'},
+                {'name': 'Ice', 'mana_cost': '{1}{U}'},
+            ],
+        }
+        assert _two_color_keys(fire_ice) == ('r', 'u')
+
+    def test_non_split_keeps_wubrg_order(self):
+        from card_frame_renderer import _two_color_keys
+        card = {'name': 'X', 'colors': ['R', 'U'], 'color_identity': ['R', 'U']}
+        assert _two_color_keys(card) == ('u', 'r')

@@ -2,6 +2,11 @@
 
 ## Backlog
 
+- [ ] BUG: Planeswalker frame style drops adventure/split half rules text | Priority: P3 | Found: 2026-07-06 | Owner: unassigned
+  - Found during the split-header full-style review. Pre-existing on main (verified by rendering Murderous Rider // Swift End in the planeswalker style from main — only the creature half's Lifelink/dies text renders in the loyalty-style ability bands; the Swift End adventure half is silently omitted).
+  - Root cause area: the planeswalker style's text renderer (`_create_pw_frame_text_svg` in `card_frame_renderer.py`) renders `card.oracle_text` into loyalty-style ability bands and never checks `card.split_faces`, unlike the other styles which route through `_render_split_rules_svg`.
+  - Edge case: user must deliberately pick the planeswalker frame for an adventure/split card, hence P3.
+
 - [ ] Alt Layouts: transform/MDFC face-indicator pips on frames | Priority: P3 | Created: 2026-07-03 | Owner: unassigned
   - Polish leftover from the now-complete "Support Alternative Card Layouts" epic (see Done). A dedicated transform-indicator icon on the frame (front/back face indicator). Back-face composites currently render with the standard frame for the back face's own card data; a face-indicator icon was deferred out of Phase 1.
 
@@ -78,6 +83,16 @@
 ## In Progress
 
 ## In Review
+
+- [ ] Split-rules headers need contrast (adventure/split/room mini titles) | Priority: P2 | Started: 2026-07-06 | Review Started: 2026-07-06 | Owner: drew-valentine
+  - Branch: `fix/split-rules-header-contrast`
+  - PR: #14 (https://github.com/drew-valentine/deck-art-studio/pull/14) — committed f361fff, pushed, awaiting approval
+  - Problem: On cards with two-column rules (Murderous Rider's adventure half, split/room halves), the mini name + type header renders as plain text on the rules box background. The real cards (e.g. SLD Murderous Rider reference) put the half's name on a dark contrasting banner with light text and the type line on a distinct lighter band — the current flat rendering has no separation and reads poorly.
+  - Fix: Added contrasting header bands in `_render_split_rules_svg` — a dark name banner (light text) plus a lighter type band. Style-agnostic so it reads on both light parchment and dark stone/brushed panels.
+  - Acceptance criteria (Given/When/Then):
+    - [x] Given a two-column rules card (adventure/split/room), when a half's header is rendered, then the half name sits on a dark contrasting banner with light text and the type line sits on a distinct lighter band.
+    - [x] Given both light (parchment) and dark (stone/brushed) frame styles, when the split-rules header renders, then the header bands remain legible against each background.
+  - Validation status: **PASSED (2026-07-06)** — 237 unit tests pass (2 new regression tests for the header bands). Murderous Rider and Smoky Lounge rendered in godzilla + crystal styles against the printed SLD reference; WYSIWYG designer browser-verified via Playwright; stored composite re-rendered.
 
 ## Done
 
