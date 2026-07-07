@@ -1111,68 +1111,10 @@ def archive_current_art(card_name: str) -> dict | None:
     """Archive the current raw art + composite + metadata before overwriting.
 
     Returns a version info dict, or None if there's nothing to archive.
+    Thin wrapper over _archive_art with the active deck's directories — the
+    two used to be parallel implementations that drifted.
     """
-    slug = name_to_slug(card_name)
-    raw_path = RAW_ART_DIR / f"{slug}.png"
-
-    if not raw_path.exists():
-        return None  # nothing to archive
-
-    vdir = _versions_dir_for(slug)
-    vdir.mkdir(parents=True, exist_ok=True)
-
-    # Determine next version number
-    existing = sorted(vdir.glob("v*_raw.png"))
-    if existing:
-        last_num = max(int(p.stem.split('_')[0][1:]) for p in existing)
-        version_num = last_num + 1
-    else:
-        version_num = 1
-
-    prefix = f"v{version_num}"
-
-    # Copy raw art
-    shutil.copy2(raw_path, vdir / f"{prefix}_raw.png")
-
-    # Copy composite if it exists
-    comp_path = COMPOSITE_DIR / f"{slug}.png"
-    if comp_path.exists():
-        shutil.copy2(comp_path, vdir / f"{prefix}_composite.png")
-
-    # Copy metadata if it exists
-    meta_path = raw_path.with_suffix('.meta.json')
-    meta = {}
-    if meta_path.exists():
-        shutil.copy2(meta_path, vdir / f"{prefix}_meta.json")
-        with open(meta_path) as f:
-            meta = json.load(f)
-
-    # Save version info
-    version_info = {
-        'version': version_num,
-        'prefix': prefix,
-        'timestamp': meta.get('timestamp', datetime.now().isoformat()),
-        'model': meta.get('model', 'unknown'),
-        'quality': meta.get('quality', 'unknown'),
-        'cost_estimate': meta.get('cost_estimate', 0),
-        'prompt_sent': meta.get('prompt_sent', ''),
-        'feedback': meta.get('feedback'),
-        'used_scryfall_ref': meta.get('used_scryfall_ref', False),
-    }
-
-    # Update versions manifest
-    manifest_path = vdir / "manifest.json"
-    if manifest_path.exists():
-        with open(manifest_path) as f:
-            manifest = json.load(f)
-    else:
-        manifest = {'card_name': card_name, 'slug': slug, 'versions': []}
-
-    manifest['versions'].append(version_info)
-    with open(manifest_path, 'w') as f:
-        json.dump(manifest, f, indent=2)
-
-    return version_info
+    return _archive_art(card_name)
 
 
 def list_versions(card_name: str) -> list:
@@ -1200,7 +1142,8 @@ def revert_to_version(card_name: str, version_num: int) -> tuple[bool, str]:
     if not versioned_raw.exists():
         return False, f"Version {version_num} not found"
 
-    # Archive current art first (so we don't lose it)
+    # Archive current art first (so we don't lose it) — this also snapshots
+    # the CURRENT prompt, so flipping back and forth loses nothing
     archive_current_art(card_name)
 
     # Restore raw art
@@ -1211,6 +1154,21 @@ def revert_to_version(card_name: str, version_num: int) -> tuple[bool, str]:
     versioned_meta = vdir / f"{prefix}_meta.json"
     if versioned_meta.exists():
         shutil.copy2(versioned_meta, raw_path.with_suffix('.meta.json'))
+
+    # Restore the card prompt snapshotted with this version, so the user can
+    # keep iterating from the prompt that actually produced this art.
+    # Versions archived before prompt snapshots (no card_prompt key, or empty)
+    # leave the current prompt untouched.
+    v_info = next((v for v in list_versions(card_name)
+                   if v.get('version') == version_num), None)
+    prompt_restored = False
+    if v_info and v_info.get('card_prompt'):
+        prompts_map[card_name] = v_info['card_prompt']
+        for c in cards_db:
+            if c['name'] == card_name:
+                c['prompt'] = v_info['card_prompt']
+        _persist_cards_and_prompts()
+        prompt_restored = True
 
     # Re-composite with current frame renderer. "<name> [back]" keys resolve
     # to the base card's back face so the composite actually re-renders.
@@ -1244,6 +1202,8 @@ def revert_to_version(card_name: str, version_num: int) -> tuple[bool, str]:
             'has_composite': (COMPOSITE_DIR / f"{front_slug}.png").exists(),
         }
 
+    if prompt_restored:
+        return True, f"Reverted to version {version_num} — art prompt restored too"
     return True, f"Reverted to version {version_num}"
 
 
@@ -1765,6 +1725,11 @@ def _archive_art(card_name, raw_art_dir=None, composite_dir=None, versions_dir=N
         'prompt_sent': meta.get('prompt_sent', ''),
         'feedback': meta.get('feedback'),
         'used_scryfall_ref': meta.get('used_scryfall_ref', False),
+        # The EDITABLE card prompt at archive time (art_prompts.json), so a
+        # revert can restore the prompt this art was iterated from — not just
+        # the derived FLUX string in prompt_sent. Face keys ("<name> [back]")
+        # snapshot their own prompt entry.
+        'card_prompt': prompts_map.get(card_name, ''),
     }
 
     manifest_path = vdir / "manifest.json"
@@ -7768,6 +7733,7 @@ header .separator {
   <div class="modal-content" style="max-width:400px;text-align:center;padding:20px;">
     <img id="versionModalImg" src="" alt="" style="width:100%;border-radius:8px;">
     <p id="versionModalLabel" style="margin:12px 0 0;color:var(--text-dim);font-size:0.85em;"></p>
+    <p id="versionModalPrompt" style="display:none;margin:8px 0 0;color:var(--text-dim);font-size:0.78em;font-style:italic;max-height:72px;overflow-y:auto;text-align:left;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px;"></p>
     <div id="versionModalActions" style="display:flex;gap:8px;margin-top:16px;justify-content:center;">
       <button class="btn btn-gold btn-sm" onclick="restoreFromModal()">Restore This Version</button>
       <button class="btn btn-sm" style="background:var(--danger);color:#fff;" onclick="deleteFromModal()">Delete</button>
@@ -11640,15 +11606,20 @@ async function applyFrameToChecked() {
 // --- Version History ---
 let selectedVersion = null;  // version number for modal restore
 let _versionPreviewTimer = null;  // hover delay timer
+let _versionPrompts = {};    // version number -> archived card prompt
 
 async function loadVersionHistory(cardName, slug) {
   const strip = document.getElementById('versionStrip');
   selectedVersion = null;
+  _versionPrompts = {};
 
   try {
     const resp = await fetch(`/api/versions/${encodeURIComponent(cardName)}`);
     const data = await resp.json();
     const versions = data.versions || [];
+    for (const v of versions) {
+      if (v.card_prompt) _versionPrompts[v.version] = v.card_prompt;
+    }
 
     if (versions.length === 0) {
       strip.innerHTML = '<span class="no-versions">No previous versions yet</span>';
@@ -11765,6 +11736,7 @@ function openVersionModal(versionNum, slug, label) {
   const labelEl = document.getElementById('versionModalLabel');
   const actions = document.getElementById('versionModalActions');
 
+  const promptEl = document.getElementById('versionModalPrompt');
   if (versionNum === null) {
     const currentCard = allCards.find(c => c.slug === slug || c.back_slug === slug);
     const mtime = (currentCard?.back_slug === slug
@@ -11773,10 +11745,21 @@ function openVersionModal(versionNum, slug, label) {
     img.src = `/api/image/composite/${slug}?v=${mtime}`;
     labelEl.textContent = 'Current Version';
     actions.style.display = 'none';
+    if (promptEl) promptEl.style.display = 'none';
   } else {
     img.src = `/api/image/version/${slug}/${versionNum}`;
     labelEl.textContent = label || `Version ${versionNum}`;
     actions.style.display = '';
+    // Show the prompt archived with this version — restoring brings it back
+    if (promptEl) {
+      const vp = _versionPrompts[versionNum];
+      if (vp) {
+        promptEl.textContent = `Prompt (restored with this version): ${vp}`;
+        promptEl.style.display = '';
+      } else {
+        promptEl.style.display = 'none';
+      }
+    }
   }
   modal.style.display = '';
 }
@@ -11802,19 +11785,19 @@ async function restoreFromModal() {
   });
   const data = await resp.json();
   if (data.success) {
-    if (card) {
-      card.status = 'complete';
-      if (viewingBack(card)) {
-        card.has_back_composite = true;
-        card.has_back_raw = true;
-      } else {
-        card.has_composite = true;
-        card.has_raw_art = true;
-      }
-      updateDetailPanel(card);
+    // Refetch cards so the restored PROMPT (and art flags) reach the detail
+    // panel — the in-memory card still holds the pre-revert prompt
+    try {
+      allCards = await (await fetch('/api/cards')).json();
+    } catch (e) {}
+    const fresh = allCards.find(c => c.name === selectedCard) || card;
+    if (fresh) {
+      fresh.status = 'complete';
+      updateDetailPanel(fresh);
     }
     renderGrid();
     loadVersionHistory(key, slug);
+    showToast(data.message || `Restored version ${version}`, 'success');
   } else {
     showToast('Restore failed: ' + (data.error || 'Unknown error'), 'error');
   }

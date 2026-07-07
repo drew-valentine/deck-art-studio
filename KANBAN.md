@@ -82,6 +82,22 @@
 
 ## In Progress
 
+- [ ] Version the art prompt with each art version; restore it on revert | Priority: P2 | Started: 2026-07-07 | Owner: drew-valentine
+  - Branch: `feat/version-prompts`
+  - User story: When card art is versioned (archived before regeneration/recomposite), the editable card prompt (`art_prompts.json` / `prompts_map`) used for that art should be snapshotted with the version. Restoring an older art version also restores its prompt, so users can iterate on prompts and revert with confidence — the prompt and the art it produced always travel together.
+  - Problem: Today the version manifest snapshots the art PNG but not the prompt that produced it. After a user edits the prompt and regenerates, reverting to an older art version leaves the current (edited) prompt in place, so the restored art and the visible prompt no longer match.
+  - Planned implementation:
+    - Consolidate the duplicate archive functions — `archive_current_art` delegates to `_archive_art` (per the DRY parallel-paths lesson: make one path call the other rather than maintain two implementations; verify quality empirically).
+    - Add `card_prompt` to `version_info` in the version manifest so the prompt is snapshotted alongside the archived art.
+    - On `revert_to_version`, restore `prompts_map` + `cards_db` prompt from the snapshot and persist (write back to `art_prompts.json`, merge-not-overwrite).
+    - Surface the archived prompt in the version UI so users can see the prompt tied to each art version.
+  - Acceptance criteria (Given/When/Then):
+    - [ ] Given a card whose art is about to be archived (regenerate/recomposite), when the version is created, then `card_prompt` is captured in that version's `version_info`.
+    - [ ] Given an older art version with a snapshotted prompt, when the user reverts to it, then `prompts_map` and `cards_db` are updated to the archived prompt and `art_prompts.json` is persisted (merged, not overwritten).
+    - [ ] Given the archive path, when both `archive_current_art` and `_archive_art` are exercised, then they share a single implementation (no divergent duplicate logic).
+    - [ ] Given the version history UI, when a user views an art version, then the prompt associated with that version is visible.
+  - Validation status: **PENDING** — restart server, exercise archive + revert via curl and the browser UI (Playwright), confirm the restored prompt matches the reverted art. Do NOT commit until validated.
+
 ## In Review
 
 ## Done
