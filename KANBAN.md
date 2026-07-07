@@ -82,8 +82,11 @@
 
 ## In Progress
 
-- [ ] Version the art prompt with each art version; restore it on revert | Priority: P2 | Started: 2026-07-07 | Owner: drew-valentine
-  - Branch: `feat/version-prompts`
+## In Review
+
+- [ ] Version the art prompt with each art version; restore it on revert | Priority: P2 | Review Started: 2026-07-07 | Owner: drew-valentine
+  - Branch: `feat/version-prompts` — committed (3db353d), pushed as PR #15
+  - PR: https://github.com/drew-valentine/deck-art-studio/pull/15 (awaiting approval)
   - User story: When card art is versioned (archived before regeneration/recomposite), the editable card prompt (`art_prompts.json` / `prompts_map`) used for that art should be snapshotted with the version. Restoring an older art version also restores its prompt, so users can iterate on prompts and revert with confidence — the prompt and the art it produced always travel together.
   - Problem: Today the version manifest snapshots the art PNG but not the prompt that produced it. After a user edits the prompt and regenerates, reverting to an older art version leaves the current (edited) prompt in place, so the restored art and the visible prompt no longer match.
   - Planned implementation:
@@ -92,13 +95,12 @@
     - On `revert_to_version`, restore `prompts_map` + `cards_db` prompt from the snapshot and persist (write back to `art_prompts.json`, merge-not-overwrite).
     - Surface the archived prompt in the version UI so users can see the prompt tied to each art version.
   - Acceptance criteria (Given/When/Then):
-    - [ ] Given a card whose art is about to be archived (regenerate/recomposite), when the version is created, then `card_prompt` is captured in that version's `version_info`.
-    - [ ] Given an older art version with a snapshotted prompt, when the user reverts to it, then `prompts_map` and `cards_db` are updated to the archived prompt and `art_prompts.json` is persisted (merged, not overwritten).
-    - [ ] Given the archive path, when both `archive_current_art` and `_archive_art` are exercised, then they share a single implementation (no divergent duplicate logic).
-    - [ ] Given the version history UI, when a user views an art version, then the prompt associated with that version is visible.
-  - Validation status: **PENDING** — restart server, exercise archive + revert via curl and the browser UI (Playwright), confirm the restored prompt matches the reverted art. Do NOT commit until validated.
-
-## In Review
+    - [x] Given a card whose art is about to be archived (regenerate/recomposite), when the version is created, then `card_prompt` is captured in that version's `version_info`.
+    - [x] Given an older art version with a snapshotted prompt, when the user reverts to it, then `prompts_map` and `cards_db` are updated to the archived prompt and `art_prompts.json` is persisted (merged, not overwritten).
+    - [x] Given the archive path, when both `archive_current_art` and `_archive_art` are exercised, then they share a single implementation (no divergent duplicate logic).
+    - [x] Given the version history UI, when a user views an art version, then the prompt associated with that version is visible.
+  - Implementation note: the duplicate archive functions were consolidated — `archive_current_art` now delegates to `_archive_art`.
+  - Validation status: **PASSED** 2026-07-07 — 247 unit tests (6 new: prompt snapshot, restore round-trip, flip-forward archiving, pre-feature manifest compatibility, back-face keys, empty-prompt archive), plus the full browser flow via Playwright on Okaun in heads-i-win (archived version with prompt A, changed to B, restored via version modal — modal showed archived prompt, panel and `art_prompts.json` returned to A, B auto-archived as newest version).
 
 ## Done
 
