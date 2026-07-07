@@ -4529,6 +4529,12 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         big = Image.new('RGBA', (CARD_WIDTH * SS, CARD_HEIGHT * SS), (0, 0, 0, 0))
         bd = ImageDraw.Draw(big)
         R = [bx0 * SS, by0 * SS, bx1 * SS, by1 * SS]
+        # Outer BLACK keyline ring, matching the asset's title/type bars —
+        # PIL outlines extend inward, so without this the box ends gold at
+        # its very edge while the bars end black: the dark edging visibly
+        # stopped where the rules box began.
+        K = 3
+        R_out = [(bx0 - K) * SS, (by0 - K) * SS, (bx1 + K) * SS, (by1 + K) * SS]
         # clear the frame's own short box + border under our box so it doesn't
         # bleed through as a faint line (only art shows faintly)
         clear = Image.new('L', (CARD_WIDTH * SS, CARD_HEIGHT * SS), 0)
@@ -4539,6 +4545,8 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         rarr = np.array(result)
         rarr[..., 3] = np.where(cmask, 0, rarr[..., 3])
         result = Image.fromarray(rarr, 'RGBA')
+        bd.rounded_rectangle(R_out, radius=(rad + K) * SS,
+                             outline=(12, 12, 14, 255), width=K * SS)
         bd.rounded_rectangle(R, radius=rad * SS, fill=box_fill + (box_alpha,))
         bd.rounded_rectangle(R, radius=rad * SS, outline=(20, 18, 14, 255), width=7 * SS)
         bd.rounded_rectangle(R, radius=rad * SS, outline=box_border + (255,), width=4 * SS)
@@ -4547,6 +4555,9 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
             # corner (like the real showcase stamps) instead of sitting inside
             # it — while keeping 3mm (36px) print-safe margins to the cut line.
             pr = [604 * SS, 966 * SS, 714 * SS, 1014 * SS]
+            pr_out = [pr[0] - K * SS, pr[1] - K * SS, pr[2] + K * SS, pr[3] + K * SS]
+            bd.rounded_rectangle(pr_out, radius=(10 + K) * SS,
+                                 outline=(12, 12, 14, 255), width=K * SS)
             bd.rounded_rectangle(pr, radius=10 * SS, fill=(30, 24, 16, 240),
                                  outline=box_border + (255,), width=4 * SS)
         if box_border_r != box_border:
@@ -4555,10 +4566,14 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
             # frame itself, so the box border and P/T plate follow the gradient.
             big_r = Image.new('RGBA', (CARD_WIDTH * SS, CARD_HEIGHT * SS), (0, 0, 0, 0))
             bdr = ImageDraw.Draw(big_r)
+            bdr.rounded_rectangle(R_out, radius=(rad + K) * SS,
+                                  outline=(12, 12, 14, 255), width=K * SS)
             bdr.rounded_rectangle(R, radius=rad * SS, fill=box_fill + (box_alpha,))
             bdr.rounded_rectangle(R, radius=rad * SS, outline=(20, 18, 14, 255), width=7 * SS)
             bdr.rounded_rectangle(R, radius=rad * SS, outline=box_border_r + (255,), width=4 * SS)
             if card.power is not None and card.toughness is not None:
+                bdr.rounded_rectangle(pr_out, radius=(10 + K) * SS,
+                                      outline=(12, 12, 14, 255), width=K * SS)
                 bdr.rounded_rectangle(pr, radius=10 * SS, fill=(30, 24, 16, 240),
                                       outline=box_border_r + (255,), width=4 * SS)
             band = 0.44 if (grad_mode or 'gradient') == 'gradient' else 0.015
