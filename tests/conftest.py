@@ -14,6 +14,12 @@ _GLOBALS_TO_SAVE = [
     'active_deck_id', 'active_deck_meta', 'active_model_key',
     'batch_phase', 'batch_phase_detail',
     'batch_deck_id', 'openai_client', 'ref_image_b64',
+    'cards_revision', 'style_analysis_progress',
+    'active_inspiration_path', 'active_inspiration_paths',
+    # Path globals mutated by deck activation — restore so a test that switches
+    # decks (or monkeypatches these) can't leak paths into later tests.
+    'ART_PROMPTS_PATH', 'RAW_ART_DIR', 'COMPOSITE_DIR',
+    'CARD_DB_PATH', 'VERSIONS_DIR',
 ]
 
 

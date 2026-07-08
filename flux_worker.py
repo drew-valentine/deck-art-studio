@@ -76,10 +76,22 @@ class _Engine:
         self._flux = Flux1(model_config=ModelConfig.schnell(),
                            quantize=cfg["quantize"], model_path=cfg["repo"])
         self._model_key = model_key
+        # Register the progress callback EXACTLY ONCE per loaded model. mflux's
+        # CallbackRegistry.register() just appends (no dedupe), so registering per
+        # generate would accumulate callbacks for the worker's lifetime — a slow
+        # leak that makes the progress line flap and stdout grow unbounded. The
+        # single callback reads the current step total from the Config mflux passes
+        # each loop, so it stays correct across requests with different step counts.
+        self._register_progress(self._flux)
         _log("FLUX txt2img ready")
 
     def _free(self):
         import gc
+        # Drop the resident model reference BEFORE collecting, so the old ~13 GB
+        # model can actually be freed during a reload — otherwise it stays
+        # referenced and two models briefly co-reside (OOM on 18 GB).
+        self._flux = None
+        self._model_key = None
         gc.collect()
         try:
             import mlx.core as mx
@@ -88,11 +100,19 @@ class _Engine:
         except Exception:
             pass
 
-    def _register_progress(self, model, total_steps):
+    def _register_progress(self, model):
+        def _read_total(config, fallback):
+            try:
+                total = getattr(config, "num_inference_steps", None)
+                return int(total) if total else fallback
+            except Exception:
+                return fallback
+
         class _P:
             def call_in_loop(self, t, seed, prompt, latents, config, time_steps):
                 try:
-                    _emit({"progress": {"step": int(t) + 1, "total": total_steps}})
+                    step = int(t) + 1
+                    _emit({"progress": {"step": step, "total": _read_total(config, step)}})
                 except Exception:
                     pass
         try:
@@ -115,7 +135,6 @@ class _Engine:
         start = time.time()
         self._ensure_txt2img(model_key)
         n_steps = int(req.get("steps") or 4)
-        self._register_progress(self._flux, n_steps)
         _log(f"txt2img {w}x{h} steps={n_steps}: {prompt[:80]}")
         result = self._flux.generate_image(
             seed=seed, prompt=prompt, num_inference_steps=n_steps, width=w, height=h)

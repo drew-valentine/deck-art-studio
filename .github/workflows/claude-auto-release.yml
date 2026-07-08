@@ -6,8 +6,13 @@ on:
 
 jobs:
   auto-release:
-    if: github.event.review.state == 'approved'
+    if: >
+      github.event.review.state == 'approved' &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)
     runs-on: ubuntu-latest
+    concurrency:
+      group: auto-release
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
@@ -58,8 +63,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
-          echo "Squash merging PR #${PR_NUMBER}..."
-          gh pr merge "$PR_NUMBER" --squash --delete-branch
+          HEAD_SHA=${{ github.event.pull_request.head.sha }}
+          echo "Squash merging PR #${PR_NUMBER} (approved head ${HEAD_SHA})..."
+          # Abort the merge if the branch head moved after approval.
+          gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$HEAD_SHA"
 
       - name: Determine version bump
         id: version
@@ -135,9 +142,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.next.outputs.next }}"
-          echo "Creating tag ${TAG}..."
+          PR_NUMBER=${{ github.event.pull_request.number }}
 
-          git tag -a "$TAG" -m "Release ${TAG}"
+          # Tag the exact squash-merge commit, not whatever main points at now.
+          MERGE_SHA=$(gh pr view "$PR_NUMBER" --json mergeCommit --jq .mergeCommit.oid)
+          if [ -z "$MERGE_SHA" ] || [ "$MERGE_SHA" = "null" ]; then
+            echo "Could not resolve merge commit for PR #${PR_NUMBER} — aborting"
+            exit 1
+          fi
+          echo "Creating tag ${TAG} on merge commit ${MERGE_SHA}..."
+
+          git tag -a "$TAG" "$MERGE_SHA" -m "Release ${TAG}"
           git push origin "$TAG"
 
           echo "Creating GitHub release..."

@@ -14,9 +14,17 @@ mlx_llm.py and local_image_generator.py).
 """
 
 import json
+import os
+import tempfile
+import threading
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).parent / "backend_config.json"
+
+# Serializes load-modify-save so concurrent activations can't clobber each other,
+# and pairs with the atomic write below so an interrupted write never leaves a
+# truncated/corrupt file that would silently reset all settings to DEFAULTS.
+_config_lock = threading.Lock()
 
 DEFAULTS = {
     # Retained for call-site compatibility; the pipeline is always MLX/local now.
@@ -45,9 +53,33 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict):
-    """Persist backend config to disk."""
-    with open(CONFIG_PATH, 'w') as f:
-        json.dump(cfg, f, indent=2)
+    """Persist backend config to disk atomically.
+
+    Writes to a temp file in the same directory and os.replace()s it into place,
+    so a concurrent reader or an interrupted write never observes a half-written
+    (and therefore corrupt, defaults-resetting) config. Guarded by _config_lock.
+    """
+    with _config_lock:
+        _write_config_atomic(cfg)
+
+
+def _write_config_atomic(cfg: dict):
+    """Atomic write of cfg to CONFIG_PATH. Caller must hold _config_lock."""
+    directory = str(CONFIG_PATH.parent)
+    fd, tmp_path = tempfile.mkstemp(suffix=".tmp", prefix="backend_config.",
+                                    dir=directory)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(cfg, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, CONFIG_PATH)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def get_mlx_status() -> dict:
@@ -130,8 +162,11 @@ def activate_local_image_model(model_key: str, progress_callback=None, download_
     )
 
     if success:
-        cfg = load_config()
-        cfg["local_image_model"] = model_key
-        save_config(cfg)
+        # Serialize the whole load-modify-save so a concurrent activation can't
+        # read a stale cfg and clobber the other's change.
+        with _config_lock:
+            cfg = load_config()
+            cfg["local_image_model"] = model_key
+            _write_config_atomic(cfg)
 
     return success, msg

@@ -27,6 +27,7 @@ Requires: pip install openai Pillow
 
 import json
 import os
+import re
 import sys
 import time
 import getpass
@@ -72,7 +73,9 @@ DPI = 300
 STYLE_PREFIX = ""
 
 def name_to_slug(name):
-    return name.lower().replace(' ', '_').replace(',', '').replace("'", "").replace('-', '_')
+    # Collapse any run of non-alphanumeric chars to a single underscore so
+    # split cards like "Fire // Ice" don't yield a nested subdirectory ("/").
+    return re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
 
 # ===========================================================================
 #  GPT-IMAGE-1 Art Generation with Reference Image
@@ -127,7 +130,10 @@ def generate_art(client, card_name, prompt_text, output_path, ref_image_path, dr
             with open(output_path, 'wb') as f:
                 f.write(image_bytes)
         elif hasattr(image_data, 'url') and image_data.url:
-            urllib.request.urlretrieve(image_data.url, str(output_path))
+            with urllib.request.urlopen(
+                    urllib.request.Request(image_data.url), timeout=60) as resp:
+                with open(output_path, 'wb') as f:
+                    f.write(resp.read())
         else:
             print(f"  ✗ No image data in response")
             return False

@@ -10,6 +10,7 @@ Scryfall API is free, no key needed. Rate-limited to 100ms between requests.
 """
 
 import json
+import os
 import time
 import urllib.request
 import urllib.parse
@@ -118,9 +119,12 @@ def main():
         # Scryfall rate limit: 100ms between requests
         time.sleep(0.12)
 
-    # Save updated database
-    with open(DB_PATH, "w") as f:
+    # Save updated database atomically — write to a temp file then replace, so
+    # a crash mid-write can't truncate the input database.
+    tmp_path = DB_PATH.with_name(DB_PATH.name + ".tmp")
+    with open(tmp_path, "w") as f:
         json.dump(cards, f, indent=2)
+    os.replace(tmp_path, DB_PATH)
 
     print(f"\nDone! Updated: {updated}, No flavor: {no_flavor}, Skipped: {skipped}")
     print(f"Database saved to {DB_PATH}")
