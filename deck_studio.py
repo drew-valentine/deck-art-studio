@@ -8048,10 +8048,15 @@ header .separator {
                   <input type="color" class="frame-color-picker" id="frameColorBorder" value="#1971CE">
                   <input type="text" class="frame-color-hex" id="frameColorBorderHex" value="#1971CE" maxlength="7">
                 </div>
-                <div class="frame-color-row" id="frameColorRowText">
+                <div class="frame-color-row" id="frameColorRowText" title="Title, type line, and P/T text — also the fallback for rules text when Rules isn't set">
                   <span class="frame-color-label">Text</span>
                   <input type="color" class="frame-color-picker" id="frameColorText" value="#000000">
                   <input type="text" class="frame-color-hex" id="frameColorTextHex" value="#000000" maxlength="7">
+                </div>
+                <div class="frame-color-row" id="frameColorRowRules" title="Rules-box body text — overrides Text for the rules area only">
+                  <span class="frame-color-label">Rules</span>
+                  <input type="color" class="frame-color-picker" id="frameColorRules" value="#1a1712">
+                  <input type="text" class="frame-color-hex" id="frameColorRulesHex" value="#1a1712" maxlength="7">
                 </div>
               </div>
             </div>
@@ -10780,7 +10785,7 @@ function applySwatchColor(label, color) {
 }
 
 function setColorInputs(theme) {
-  const pairs = [['Bg', 'bg'], ['Field', 'field'], ['Textbox', 'textbox'], ['Border', 'border'], ['Text', 'text']];
+  const pairs = [['Bg', 'bg'], ['Field', 'field'], ['Textbox', 'textbox'], ['Border', 'border'], ['Text', 'text'], ['Rules', 'rules_text']];
   for (const [suffix, key] of pairs) {
     const picker = document.getElementById('frameColor' + suffix);
     const hex = document.getElementById('frameColor' + suffix + 'Hex');
@@ -10799,7 +10804,8 @@ const COLOR_ROW_LAYERS = {
   Field: ['title_bar', 'type_bar'],
   Textbox: ['text_box'],
   Border: ['border', 'pt_box'],
-  Text: [],  // text always renders
+  Text: [],   // text always renders
+  Rules: [],  // rules-body text always renders
 };
 
 function updateColorRowVisibility() {
@@ -10809,7 +10815,8 @@ function updateColorRowVisibility() {
     if (!row) continue;
     let show;
     if (style.mode === 'image') {
-      show = ((style.controls || {}).colors || []).includes(suffix.toLowerCase());
+      const key = suffix === 'Rules' ? 'rules_text' : suffix.toLowerCase();
+      show = ((style.controls || {}).colors || []).includes(key);
     } else {
       show = layerKeys.length === 0 || layerKeys.some(lk => {
         const vis = document.getElementById('frameVis_' + lk);
@@ -10942,7 +10949,7 @@ function wireFrameInputs() {
       scheduleFramePreview();
     });
   }
-  const pairs = ['Bg', 'Field', 'Textbox', 'Border', 'Text'];
+  const pairs = ['Bg', 'Field', 'Textbox', 'Border', 'Text', 'Rules'];
   for (const suffix of pairs) {
     const picker = document.getElementById('frameColor' + suffix);
     const hex = document.getElementById('frameColor' + suffix + 'Hex');
@@ -11345,8 +11352,8 @@ function gatherFrameSettings() {
     // Only persist color keys this style's renderer actually honors.
     const styleControls = (style && style.controls) || {};
     const supported = styleControls.colors ||
-      (style && style.mode === 'image' ? [] : ['bg', 'field', 'textbox', 'border', 'text']);
-    const pairs = [['Bg','bg'],['Field','field'],['Textbox','textbox'],['Border','border'],['Text','text']];
+      (style && style.mode === 'image' ? [] : ['bg', 'field', 'textbox', 'border', 'text', 'rules_text']);
+    const pairs = [['Bg','bg'],['Field','field'],['Textbox','textbox'],['Border','border'],['Text','text'],['Rules','rules_text']];
     for (const [suffix, key] of pairs) {
       const picker = document.getElementById('frameColor' + suffix);
       if (picker && supported.includes(key)) settings.color_overrides[key] = picker.value;

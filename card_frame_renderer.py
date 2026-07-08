@@ -287,7 +287,7 @@ FRAME_STYLES = {
         'description': 'Authentic M15 card frame from CardConjurer assets',
         'mode': 'image',
         'frame_set': 'm15',
-        'controls': {'colors': ['text']},
+        'controls': {'colors': ['text', 'rules_text']},
     },
     'basic': {
         'label': 'Basic',
@@ -323,7 +323,7 @@ FRAME_STYLES = {
         'mode': 'image',
         'frame_set': 'iko',
         'layout': 'iko',
-        'controls': {'colors': ['textbox', 'border', 'text'],
+        'controls': {'colors': ['textbox', 'border', 'text', 'rules_text'],
                      'box_opacity': True, 'showcase': True},
     },
     'planeswalker': {
@@ -335,7 +335,7 @@ FRAME_STYLES = {
         'mode': 'image',
         'frame_set': 'planeswalker',
         'layout': 'planeswalker',
-        'controls': {'colors': ['text']},
+        'controls': {'colors': ['text', 'rules_text']},
     },
     'artdeco': {
         'label': 'Art Deco',
@@ -345,7 +345,7 @@ FRAME_STYLES = {
         'mode': 'image',
         'frame_set': 'sncArtDeco',
         'layout': 'artdeco',
-        'controls': {'colors': ['text']},
+        'controls': {'colors': ['text', 'rules_text']},
     },
     'samurai': {
         'label': 'Samurai',
@@ -355,7 +355,7 @@ FRAME_STYLES = {
         'frame_set': 'neoSamurai',
         'layout': 'samurai',
         'rules_text': 'light',
-        'controls': {'colors': ['text']},
+        'controls': {'colors': ['text', 'rules_text']},
     },
     'etched': {
         'label': 'Etched',
@@ -365,7 +365,7 @@ FRAME_STYLES = {
         'frame_set': 'etched',
         'layout': 'etched',
         'rules_text': 'light',
-        'controls': {'colors': ['text']},
+        'controls': {'colors': ['text', 'rules_text']},
     },
     '8th': {
         'label': '8th Edition',
@@ -374,7 +374,7 @@ FRAME_STYLES = {
         'mode': 'image',
         'frame_set': '8th',
         'layout': '8th',
-        'controls': {'colors': ['text']},
+        'controls': {'colors': ['text', 'rules_text']},
     },
     'msa': {
         'label': 'Mystical Archive',
@@ -384,7 +384,7 @@ FRAME_STYLES = {
         'mode': 'image',
         'frame_set': 'mysticalArchive',
         'layout': 'msa',
-        'controls': {'colors': ['text']},
+        'controls': {'colors': ['text', 'rules_text']},
     },
     'lotr': {
         'label': 'LOTR',
@@ -394,7 +394,7 @@ FRAME_STYLES = {
         'mode': 'image',
         'frame_set': 'lotr',
         'layout': 'lotr',
-        'controls': {'colors': ['text'], 'bottom_mask': True},
+        'controls': {'colors': ['text', 'rules_text'], 'bottom_mask': True},
     },
     'crystal': {
         'label': 'Crystal',
@@ -405,7 +405,7 @@ FRAME_STYLES = {
         'frame_set': 'crystal',
         'layout': 'crystal',
         'rules_text': 'light',   # light text on the dark stone box (quality gate inverts)
-        'controls': {'colors': ['text'], 'box_opacity': True},
+        'controls': {'colors': ['text', 'rules_text'], 'box_opacity': True},
     },
     'clean': {
         'label': 'Clean',
@@ -787,6 +787,18 @@ def parse_mana_cost(mana_cost: str) -> List[str]:
     if not mana_cost:
         return []
     return re.findall(r'\{([^}]+)\}', mana_cost)
+
+
+def _text_color_overrides(fs: dict):
+    """(heading_override, rules_override) from Colors settings.
+
+    'text' drives the heading text (title/type/P/T) and remains the fallback
+    for ALL text so existing saved decks render unchanged; 'rules_text'
+    overrides the rules-body text separately (headings white + rules black,
+    for example)."""
+    co = fs.get('color_overrides', {}) or {}
+    head = co.get('text')
+    return head, (co.get('rules_text') or head)
 
 
 def get_color_theme(card: CardData) -> dict:
@@ -2311,6 +2323,11 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
         textbox = '#17130d'
         text_color = '#f5efe2'
 
+    # Rules body text can be overridden separately from the heading text
+    # (theme['text'] already carries the 'text' override when set)
+    _, _rules_ovr = _text_color_overrides(fs)
+    rules_text_color = _rules_ovr or text_color
+
     # Render params
     fr = render.get('field_radius', FIELD_R)
     field_path_fn = _simple_field_path if render.get('field_shape') == 'simple' else _field_path
@@ -2587,7 +2604,7 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
                 fx + RULES_PADDING, rules_text_y_start,
                 rules_inner_w, rules_max_h,
                 pw_font, pw_line_h,
-                text_color=text_color,
+                text_color=rules_text_color,
                 theme=theme,
                 avoid=_avoid,
             )
@@ -2602,7 +2619,7 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
         # Adventure / split / room: two-column rules area
         rules_svg = _render_split_rules_svg(
             card, fs, fx + RULES_PADDING, rules_y + RULES_PADDING,
-            rules_inner_w, rules_max_h, text_color,
+            rules_inner_w, rules_max_h, rules_text_color,
             int(fs.get('rules_font_size') or RULES_FONT),
             band_alpha=text_box_opacity)
         rules_used_h = rules_max_h
@@ -2635,7 +2652,7 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
             fx + RULES_PADDING, rules_text_y_start,
             rules_inner_w, rules_max_h,
             r_font, r_line_h,
-            text_color=text_color
+            text_color=rules_text_color
         )
     else:
         rules_svg = []
@@ -2703,7 +2720,7 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
                 fx + RULES_PADDING, flavor_y_start,
                 rules_inner_w, flavor_h + FLAVOR_LINE_H,
                 FLAVOR_FONT, FLAVOR_LINE_H,
-                text_color=text_color,
+                text_color=rules_text_color,
                 font_family=FLAVOR_FONT_FAMILY,
                 italic=True
             )
@@ -3086,7 +3103,9 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
     layout = fs.get('layout') or M15_LAYOUT
     theme = dict(get_color_theme(card))
     # Colors > Text override applies to all card text on image frames
-    text_color = (fs.get('color_overrides', {}) or {}).get('text') or theme['text']
+    _hovr, _rovr = _text_color_overrides(fs)
+    text_color = _hovr or theme['text']
+    rules_text_color = _rovr or theme['text']
     mana_pips = parse_mana_cost(card.mana_cost)
 
     # Layout positions from M15 layout
@@ -3181,7 +3200,7 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
                 art_m + RULES_PADDING, rules_text_y_start,
                 rules_inner_w, rules_max_h,
                 pw_font, pw_line_h,
-                text_color=text_color,
+                text_color=rules_text_color,
                 theme=theme,
             )
             if _start_off + rules_used_h <= rules_max_h or pw_font <= RULES_FONT_FLOOR:
@@ -3195,7 +3214,7 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
         # Adventure / split / room: two-column rules area
         rules_svg = _render_split_rules_svg(
             card, fs, art_m + RULES_PADDING, rules_y + RULES_PADDING,
-            rules_inner_w, rules_max_h, text_color,
+            rules_inner_w, rules_max_h, rules_text_color,
             int(fs.get('rules_font_size') or RULES_FONT))
         rules_used_h = rules_max_h
         rules_text_y_start = rules_y + RULES_PADDING
@@ -3226,7 +3245,7 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
             art_m + RULES_PADDING, rules_text_y_start,
             rules_inner_w, rules_max_h,
             r_font, r_line_h,
-            text_color=text_color
+            text_color=rules_text_color
         )
     else:
         rules_svg = []
@@ -3286,7 +3305,7 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
                 art_m + RULES_PADDING, flavor_y_start,
                 rules_inner_w, flavor_h + FLAVOR_LINE_H,
                 FLAVOR_FONT, FLAVOR_LINE_H,
-                text_color=text_color,
+                text_color=rules_text_color,
                 font_family=FLAVOR_FONT_FAMILY,
                 italic=True
             )
@@ -3387,10 +3406,10 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
     mana_pips = parse_mana_cost(card.mana_cost)
     # Colors > Text override applies to ALL card text (title/type/rules/PT),
     # consistent with the other frame styles; defaults otherwise.
-    _ovr = (fs.get('color_overrides', {}) or {}).get('text')
-    white = _ovr or '#f6f1e6'
-    dark = _ovr or '#1a1712'
-    pt_col = _ovr or '#f4e4a8'
+    _hovr, _rovr = _text_color_overrides(fs)
+    white = _hovr or '#f6f1e6'
+    dark = _rovr or '#1a1712'
+    pt_col = _hovr or '#f4e4a8'
 
     svg = ['<?xml version="1.0" encoding="UTF-8"?>',
            f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
@@ -3661,10 +3680,10 @@ def _create_bar_box_text_svg(card: CardData, fs: dict, L: dict,
     x_margin, x_right, pt_cx, pt_cy, and optionally avoid (y_top, narrow_w)."""
     W, H = CARD_WIDTH, CARD_HEIGHT
     mana_pips = parse_mana_cost(card.mana_cost)
-    _ovr = (fs.get('color_overrides', {}) or {}).get('text')
-    bar_col = _ovr or bar_color
-    rules_col = _ovr or rules_color
-    pt_col = _ovr or pt_color
+    _hovr, _rovr = _text_color_overrides(fs)
+    bar_col = _hovr or bar_color
+    rules_col = _rovr or rules_color
+    pt_col = _hovr or pt_color
 
     svg = ['<?xml version="1.0" encoding="UTF-8"?>',
            f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
@@ -3815,8 +3834,9 @@ def _create_pw_frame_text_svg(card: CardData, fs: dict) -> str:
     L = PW_FRAME_LAYOUT
     W, H = CARD_WIDTH, CARD_HEIGHT
     mana_pips = parse_mana_cost(card.mana_cost)
-    _ovr = (fs.get('color_overrides', {}) or {}).get('text')
-    ink = _ovr or '#1a1712'
+    _hovr, _rovr = _text_color_overrides(fs)
+    ink = _hovr or '#1a1712'
+    rules_ink = _rovr or '#1a1712'
 
     svg = ['<?xml version="1.0" encoding="UTF-8"?>',
            f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
@@ -3873,7 +3893,7 @@ def _create_pw_frame_text_svg(card: CardData, fs: dict) -> str:
                                              L['text_w'],
                                              max(y1 - y0, h_text + line_h),
                                              font, line_h,
-                                             text_color=ink)
+                                             text_color=rules_ink)
             svg.extend(lines)
             if cost:
                 # white cost number on the badge plate (chrome anchors the
@@ -3888,7 +3908,7 @@ def _create_pw_frame_text_svg(card: CardData, fs: dict) -> str:
         lines, _ = render_rules_text_svg(card.oracle_text, L['text_x'],
                                          L['area_y0'] + 28, L['text_w'],
                                          L['area_y1'] - L['area_y0'], 24, 30,
-                                         text_color=ink)
+                                         text_color=rules_ink)
         svg.extend(lines)
 
     if card.loyalty:
@@ -4043,9 +4063,9 @@ def _create_lotr_text_svg(card: CardData, fs: dict) -> str:
     W, H = CARD_WIDTH, CARD_HEIGHT
     mana_pips = parse_mana_cost(card.mana_cost)
     # Colors > Text override applies to ALL card text, like the other styles.
-    _ovr = (fs.get('color_overrides', {}) or {}).get('text')
-    white = _ovr or '#f6f1e6'
-    dark = _ovr or '#1a1712'
+    _hovr, _rovr = _text_color_overrides(fs)
+    white = _hovr or '#f6f1e6'
+    dark = _rovr or '#1a1712'
 
     svg = ['<?xml version="1.0" encoding="UTF-8"?>',
            f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
@@ -4161,8 +4181,9 @@ def _create_crystal_text_svg(card: CardData, fs: dict) -> str:
     mana_pips = parse_mana_cost(card.mana_cost)
     # Colors > Text override applies to ALL card text (title/type/rules/PT),
     # consistent with the other frame styles; light default otherwise.
-    white = (fs.get('color_overrides', {}) or {}).get('text') or '#f2f3f5'
-    rules_col = white
+    _hovr, _rovr = _text_color_overrides(fs)
+    white = _hovr or '#f2f3f5'
+    rules_col = _rovr or '#f2f3f5'
 
     svg = ['<?xml version="1.0" encoding="UTF-8"?>',
            f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
@@ -5324,9 +5345,9 @@ def _create_saga_frame_svg(card: CardData, fs: dict) -> str:
     for key in ('bg', 'field', 'textbox', 'border', 'text'):
         if key in fs.get('color_overrides', {}):
             theme[key] = fs['color_overrides'][key]
-    _ovr = (fs.get('color_overrides', {}) or {}).get('text')
-    bar_text = _ovr or '#f4f2ec'
-    rules_col = _ovr or '#141210'
+    _hovr, _rovr = _text_color_overrides(fs)
+    bar_text = _hovr or '#f4f2ec'
+    rules_col = _rovr or '#141210'
 
     svg = ['<?xml version="1.0" encoding="UTF-8"?>',
            f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
@@ -5444,9 +5465,9 @@ def _saga_overlay(card_dict: dict, card: CardData, fs: dict) -> Image.Image:
             for key in ('bg', 'field', 'textbox', 'border', 'text'):
                 if key in fs.get('color_overrides', {}):
                     theme[key] = fs['color_overrides'][key]
-            _ovr = (fs.get('color_overrides', {}) or {}).get('text')
-            bar_text = _ovr or bar_col or theme['text']
-            rules_txt = _ovr or rules_col or theme['text']
+            _hovr, _rovr = _text_color_overrides(fs)
+            bar_text = _hovr or bar_col or theme['text']
+            rules_txt = _rovr or rules_col or theme['text']
             parts = ['<?xml version="1.0" encoding="UTF-8"?>',
                      f'<svg width="{CARD_WIDTH}" height="{CARD_HEIGHT}" '
                      f'viewBox="0 0 {CARD_WIDTH} {CARD_HEIGHT}" '
@@ -5574,9 +5595,9 @@ def _create_battle_frame_svg(card: CardData, fs: dict) -> str:
     title bar on top and a full-width type bar + rules band at the bottom."""
     W, H = BATTLE_W, BATTLE_H
     theme = get_color_theme(card)
-    _ovr = (fs.get('color_overrides', {}) or {}).get('text')
-    bar_text = _ovr or '#f4f2ec'
-    rules_col = _ovr or '#141210'
+    _hovr, _rovr = _text_color_overrides(fs)
+    bar_text = _hovr or '#f4f2ec'
+    rules_col = _rovr or '#141210'
 
     svg = ['<?xml version="1.0" encoding="UTF-8"?>',
            f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
@@ -5758,9 +5779,9 @@ def _battle_overlay_landscape(card_dict: dict, card: CardData, fs: dict) -> Imag
         if res is not None:
             chrome, BL, bar_col, rules_col = res
             theme = get_color_theme(card)
-            _ovr = (fs.get('color_overrides', {}) or {}).get('text')
-            bar_col = _ovr or bar_col or theme['text']
-            rules_col = _ovr or rules_col or theme['text']
+            _hovr, _rovr = _text_color_overrides(fs)
+            bar_col = _hovr or bar_col or theme['text']
+            rules_col = _rovr or rules_col or theme['text']
             parts = ['<?xml version="1.0" encoding="UTF-8"?>',
                      f'<svg width="{BATTLE_W}" height="{BATTLE_H}" '
                      f'viewBox="0 0 {BATTLE_W} {BATTLE_H}" '
