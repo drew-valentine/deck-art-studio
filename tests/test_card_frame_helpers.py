@@ -719,3 +719,47 @@ class TestSplitFrameHalfOrder:
         from card_frame_renderer import _two_color_keys
         card = {'name': 'X', 'colors': ['R', 'U'], 'color_identity': ['R', 'U']}
         assert _two_color_keys(card) == ('u', 'r')
+
+
+class TestSeparateRulesTextColor:
+    CARD = {
+        'name': 'Test Bird', 'mana_cost': '{1}{W}', 'type_line': 'Creature — Bird',
+        'oracle_text': 'Flying', 'colors': ['W'], 'color_identity': ['W'],
+        'card_type': 'creature', 'power': '2', 'toughness': '2',
+    }
+
+    def test_helper_fallback_chain(self):
+        from card_frame_renderer import _text_color_overrides
+        assert _text_color_overrides({}) == (None, None)
+        assert _text_color_overrides(
+            {'color_overrides': {'text': '#fff'}}) == ('#fff', '#fff')
+        assert _text_color_overrides(
+            {'color_overrides': {'text': '#fff', 'rules_text': '#123'}}) == \
+            ('#fff', '#123')
+        assert _text_color_overrides(
+            {'color_overrides': {'rules_text': '#123'}}) == (None, '#123')
+
+    def test_iko_headings_and_rules_diverge(self):
+        from card_frame_renderer import _create_iko_text_svg, _build_card_data
+        fs = {'color_overrides': {'text': '#ffffff', 'rules_text': '#112233'}}
+        svg = _create_iko_text_svg(_build_card_data(dict(self.CARD), fs), fs)
+        assert 'fill="#ffffff"' in svg   # heading text
+        assert 'fill="#112233"' in svg   # rules body
+
+    def test_rules_falls_back_to_text_override(self):
+        # Existing saved decks (text only) keep coloring everything
+        from card_frame_renderer import _create_iko_text_svg, _build_card_data
+        fs = {'color_overrides': {'text': '#ffffff'}}
+        svg = _create_iko_text_svg(_build_card_data(dict(self.CARD), fs), fs)
+        assert 'fill="#ffffff"' in svg
+        assert "fill=\"#1a1712\">Flying" not in svg  # rules not left at default
+
+    def test_svg_style_rules_color(self):
+        from card_frame_renderer import create_card_frame_svg, resolve_frame_settings
+        fs = resolve_frame_settings(dict(self.CARD, frame_overrides={}), {
+            'style': 'basic', 'use_card_colors': False,
+            'color_overrides': {'text': '#ffffff', 'rules_text': '#112233'},
+        })
+        svg = create_card_frame_svg(
+            __import__('card_frame_renderer')._build_card_data(dict(self.CARD), fs), fs)
+        assert 'fill="#112233"' in svg
