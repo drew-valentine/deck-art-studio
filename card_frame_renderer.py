@@ -4533,7 +4533,7 @@ def _compose_image_frame_base(card_dict: dict, card: CardData, fs: dict) -> Imag
         # PIL outlines extend inward, so without this the box ends gold at
         # its very edge while the bars end black: the dark edging visibly
         # stopped where the rules box began.
-        K = 3
+        K = 2
         R_out = [(bx0 - K) * SS, (by0 - K) * SS, (bx1 + K) * SS, (by1 + K) * SS]
         # clear the frame's own short box + border under our box so it doesn't
         # bleed through as a faint line (only art shows faintly)
