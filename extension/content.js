@@ -10,8 +10,10 @@
 
   // UUID → object URL cache (in-memory for this page session)
   const blobUrlCache = new Map();
-  // UUID → original src (for toggle/restore)
-  const originalSrcCache = new Map();
+  // img element → original src (for toggle/restore). WeakMap so detached
+  // <img> nodes (common on the edhplay React SPA) can be garbage-collected
+  // instead of being pinned forever. Only get/set are used, never iteration.
+  const originalSrcCache = new WeakMap();
 
   let artEnabled = true;
   let cardMap = null; // Map<uuid, dataUrl> — loaded from background script

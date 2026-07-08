@@ -82,6 +82,29 @@
 
 ## In Progress
 
+- [ ] Full-codebase review: document all findings, fix in a single PR | Priority: P1 | Started: 2026-07-08 | Owner: drew-valentine
+  - Branch: `chore/full-codebase-review`
+  - Goal: A comprehensive, whole-repo review that surfaces bugs, risks, and cleanup opportunities across every major surface, triages/verifies the findings, documents them, and lands all confirmed fixes in a single PR for Drew's review.
+  - Approach: 8 parallel scoped reviews, each owning a slice of the codebase, so coverage is broad and the reviews can run concurrently:
+    1. `deck_studio.py` backend — slice 1 (routes/API, generation orchestration)
+    2. `deck_studio.py` backend — slice 2 (card management, deck/version/persistence, security helpers)
+    3. Inline frontend JS (the embedded HTML/CSS/JS template in `deck_studio.py`)
+    4. `card_frame_renderer.py` (SVG/image frame compositing, per-style chrome, text rendering)
+    5. MLX / worker stack (`local_image_generator.py`, `mlx_llm.py`, `flux_worker.py`, `mlx_worker.py`, `gpu_coord.py`, `backend_config.py`)
+    6. Prompt / vision / Scryfall utilities (`prompt_generator.py`, `vision_analyzer.py`, `fetch_scryfall_art.py`, `fetch_flavor_text.py`, and related helpers)
+    7. Browser extension (`extension/` — manifest, background/service worker, content, db, popup, import)
+    8. CI workflows + tests (`.github/workflows/*.yml`, `tests/`, pre-commit hooks)
+  - Deliverables:
+    - Findings triaged and verified (confirm real vs. false positive before acting).
+    - All findings documented in `docs/code-review-2026-07.md`.
+    - All confirmed fixes landed in a single PR for Drew's review.
+  - Acceptance criteria (Given/When/Then):
+    - [ ] Given the 8 scoped reviews, when each completes, then its findings are captured (with severity + file/line context) into `docs/code-review-2026-07.md`.
+    - [ ] Given a raw finding, when it is triaged, then it is verified as a real issue (or marked false-positive with rationale) before any fix is attempted.
+    - [ ] Given the set of confirmed fixes, when they are implemented, then they land together in a single PR on `chore/full-codebase-review` for Drew's review.
+    - [ ] Given the validation requirements, when fixes touch generation/UI, then they are verified per CLAUDE.md (Playwright + local FLUX) before the PR is marked ready.
+  - Note: Do NOT commit during this planning step — KANBAN.md update only.
+
 ## In Review
 
 ## Done

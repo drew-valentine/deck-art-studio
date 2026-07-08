@@ -34,6 +34,21 @@ from gpu_coord import GPU_LOCK, InactivityWatchdog
 # stdout) while bounding a true hang far better than the old infinite wait.
 WORKER_REQUEST_TIMEOUT = 600
 
+# The FIRST request that loads a given model id in a fresh worker may DOWNLOAD
+# ~4-5 GB of weights, whose progress goes to stderr — the parent's stdout
+# readline() sees nothing, so the inactivity watchdog would kill a perfectly
+# healthy first-run download at WORKER_REQUEST_TIMEOUT. Mirror the FLUX worker's
+# WORKER_LOAD_TIMEOUT (local_image_generator): use a much longer bound for the
+# first load of each model id in the current worker process, then fall back to
+# the tight per-request timeout once the model is known-loaded (cache loads are
+# fast and stay well under 600s). Residual: after an in-worker text<->vision
+# swap, reloading an already-seen model from cache uses the short timeout — safe,
+# because a cache load is ~10-30s, not a multi-GB download.
+WORKER_LOAD_TIMEOUT = 1800
+# Model ids this worker process has successfully loaded at least once. Cleared
+# when a fresh worker is spawned (a new process has an empty resident cache).
+_loaded_model_ids: set[str] = set()
+
 # --- ollama model name -> MLX (HuggingFace) repo id ------------------------
 # Callers still pass the historical ollama names; map them to MLX 4-bit repos.
 _TEXT_MODEL_MAP = {
@@ -112,6 +127,7 @@ def unload():
             except Exception:
                 try:
                     proc.kill()
+                    proc.wait(timeout=5)
                 except Exception:
                     pass
         print("[mlx] Terminated MLX worker (memory reclaimed by OS)")
@@ -144,6 +160,10 @@ def _ensure_worker():
     import os
     import subprocess
     import sys
+    # A fresh worker has an empty resident model cache, so nothing is "already
+    # loaded" — the next request for any model id will trigger a (possibly
+    # downloading) load and must get the longer first-load timeout.
+    _loaded_model_ids.clear()
     # The MLX worker is about to wire ~5 GB; evict the FLUX worker (~13 GB) first
     # so they don't co-reside and OOM.
     _free_image_model()
@@ -173,13 +193,29 @@ def _request(req: dict) -> str:
     # AB-BA-deadlock with a concurrent FLUX generate.
     with GPU_LOCK, _lock:
         _ensure_worker()
+        # First load of a model id in this worker may download weights (silent on
+        # stdout) — give it the long load timeout; use the tight request timeout
+        # once the model is known-loaded.
+        model_id = req.get("model")
+        first_load = model_id not in _loaded_model_ids
+        timeout = WORKER_LOAD_TIMEOUT if first_load else WORKER_REQUEST_TIMEOUT
         try:
             _proc.stdin.write(_json.dumps(req) + "\n")
             _proc.stdin.flush()
         except Exception as e:
+            # The write failed — the worker may be wedged/half-dead but is still
+            # holding ~5 GB. Kill and reap it before dropping the ref so a respawn
+            # doesn't leave two workers co-resident (OOM).
+            proc = _proc
             _proc = None
+            if proc is not None:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
             raise RuntimeError(f"MLX worker write failed: {e}")
-        watchdog = InactivityWatchdog(_proc, WORKER_REQUEST_TIMEOUT)
+        watchdog = InactivityWatchdog(_proc, timeout)
         try:
             while True:
                 line = _proc.stdout.readline()
@@ -191,7 +227,7 @@ def _request(req: dict) -> str:
                     if timed_out:
                         raise RuntimeError(
                             f"MLX worker timed out (no output for "
-                            f"{WORKER_REQUEST_TIMEOUT}s) and was killed")
+                            f"{timeout}s) and was killed")
                     raise RuntimeError(f"MLX worker exited unexpectedly (code {code})")
                 line = line.rstrip("\n")
                 if not line.startswith(sentinel):
@@ -204,6 +240,10 @@ def _request(req: dict) -> str:
                     continue
                 if msg.get("error"):
                     raise RuntimeError(f"MLX worker error: {msg['error']}")
+                # Model loaded and produced output — remember it so subsequent
+                # requests for it use the tight per-request timeout.
+                if model_id is not None:
+                    _loaded_model_ids.add(model_id)
                 return (msg.get("text") or "").strip()
         finally:
             watchdog.stop()

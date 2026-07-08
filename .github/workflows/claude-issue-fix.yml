@@ -8,12 +8,22 @@ on:
 
 jobs:
   claude-fix:
+    # Only trusted collaborators (OWNER/MEMBER/COLLABORATOR) can trigger this
+    # run, which has contents:write + Bash(git/gh). Gate both the labeled path
+    # (issue author) and the @claude comment path (comment author) so untrusted
+    # accounts cannot inject attacker-controlled instructions.
     if: >
-      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'claude')) ||
+      (github.event_name == 'issues' &&
+       contains(github.event.issue.labels.*.name, 'claude') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) ||
       (github.event_name == 'issue_comment' &&
        contains(github.event.issue.labels.*.name, 'claude') &&
-       contains(github.event.comment.body, '@claude'))
+       contains(github.event.comment.body, '@claude') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
+    concurrency:
+      group: claude-issue-${{ github.event.issue.number }}
+      cancel-in-progress: false
     permissions:
       contents: write
       issues: write
@@ -44,15 +54,20 @@ jobs:
             - Use `_is_safe_deck_id()` / `_safe_deck_dir()` for path traversal safety
             - Use `with generation_lock:` for any generation_status updates
             - Card names with apostrophes: use addEventListener, never inline onclick with template literals
-            - SDXL Turbo on MPS: must use float32, not float16
+            - Image generation is MLX-native (mflux FLUX.1-schnell) running in the
+              flux_worker.py / mlx_worker.py subprocesses — there is no torch/diffusers
+              in-process pipeline and no OpenAI/cloud backend. Do NOT add torch or
+              openai_client guards.
             - When modifying art_prompts.json: merge, don't overwrite
             - Run `python3 -m py_compile <file>` on any Python file you modify to verify syntax
 
             ## CI Constraints
-            These modules CANNOT be imported without GPU/torch:
-            - local_image_generator.py (requires torch, diffusers)
-            - color_transfer.py (requires numpy)
-            Do NOT add imports of these to other core modules without guarding them.
+            CI runs on Ubuntu with no GPU/torch/MLX. Treat CLAUDE.md's
+            "CI Test Constraints" section as the single source of truth for which
+            modules are skipped in the import check (currently local_image_generator.py,
+            color_transfer.py, test_prompt.py, generate_deck_art.py). Any new module you
+            add must import on Ubuntu without torch/numpy/MLX, or be added to that skip
+            list. MLX imports must stay lazy (inside functions).
 
             ## Your Task
             1. Read the issue carefully

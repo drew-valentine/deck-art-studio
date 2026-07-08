@@ -77,7 +77,7 @@ function renderImportedDecks(decks) {
 
     const meta = document.createElement('span');
     meta.className = 'deck-meta';
-    meta.innerHTML = metaText;
+    meta.textContent = metaText;
     div.appendChild(meta);
 
     if (onRemove) {
@@ -101,7 +101,7 @@ function renderImportedDecks(decks) {
   for (const [name, info] of entries) {
     const ago = timeAgo(new Date(info.importedAt));
     container.appendChild(makeDeckRow(
-      name, `${info.cards} cards &middot; ${ago}`, currentActiveDeck === name,
+      name, `${info.cards} cards · ${ago}`, currentActiveDeck === name,
       () => setActiveDeck(name), () => removeDeck(name)
     ));
   }
@@ -224,7 +224,10 @@ $('#importStudioBtn').addEventListener('click', async () => {
     });
     if (!resp.success) throw new Error(resp.error);
     setStatus('studioStatus', `Imported ${resp.imported} cards from "${resp.deck}"`, 'success');
-    await recordImport(resp.deck, resp.imported, resp.uuids || []);
+    // Skip recording/activating a deck that imported nothing.
+    if (resp.imported > 0) {
+      await recordImport(resp.deck, resp.imported, resp.uuids || []);
+    }
     refreshStats();
     notifyContentScripts();
   } catch (e) {
@@ -257,7 +260,7 @@ $('#importAllBtn').addEventListener('click', async () => {
         url: `${baseUrl}/api/decks/${deck.id}/export-manifest`,
         source: 'local',
       });
-      if (resp.success) {
+      if (resp.success && resp.imported > 0) {
         totalImported += resp.imported;
         await recordImport(resp.deck || deck.name || deck.id, resp.imported, resp.uuids || []);
       }

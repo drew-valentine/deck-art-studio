@@ -200,7 +200,7 @@ $('#fetchUrlBtn').addEventListener('click', async () => {
       for (const dr of resp.deckResults) {
         if (dr.imported > 0) await recordImport(dr.deck, dr.imported, dr.uuids || []);
       }
-    } else {
+    } else if (resp.imported > 0) {
       await recordImport(resp.deck, resp.imported, resp.uuids || []);
     }
 

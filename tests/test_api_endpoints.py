@@ -162,7 +162,11 @@ class TestApiCancelSingle:
 
 
 class TestApiSavePrompt:
-    def test_save_prompt(self, client, populated_state):
+    def test_save_prompt(self, client, populated_state, monkeypatch, tmp_path):
+        # /api/save-prompt writes ART_PROMPTS_PATH to disk. Under pytest no deck
+        # is activated, so the global points at the repo-root art_prompts.json —
+        # redirect it to a temp file so the test doesn't clobber the real one.
+        monkeypatch.setattr(deck_studio, 'ART_PROMPTS_PATH', tmp_path / 'art_prompts.json')
         resp = client.post('/api/save-prompt',
                            json={'card_name': 'Sol Ring', 'prompt': 'A glowing golden ring'})
         assert resp.status_code == 200

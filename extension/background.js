@@ -47,13 +47,15 @@ async function importSingleDeck(deckName, cards, source = 'local') {
 async function importManifest(manifest, source = 'local') {
   if (!manifest) throw new Error('Invalid manifest');
 
+  let result;
+
   // v2 multi-deck format
   if (manifest.decks && typeof manifest.decks === 'object') {
     const results = [];
     for (const [name, data] of Object.entries(manifest.decks)) {
       if (!data.cards || typeof data.cards !== 'object') continue;
-      const result = await importSingleDeck(name, data.cards, source);
-      results.push(result);
+      const r = await importSingleDeck(name, data.cards, source);
+      results.push(r);
     }
     if (results.length === 0) throw new Error('Manifest has no decks with cards');
     // Aggregate results
@@ -62,20 +64,50 @@ async function importManifest(manifest, source = 'local') {
       skipped: acc.skipped + r.skipped,
       errors: acc.errors + r.errors,
     }), { imported: 0, skipped: 0, errors: 0 });
-    return {
+    result = {
       ...total,
       deck: results.map(r => r.deck).join(', '),
       uuids: results.flatMap(r => r.uuids),
       deckResults: results,
     };
+  } else if (manifest.cards && typeof manifest.cards === 'object') {
+    // v1 single-deck format
+    result = await importSingleDeck(manifest.deck || 'Unknown', manifest.cards, source);
+  } else {
+    throw new Error('Invalid manifest: missing "cards" or "decks"');
   }
 
-  // v1 single-deck format
-  if (manifest.cards && typeof manifest.cards === 'object') {
-    return importSingleDeck(manifest.deck || 'Unknown', manifest.cards, source);
+  // Every card failed to store (e.g. IndexedDB quota) — surface an error
+  // instead of "succeeding" with 0 imported, which would auto-activate an
+  // empty deck and hide existing art.
+  if (result.imported === 0 && result.errors > 0) {
+    throw new Error(`Import failed: ${result.errors} card(s) could not be stored (0 imported)`);
   }
 
-  throw new Error('Invalid manifest: missing "cards" or "decks"');
+  return result;
+}
+
+// Cap on fetched response size. A huge/mistyped URL buffered whole via
+// resp.json() can OOM-kill the service worker, so reject anything that
+// advertises a content-length over this cap before parsing.
+const MAX_FETCH_BYTES = 200 * 1024 * 1024; // 200 MB
+
+/**
+ * Fetch a URL and parse it as JSON, rejecting oversized responses.
+ * Note: content-length is best-effort (absent for chunked responses).
+ */
+async function fetchJsonCapped(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Fetch failed: ${resp.status} ${resp.statusText}`);
+  const len = Number(resp.headers.get('content-length'));
+  if (len && len > MAX_FETCH_BYTES) {
+    throw new Error(`Response too large (${len} bytes, max ${MAX_FETCH_BYTES})`);
+  }
+  try {
+    return await resp.json();
+  } catch (e) {
+    throw new Error(`Invalid JSON response: ${e.message}`);
+  }
 }
 
 /**
@@ -83,9 +115,7 @@ async function importManifest(manifest, source = 'local') {
  */
 async function fetchAndImport(url, source = 'shared') {
   const directUrl = toDirectUrl(url);
-  const resp = await fetch(directUrl);
-  if (!resp.ok) throw new Error(`Fetch failed: ${resp.status} ${resp.statusText}`);
-  const manifest = await resp.json();
+  const manifest = await fetchJsonCapped(directUrl);
   return importManifest(manifest, source);
 }
 
@@ -120,8 +150,7 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
     }
 
     if (msg.type === 'list-decks') {
-      fetch(msg.url)
-        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      fetchJsonCapped(msg.url)
         .then(data => sendResponse({ success: true, ...data }))
         .catch(e => sendResponse({ success: false, error: e.message }));
       return true;
@@ -195,7 +224,9 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
     }
 
     if (msg.type === 'export-all') {
-      getActiveDeckCards()
+      // Export every deck, not just the active one (getActiveDeckCards would
+      // silently scope "Export All Art" to the active deck).
+      DeckArtDB.getAllCards()
         .then(cards => {
           // Group cards by deck name to preserve deck structure
           const byDeck = {};

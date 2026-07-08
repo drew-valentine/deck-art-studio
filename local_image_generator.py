@@ -369,6 +369,7 @@ class LocalImageGenerator:
                 except Exception:
                     try:
                         proc.kill()
+                        proc.wait(timeout=5)
                     except Exception:
                         pass
             # The worker's GPU memory is gone with the process; a light local
@@ -413,21 +414,36 @@ class LocalImageGenerator:
             }
             print(f"[flux] -> worker txt2img {w}x{h}, steps={n_steps}: {prompt[:80]}")
             try:
-                self._send(req)
-            except Exception as e:
-                self._proc = None
-                self._active_model = None
-                raise RuntimeError(f"FLUX worker write failed: {e}")
-            done = self._read_result(progress_callback, timeout=WORKER_READ_TIMEOUT)
-            print(f"[flux] worker done in {done.get('seconds', 0):.1f}s (seed {done.get('seed')})")
-            # Load the PNG into memory, then remove the temp file.
-            img = Image.open(out_path)
-            img.load()
-            try:
-                os.remove(out_path)
-            except Exception:
-                pass
-            return img
+                try:
+                    self._send(req)
+                except Exception as e:
+                    # The write failed — the worker may be wedged/half-dead but is
+                    # still holding ~13 GB. Kill and reap it before dropping the ref
+                    # so a respawn doesn't leave two workers co-resident (OOM).
+                    proc = self._proc
+                    self._proc = None
+                    self._active_model = None
+                    if proc is not None:
+                        try:
+                            proc.kill()
+                            proc.wait(timeout=5)
+                        except Exception:
+                            pass
+                    raise RuntimeError(f"FLUX worker write failed: {e}")
+                done = self._read_result(progress_callback, timeout=WORKER_READ_TIMEOUT)
+                print(f"[flux] worker done in {done.get('seconds', 0):.1f}s (seed {done.get('seed')})")
+                # Load the PNG fully into memory so the temp file can be removed.
+                img = Image.open(out_path)
+                img.load()
+                return img
+            finally:
+                # mkstemp created the file, so it leaks on ANY failure after this
+                # point (write, read, worker death, decode) unless we remove it here.
+                if os.path.exists(out_path):
+                    try:
+                        os.remove(out_path)
+                    except Exception:
+                        pass
 
     def encode_style_image(self, pil_image, cache_key=None):
         """No-op under FLUX (IP-Adapter removed). Kept for call-site compatibility."""

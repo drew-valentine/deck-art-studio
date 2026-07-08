@@ -15,6 +15,7 @@ Requires: pip install flask openai Pillow cairosvg
 
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -141,6 +142,12 @@ cards_revision = 0
 generation_queue = []
 generation_status = {}  # card_name -> {status, message, timestamp, attempt}
 generation_lock = threading.Lock()
+# Serializes every read-modify-write of deck.json / art_prompts.json across
+# Flask's threaded request handlers and background workers. Without it, two
+# handlers that each read → mutate → rewrite the same file interleave and one
+# silently drops the other's change (a new card vanishing on next restart), or
+# two simultaneous writes interleave into unparseable JSON that bricks the deck.
+persist_lock = threading.RLock()
 is_generating = False
 batch_phase = None       # None | 'starting' | 'waiting_ollama' | 'prefetching' | 'generating'
 batch_phase_detail = ''  # e.g. "Downloading reference art (12/50)..."
@@ -189,10 +196,14 @@ def _ollama_work_done():
     with _ollama_count_lock:
         _ollama_active_count = max(0, _ollama_active_count - 1)
         count = _ollama_active_count
+        # Unload + signal idle UNDER the lock: doing it after releasing let a
+        # new _ollama_work_start() slip in (count→1, idle.clear()) and then be
+        # overwritten by this idle.set(), so FLUX would pass the gate while
+        # analysis work was live.
+        if count == 0:
+            _unload_all_ollama_models()
+            ollama_idle.set()
     print(f"[mlx_guard] LLM/VLM work done (active={count})")
-    if count == 0:
-        _unload_all_ollama_models()
-        ollama_idle.set()
 
 
 def _style_progress_update(phase, current, total, message, sub_phase=None):
@@ -286,9 +297,71 @@ def _wait_for_ollama_idle(timeout=900):
     if not result:
         print("[mlx_guard] Timeout waiting for LLM/VLM — force unloading")
         _unload_all_ollama_models()
+        # `global` is required — without it this rebinds a function-local and
+        # the module counter stays inflated, so the idle event never fires
+        # again and every later generation stalls the full timeout.
+        global _ollama_active_count
         with _ollama_count_lock:
             _ollama_active_count = 0
         ollama_idle.set()
+
+
+# ---------------------------------------------------------------------------
+# Atomic JSON persistence
+# ---------------------------------------------------------------------------
+def _atomic_json_dump(path, data, indent=2):
+    """Write JSON to `path` atomically (temp file + os.replace).
+
+    This app is OOM-killed by design pressure (see the 18 GB rule); a plain
+    truncate-and-write left partially-written JSON that broke startup and lost
+    the whole deck. os.replace is atomic on the same filesystem, so a reader
+    always sees either the old or the new complete file, never a truncation.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    with open(tmp, 'w') as f:
+        json.dump(data, f, indent=indent)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _finite_float(value, default, lo, hi):
+    """Coerce to a finite float clamped to [lo, hi]; `default` on bad input.
+
+    Guards persisted numeric fields against NaN/Infinity (which Python's JSON
+    accepts on input and re-emits, breaking the browser's JSON.parse and
+    bricking the card grid) and against non-numeric strings (which raise).
+    """
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(f):
+        return default
+    return max(lo, min(hi, f))
+
+
+def _load_json_safe(path, default):
+    """Load JSON, returning `default` (and quarantining the file) on corruption.
+
+    A truncated cache/registry/deck file previously raised JSONDecodeError out
+    of startup and bricked the whole app; now the bad file is moved aside so
+    the next write recreates it cleanly.
+    """
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return default
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"WARNING: corrupt JSON at {path} ({e}); quarantining and using default")
+        try:
+            os.replace(path, str(path) + '.corrupt')
+        except OSError:
+            pass
+        return default
 
 
 # ---------------------------------------------------------------------------
@@ -297,14 +370,17 @@ def _wait_for_ollama_idle(timeout=900):
 def load_data():
     global cards_db, prompts_map
 
+    # Reset prompts every load: without this, switching deck A → B MERGED A's
+    # prompts into B's map, so a staple in both decks (Sol Ring) kept deck A's
+    # prompt in B — shown, generated from, and persisted into B's file.
+    prompts_map = {}
+
     if not CARD_DB_PATH.exists():
         print(f"WARNING: Card database not found at {CARD_DB_PATH}")
         cards_db = []
-        prompts_map = {}
         return
 
-    with open(CARD_DB_PATH) as f:
-        data = json.load(f)
+    data = _load_json_safe(CARD_DB_PATH, [])
 
     # Support both formats: plain list (legacy) or dict with 'cards' key (new)
     if isinstance(data, dict) and 'cards' in data:
@@ -315,37 +391,40 @@ def load_data():
         cards_db = []
 
     if ART_PROMPTS_PATH.exists():
-        with open(ART_PROMPTS_PATH) as f:
-            for entry in json.load(f):
-                prompts_map[entry['name']] = entry['prompt']
+        for entry in _load_json_safe(ART_PROMPTS_PATH, []):
+            prompts_map[entry['name']] = entry['prompt']
 
     # Initialize status for all cards
     # Cards with .meta.json have actual AI-generated art ("complete").
     # Cards with only Scryfall art composites (no meta) are still "pending"
     # from the user's perspective — they haven't generated custom art yet.
-    for card in cards_db:
-        name = card['name']
-        slug = name_to_slug(name)
-        raw_path = RAW_ART_DIR / f"{slug}.png"
-        comp_path = COMPOSITE_DIR / f"{slug}.png"
-        meta_path = RAW_ART_DIR / f"{slug}.meta.json"
+    # load_data runs at runtime via switch_deck / the import worker, so seed
+    # under generation_lock — otherwise /api/status's dict copy can hit
+    # "dictionary changed size during iteration".
+    with generation_lock:
+        for card in cards_db:
+            name = card['name']
+            slug = name_to_slug(name)
+            raw_path = RAW_ART_DIR / f"{slug}.png"
+            comp_path = COMPOSITE_DIR / f"{slug}.png"
+            meta_path = RAW_ART_DIR / f"{slug}.meta.json"
 
-        if meta_path.exists():
-            # Has AI-generated art
-            generation_status[name] = {
-                'status': 'complete',
-                'message': 'Art generated',
-                'has_raw_art': raw_path.exists(),
-                'has_composite': comp_path.exists(),
-            }
-        else:
-            # Scryfall-only or no art — still pending for generation
-            generation_status[name] = {
-                'status': 'pending',
-                'message': 'Not yet generated',
-                'has_raw_art': raw_path.exists(),
-                'has_composite': comp_path.exists(),
-            }
+            if meta_path.exists():
+                # Has AI-generated art
+                generation_status[name] = {
+                    'status': 'complete',
+                    'message': 'Art generated',
+                    'has_raw_art': raw_path.exists(),
+                    'has_composite': comp_path.exists(),
+                }
+            else:
+                # Scryfall-only or no art — still pending for generation
+                generation_status[name] = {
+                    'status': 'pending',
+                    'message': 'Not yet generated',
+                    'has_raw_art': raw_path.exists(),
+                    'has_composite': comp_path.exists(),
+                }
 
     # Backfill: composite Scryfall art for cards with no raw art yet
     scryfall_dir = DECKS_DIR / active_deck_id / "scryfall_art" if active_deck_id else None
@@ -716,9 +795,12 @@ def render_composite_for_card(card, art_path, comp_path, deck_fs=None,
     if is_rotated_split(card):
         _raw = Path(raw_art_dir) if raw_art_dir else RAW_ART_DIR
         right = _raw / f"{name_to_slug(face_key(card['name'], 'back'))}.png"
+        # A None left slot renders empty (not the string "None") — the caller
+        # passes None rather than duplicate the right half onto the front.
         composite_split_card(
             [split_half_card(card, 0), split_half_card(card, 1)],
-            [str(art_path), str(right) if right.exists() else None],
+            [str(art_path) if art_path else None,
+             str(right) if right.exists() else None],
             str(comp_path), deck_frame_settings=deck_fs)
     else:
         render_composite(card, str(art_path), None, str(comp_path),
@@ -1912,6 +1994,12 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                                             status_dict=_status,
                                             size_override=actual_size)
 
+        # Honor a cancel that arrived DURING generation before writing any
+        # files — otherwise the card's art is silently replaced even though
+        # the route reports the result was discarded.
+        if card_name in _cancel_single:
+            return True, "Cancelled"
+
         # Save raw art
         _raw_art_dir.mkdir(parents=True, exist_ok=True)
         result_image.save(raw_path, 'PNG')
@@ -1950,7 +2038,10 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
             # half, which would duplicate its art onto the first.
             front_art = (_front_raw if _front_raw.exists()
                          else _front_art_with_fallback(card_name, _raw_art_dir))
-            render_composite_for_card(card, front_art or raw_path, _front_comp,
+            # When the front half has no art, pass None (empty front slot) —
+            # NOT this just-generated right half, which would duplicate its
+            # art onto the first half (see comment above).
+            render_composite_for_card(card, front_art, _front_comp,
                                       deck_fs=active_deck_meta.get('frame_settings'),
                                       raw_art_dir=_raw_art_dir)
         else:
@@ -2157,6 +2248,11 @@ def _validate_deck_id_in_url():
 @app.route('/api/decks/<deck_id>/activate', methods=['POST'])
 def api_activate_deck(deck_id):
     """Switch the active deck."""
+    # Refuse while art is generating: the in-flight worker resolves the deck's
+    # paths/style/prompts from live globals, so repointing them mid-generation
+    # writes one deck's art into another's directories.
+    if is_generating:
+        return jsonify({'error': 'Cannot switch decks while art is generating'}), 409
     if switch_deck(deck_id):
         return jsonify({'success': True, 'active_deck_id': deck_id})
     return jsonify({'error': f'Deck not found: {deck_id}'}), 404
@@ -2165,7 +2261,12 @@ def api_activate_deck(deck_id):
 @app.route('/api/decks/<deck_id>', methods=['DELETE'])
 def api_delete_deck(deck_id):
     """Delete a deck. If it's the active deck, auto-switch to another first."""
-    global active_deck_id
+    global active_deck_id, cards_db, prompts_map
+
+    # Refuse while a batch is writing into this deck — rmtree would race the
+    # worker (zombie half-recreated dir, or a 500 with the deck half-deleted).
+    if is_generating and (batch_deck_id == deck_id or deck_id == active_deck_id):
+        return jsonify({'error': 'Cannot delete a deck while art is generating'}), 409
 
     registry = _load_deck_registry()
     other_decks = [d for d in registry['decks'] if d['id'] != deck_id]
@@ -2175,7 +2276,13 @@ def api_delete_deck(deck_id):
         if other_decks:
             switch_deck(other_decks[0]['id'])
         else:
+            # No deck left to switch to — clear in-memory state so the API
+            # stops serving the deleted deck's cards.
             active_deck_id = None
+            cards_db = []
+            prompts_map = {}
+            with generation_lock:
+                generation_status.clear()
 
     if delete_deck(deck_id):
         return jsonify({'success': True, 'switched_to': active_deck_id})
@@ -3076,17 +3183,24 @@ def _guarded_subject_distillation(deck_id: str):
 
 
 def _save_deck_meta_field(deck_id: str, **fields):
-    """Update specific fields in a deck's deck.json without touching cards."""
+    """Update specific fields in a deck's deck.json without touching cards.
+
+    Re-reads deck.json under persist_lock immediately before writing and
+    updates only the requested keys, so a long-running worker (style
+    distillation, background analysis) that started from an older snapshot
+    can't clobber concurrent edits — only the exact fields it owns change.
+    """
     deck_dir = DECKS_DIR / deck_id
     deck_json_path = deck_dir / "deck.json"
     if not deck_json_path.exists():
         return False
-    with open(deck_json_path) as f:
-        data = json.load(f)
-    for k, v in fields.items():
-        data[k] = v
-    with open(deck_json_path, 'w') as f:
-        json.dump(data, f, indent=2)
+    with persist_lock:
+        data = _load_json_safe(deck_json_path, {})
+        if not isinstance(data, dict):
+            data = {}
+        for k, v in fields.items():
+            data[k] = v
+        _atomic_json_dump(deck_json_path, data)
     # Keep in-memory meta in sync
     global active_deck_meta
     if deck_id == active_deck_id:
@@ -4368,20 +4482,17 @@ def _persist_cards_and_prompts():
     deck_dir = DECKS_DIR / active_deck_id
     deck_json_path = deck_dir / "deck.json"
 
-    # Update cards in deck.json (preserve metadata fields)
-    if deck_json_path.exists():
-        with open(deck_json_path) as f:
-            data = json.load(f)
-    else:
-        data = {}
-    data['cards'] = cards_db
-    with open(deck_json_path, 'w') as f:
-        json.dump(data, f, indent=2)
+    with persist_lock:
+        # Update cards in deck.json (preserve metadata fields)
+        data = _load_json_safe(deck_json_path, {})
+        if not isinstance(data, dict):
+            data = {}
+        data['cards'] = cards_db
+        _atomic_json_dump(deck_json_path, data)
 
-    # Update art_prompts.json
-    all_prompts = [{'name': n, 'prompt': p} for n, p in prompts_map.items()]
-    with open(ART_PROMPTS_PATH, 'w') as f:
-        json.dump(all_prompts, f, indent=2)
+        # Update art_prompts.json
+        all_prompts = [{'name': n, 'prompt': p} for n, p in prompts_map.items()]
+        _atomic_json_dump(ART_PROMPTS_PATH, all_prompts)
 
 
 @app.route('/api/save-prompt', methods=['POST'])
@@ -4397,10 +4508,10 @@ def api_save_prompt():
 
     prompts_map[card_name] = prompt
 
-    # Persist to disk
-    all_prompts = [{'name': n, 'prompt': p} for n, p in prompts_map.items()]
-    with open(ART_PROMPTS_PATH, 'w') as f:
-        json.dump(all_prompts, f, indent=2)
+    # Persist to disk (atomic + locked, same as _persist_cards_and_prompts)
+    with persist_lock:
+        all_prompts = [{'name': n, 'prompt': p} for n, p in prompts_map.items()]
+        _atomic_json_dump(ART_PROMPTS_PATH, all_prompts)
 
     # Update the card's prompt in allCards so polling reflects the edit
     for card in cards_db:
@@ -4425,7 +4536,12 @@ def api_add_card():
 
     data = request.json or {}
     raw_input = data.get('name', '').strip()
-    quantity = data.get('quantity', 1)
+    # Coerce quantity to a sane int — a string/NaN would land in persisted
+    # state and later break arithmetic or JSON serialization.
+    try:
+        quantity = max(1, min(999, int(data.get('quantity', 1))))
+    except (TypeError, ValueError):
+        quantity = 1
     if not raw_input:
         return jsonify({'error': 'Card name is required'}), 400
 
@@ -4488,12 +4604,13 @@ def api_add_card():
 
         cards_db.append(card)
         prompts_map[card['name']] = prompt
-        generation_status[card['name']] = {
-            'status': 'pending',
-            'message': 'Not yet generated',
-            'has_raw_art': False,
-            'has_composite': False,
-        }
+        with generation_lock:
+            generation_status[card['name']] = {
+                'status': 'pending',
+                'message': 'Not yet generated',
+                'has_raw_art': False,
+                'has_composite': False,
+            }
         _persist_cards_and_prompts()
 
         return jsonify({
@@ -4523,12 +4640,13 @@ def api_add_card():
     # Add to in-memory state
     cards_db.append(card)
     prompts_map[card['name']] = prompt
-    generation_status[card['name']] = {
-        'status': 'pending',
-        'message': 'Not yet generated',
-        'has_raw_art': False,
-        'has_composite': False,
-    }
+    with generation_lock:
+        generation_status[card['name']] = {
+            'status': 'pending',
+            'message': 'Not yet generated',
+            'has_raw_art': False,
+            'has_composite': False,
+        }
 
     # Persist to disk
     _persist_cards_and_prompts()
@@ -4600,20 +4718,34 @@ def api_remove_card():
     if not card:
         return jsonify({'error': f'Card not found in deck: {card_name}'}), 404
 
+    # Refuse while this card is generating — a still-running worker would
+    # re-write its files and re-insert a status entry for a card that no
+    # longer exists (ghost entry + orphan files).
+    if is_generating and (card_name in _batch_generation_status
+                          or generation_status.get(card_name, {}).get('status') == 'generating'):
+        return jsonify({'error': 'Cannot remove a card while it is generating'}), 409
+
     # Remove from in-memory state
     cards_db.remove(card)
     prompts_map.pop(card_name, None)
-    generation_status.pop(card_name, None)
+    _cancel_single.discard(card_name)
+    with generation_lock:
+        generation_status.pop(card_name, None)
 
-    # Optionally clean up art files
-    slug = name_to_slug(card_name)
+    # Clean up art files for BOTH faces (DFC backs / split right halves use a
+    # "__back" slug) and drop the version history so re-adding starts clean.
     deck_dir = DECKS_DIR / active_deck_id
-    for subdir in ('raw_art', 'composites', 'scryfall_art'):
-        d = deck_dir / subdir
-        for ext in ('.png', '.jpg', '.jpeg', '.meta.json'):
-            p = d / f"{slug}{ext}"
-            if p.exists():
-                p.unlink()
+    slugs = [name_to_slug(card_name)]
+    if has_second_art_face(card):
+        slugs.append(name_to_slug(face_key(card_name, 'back')))
+    for slug in slugs:
+        for subdir in ('raw_art', 'composites', 'scryfall_art'):
+            d = deck_dir / subdir
+            for ext in ('.png', '.jpg', '.jpeg', '.meta.json'):
+                p = d / f"{slug}{ext}"
+                if p.exists():
+                    p.unlink()
+        shutil.rmtree(VERSIONS_DIR / slug, ignore_errors=True)
 
     # Persist
     _persist_cards_and_prompts()
@@ -4642,6 +4774,16 @@ def generate_single():
 
     if not card_name:
         return jsonify({'error': 'No card name'}), 400
+
+    # 404 unknown cards so a typo'd/arbitrary name from a LAN client can't
+    # seed a permanent phantom generation_status entry.
+    _base = card_name[:-len(BACK_FACE_SUFFIX)] if card_name.endswith(BACK_FACE_SUFFIX) else card_name
+    if not any(c['name'] == _base for c in cards_db):
+        return jsonify({'error': f'Card not in deck: {card_name}'}), 404
+
+    # Clear any stale cancel flag from a prior cancel that raced completion —
+    # otherwise this fresh generation would self-cancel before doing anything.
+    _cancel_single.discard(card_name)
 
     # NB: no "model not loaded" guard — the worker (via generate_art_for_card)
     # auto-loads the image model on demand, showing a "Loading image model..."
@@ -4721,8 +4863,15 @@ def generate_batch():
     if model_cfg.get('backend', 'openai') == 'openai' and not openai_client:
         return jsonify({'error': 'API key not set'}), 400
 
-    if is_generating:
-        return jsonify({'error': 'Batch generation already in progress'}), 400
+    # Atomic claim: check-and-set under the lock so two near-simultaneous
+    # POSTs (double-click / two tabs) can't both start a worker and then fight
+    # over the shared batch globals.
+    with generation_lock:
+        if is_generating:
+            return jsonify({'error': 'Batch generation already in progress'}), 400
+        is_generating = True
+        batch_phase = 'starting'
+        batch_phase_detail = 'Preparing...'
 
     data = request.json
     card_names = data.get('card_names', [])
@@ -4732,6 +4881,9 @@ def generate_batch():
     if not card_names:
         # Generate all
         card_names = [c['name'] for c in cards_db]
+    elif not isinstance(card_names, list):
+        is_generating = False
+        return jsonify({'error': 'card_names must be a list'}), 400
 
     face_map = {}
     if skip_existing:
@@ -4775,11 +4927,9 @@ def generate_batch():
         card_names = filtered
 
     if not card_names:
+        is_generating = False  # release the claim — nothing to do
         return jsonify({'success': True, 'message': 'All cards already generated'})
 
-    # Set phase eagerly so the first poll sees accurate state
-    is_generating = True
-    batch_phase = 'starting'
     batch_phase_detail = f'Preparing to generate {len(card_names)} cards...'
 
     # Apply same feedback to all selected cards
@@ -5163,6 +5313,10 @@ def get_versions(card_name):
 @app.route('/api/decks/<deck_id>/regen-subject', methods=['POST'])
 def regen_card_subject(deck_id):
     """Regenerate scene direction for a card via LLM."""
+    # This operates on the ACTIVE deck's in-memory state; reject a mismatched
+    # deck_id rather than silently acting on the wrong deck.
+    if deck_id != active_deck_id:
+        return jsonify({'error': 'Deck is not active'}), 409
     data = request.json or {}
     card_name = data.get('card_name', '').strip()
     if not card_name:
@@ -5176,6 +5330,11 @@ def regen_card_subject(deck_id):
 @app.route('/api/decks/<deck_id>/card-subject', methods=['POST'])
 def save_card_subject(deck_id):
     """Save a user-edited scene direction (distilled subject) for a card."""
+    # Reads active_deck_meta but persists to deck_id — if they differ, the
+    # active deck's subjects would be written into the other deck's deck.json,
+    # destroying its saved scene directions. Reject the mismatch.
+    if deck_id != active_deck_id:
+        return jsonify({'error': 'Deck is not active'}), 409
     data = request.json or {}
     card_name = data.get('card_name', '').strip()
     subject = data.get('subject', '').strip()
@@ -5195,12 +5354,13 @@ def save_card_subject(deck_id):
 @app.route('/api/revert/<path:card_name>', methods=['POST'])
 def revert_version(card_name):
     """Revert a card to a specific archived version."""
-    data = request.json
-    version_num = data.get('version')
-    if not version_num:
-        return jsonify({'error': 'No version number specified'}), 400
+    data = request.json or {}
+    try:
+        version_num = int(data.get('version'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid version number'}), 400
 
-    success, message = revert_to_version(card_name, int(version_num))
+    success, message = revert_to_version(card_name, version_num)
     if success:
         return jsonify({'success': True, 'message': message})
     return jsonify({'error': message}), 400
@@ -5252,6 +5412,10 @@ def deck_frame_settings(deck_id):
         return jsonify(meta.get('frame_settings', {}))
 
     data = request.json or {}
+    # A non-dict body (valid JSON, wrong shape) would persist and then break
+    # every subsequent composite render that reads deck frame_settings.
+    if not isinstance(data, dict):
+        return jsonify({'error': 'frame_settings must be an object'}), 400
     _save_deck_meta_field(deck_id, frame_settings=data)
     return jsonify({'success': True})
 
@@ -5297,6 +5461,8 @@ def save_card_frame_overrides():
     overrides = data.get('frame_overrides', {})
     if not card_name:
         return jsonify({'error': 'No card_name provided'}), 400
+    if not isinstance(overrides, dict):
+        return jsonify({'error': 'frame_overrides must be an object'}), 400
 
     _, card, face, _ = _resolve_card_ref(card_name)
     if not card:
@@ -5434,13 +5600,16 @@ def save_card_art_position():
 
     ovr_key = 'frame_overrides_back' if face == 'back' else 'frame_overrides'
     overrides = card.get(ovr_key, {})
+    # Clamp + reject NaN/Infinity: a persisted non-finite value re-serializes
+    # as `NaN` in /api/cards and breaks the browser's JSON.parse (blank grid).
     if 'art_offset' in data:
+        ao = data['art_offset'] if isinstance(data['art_offset'], dict) else {}
         overrides['art_offset'] = {
-            'x': float(data['art_offset'].get('x', 0)),
-            'y': float(data['art_offset'].get('y', 0)),
+            'x': _finite_float(ao.get('x', 0), 0.0, -5000, 5000),
+            'y': _finite_float(ao.get('y', 0), 0.0, -5000, 5000),
         }
     if 'art_zoom' in data:
-        overrides['art_zoom'] = float(data['art_zoom'])
+        overrides['art_zoom'] = _finite_float(data['art_zoom'], 1.0, 0.1, 10.0)
     card[ovr_key] = overrides
     _persist_cards_and_prompts()
     return jsonify({'success': True})
@@ -5449,11 +5618,12 @@ def save_card_art_position():
 @app.route('/api/delete-version/<path:card_name>', methods=['POST'])
 def delete_version_endpoint(card_name):
     """Delete a specific archived version for a card."""
-    data = request.json
-    version_num = data.get('version')
-    if not version_num:
-        return jsonify({'error': 'No version number specified'}), 400
-    success, message = delete_version(card_name, int(version_num))
+    data = request.json or {}
+    try:
+        version_num = int(data.get('version'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid version number'}), 400
+    success, message = delete_version(card_name, version_num)
     if success:
         return jsonify({'success': True, 'message': message})
     return jsonify({'error': message}), 400
@@ -8145,9 +8315,40 @@ header .separator {
 
 <script>
 function escapeHtml(str) {
-  const d = document.createElement('div');
-  d.textContent = str;
-  return d.innerHTML;
+  // Attribute-safe: also escapes quotes. The old textContent->innerHTML trick
+  // left " and ' unescaped, so a card name with a double quote (Un-cards like
+  // "Ach! Hans, Run!") broke out of alt="..."/value="..." attributes.
+  return String(str == null ? '' : str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Poll a job-progress endpoint until {done:true}. REJECTS after a run of
+// consecutive failures (repeated 404/network errors — e.g. the in-memory job
+// vanished because the server was restarted mid-job) so callers stop waiting
+// forever and can re-enable their UI instead of freezing on a spinner.
+async function pollJobProgress(url, onProgress, intervalMs = 800, maxMisses = 6) {
+  return new Promise((resolve, reject) => {
+    let misses = 0;
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) {
+          if (++misses >= maxMisses) { clearInterval(poll); reject(new Error('Job lost — the server may have restarted')); }
+          return;
+        }
+        misses = 0;
+        const prog = await r.json();
+        if (onProgress) { try { onProgress(prog); } catch (e) {} }
+        if (prog.done) { clearInterval(poll); resolve(prog); }
+      } catch (e) {
+        if (++misses >= maxMisses) { clearInterval(poll); reject(new Error('Job polling failed')); }
+      }
+    }, intervalMs);
+  });
 }
 
 // Extract the plain scene from a prompt that may still be in the legacy cloud
@@ -8660,7 +8861,7 @@ async function removeCurrentCard() {
   if (!selectedCard) return;
 
   const dialogResult = await showCustomDialog({
-    title: `Remove "${escapeHtml(selectedCard)}"`,
+    title: `Remove "${selectedCard}"`,  // showCustomDialog escapes title itself
     message: 'This will also delete any generated art for this card.',
     variant: 'danger',
     confirmText: 'Remove Card',
@@ -8713,6 +8914,7 @@ async function doImport() {
   phaseLabel.textContent = 'Starting import...';
   stepLabel.textContent = '';
   progressFill.style.width = '0%';
+  progressFill.style.background = '';  // clear any error-red left from a prior failed import
 
   try {
     // Kick off background import job
@@ -8741,45 +8943,18 @@ async function doImport() {
     };
 
     // Poll for progress
-    const poll = () => new Promise((resolve, reject) => {
-      const interval = setInterval(async () => {
-        try {
-          const resp = await fetch(`/api/import/progress/${jobId}`);
-          if (!resp.ok) { return; }
-          const prog = await resp.json();
-
-          // Update phase label
-          phaseLabel.textContent = phaseNames[prog.phase] || prog.phase;
-
-          // Update step counter
-          if (prog.total > 0) {
-            stepLabel.textContent = `${prog.step}/${prog.total}`;
-            const pct = Math.round((prog.step / prog.total) * 100);
-            progressFill.style.width = pct + '%';
-          } else {
-            stepLabel.textContent = '';
-            // Indeterminate - pulse
-            progressFill.style.width = '30%';
-          }
-
-          // Update status message
-          statusEl.textContent = prog.message || '';
-
-          if (prog.done) {
-            clearInterval(interval);
-            if (prog.error) {
-              reject(new Error(prog.error));
-            } else {
-              resolve(prog);
-            }
-          }
-        } catch (e) {
-          // Network blip — keep polling
-        }
-      }, 400);
-    });
-
-    const result = await poll();
+    const result = await pollJobProgress(`/api/import/progress/${jobId}`, (prog) => {
+      phaseLabel.textContent = phaseNames[prog.phase] || prog.phase;
+      if (prog.total > 0) {
+        stepLabel.textContent = `${prog.step}/${prog.total}`;
+        progressFill.style.width = Math.round((prog.step / prog.total) * 100) + '%';
+      } else {
+        stepLabel.textContent = '';
+        progressFill.style.width = '30%';  // indeterminate pulse
+      }
+      statusEl.textContent = prog.message || '';
+    }, 400);
+    if (result.error) throw new Error(result.error);
 
     // Success — show final status
     progressFill.style.width = '100%';
@@ -9102,7 +9277,7 @@ function startPolling() {
             body: JSON.stringify({model_key: _pendingModelLoad.key}),
           }).then(() => fetch('/api/model-config')).then(r => r.json()).then(cfg => {
             modelConfig = cfg;
-            updateModelDropdown(modelConfig);
+            populateModelDropdown();  // (updateModelDropdown never existed — threw a ReferenceError here, swallowed by .catch, so the dropdown/cost never refreshed)
             updateCostEstimate();
             _pendingModelLoad = null;
           }).catch(() => { _pendingModelLoad = null; });
@@ -9151,9 +9326,11 @@ function startPolling() {
     if (selectedCard) {
       const card = allCards.find(c => c.name === selectedCard);
       if (card) {
-        // Refresh version history when selected card transitions to complete
+        // Refresh version history when selected card transitions to complete.
+        // Use the FACE key/slug — on a DFC back face the front's key/slug
+        // would load the wrong versions and revert the wrong image.
         if (card.status === 'complete' && lastSelectedStatus !== 'complete') {
-          loadVersionHistory(selectedCard, card.slug);
+          loadVersionHistory(faceKeyFor(card), faceSlugFor(card));
           // Refresh card data to update prompt_stale flag after generation
           fetch('/api/cards').then(r => r.json()).then(cards => {
             for (const updated of cards) {
@@ -9188,6 +9365,12 @@ function startPolling() {
 // --- Rendering ---
 function renderGrid() {
   syncPinnedCards();
+  // Prune selections for cards that no longer exist (removed, deck switch) so
+  // "N selected" counts and batch requests don't reference ghost card names.
+  if (checkedCards.size) {
+    const live = new Set(allCards.map(c => c.name));
+    for (const n of [...checkedCards]) if (!live.has(n)) checkedCards.delete(n);
+  }
   const grid = document.getElementById('cardGrid');
   grid.innerHTML = '';
 
@@ -10062,15 +10245,7 @@ async function regenerateCurrent(btn) {
 
     // 2) Wait for the new prompt.
     const jobId = data.job_id;
-    await new Promise((resolve) => {
-      const poll = setInterval(async () => {
-        try {
-          const r = await fetch(`/api/regen-prompts/progress/${jobId}`);
-          if (!r.ok) return;
-          if ((await r.json()).done) { clearInterval(poll); resolve(); }
-        } catch (e) {}
-      }, 800);
-    });
+    await pollJobProgress(`/api/regen-prompts/progress/${jobId}`);
 
     // 3) Pull the steered prompt into the field, then render art from it.
     const cards = await (await fetch('/api/cards')).json();
@@ -10132,7 +10307,7 @@ async function regeneratePromptForCard() {
   if (!isLocal) {
     const dialogResult = await showCustomDialog({
       title: 'Regenerate Prompt',
-      message: `Regenerate the art prompt for "${escapeHtml(selectedCard)}".`,
+      message: `Regenerate the art prompt for "${selectedCard}".`,  // dialog escapes message itself
       fields: [
         { type: 'toggle', name: 'useAi', label: 'AI-enhanced subject',
           checked: true,
@@ -10164,33 +10339,21 @@ async function regeneratePromptForCard() {
 
     // Poll for completion
     const jobId = data.job_id;
-    const poll = setInterval(async () => {
-      try {
-        const r = await fetch(`/api/regen-prompts/progress/${jobId}`);
-        if (!r.ok) return;
-        const prog = await r.json();
-        if (prog.done) {
-          clearInterval(poll);
-          // Reload cards to get updated prompt
-          const cardsResp = await fetch('/api/cards');
-          const cards = await cardsResp.json();
-          allCards = cards;
-          const card = allCards.find(c => c.name === selectedCard);
-          if (card) {
-            document.getElementById('detailPrompt').value = cleanScenePrompt(
-              viewingBack(card) ? (card.back_prompt || '') : card.prompt);
-            updateDetailPanel(card);
-          }
-          btn.disabled = false;
-          btn.textContent = 'Generate Random';
-          showToast('Prompt regenerated', 'success');
-        } else {
-          btn.textContent = 'Generating…';
-        }
-      } catch (_) {}
-    }, 1000);
+    btn.textContent = 'Generating…';
+    await pollJobProgress(`/api/regen-prompts/progress/${jobId}`, null, 1000);
+    // Reload cards to get updated prompt
+    const cards = await (await fetch('/api/cards')).json();
+    allCards = cards;
+    const card = allCards.find(c => c.name === selectedCard);
+    if (card) {
+      document.getElementById('detailPrompt').value = cleanScenePrompt(
+        viewingBack(card) ? (card.back_prompt || '') : card.prompt);
+      updateDetailPanel(card);
+    }
+    showToast('Prompt regenerated', 'success');
   } catch (e) {
-    showToast('Network error: ' + e.message, 'error');
+    showToast(e.message || 'Network error', 'error');
+  } finally {
     btn.disabled = false;
     btn.textContent = 'Generate Random';
   }
@@ -10235,27 +10398,14 @@ async function generateFlavorText() {
 
     const jobId = data.job_id;
 
-    const result = await new Promise((resolve, reject) => {
-      const interval = setInterval(async () => {
-        try {
-          const r = await fetch(`/api/flavor-text/progress/${jobId}`);
-          if (!r.ok) return;
-          const prog = await r.json();
-
-          batchMessage.textContent = 'Generating flavor text...';
-          if (prog.total > 0) {
-            batchMessage.textContent = `Generating flavor text: ${prog.step} / ${prog.total}`;
-            progressFill.style.width = Math.round((prog.step / prog.total) * 100) + '%';
-          }
-
-          if (prog.done) {
-            clearInterval(interval);
-            if (prog.error) reject(new Error(prog.error));
-            else resolve(prog);
-          }
-        } catch (_) {}
-      }, 1000);
-    });
+    const result = await pollJobProgress(`/api/flavor-text/progress/${jobId}`, (prog) => {
+      batchMessage.textContent = 'Generating flavor text...';
+      if (prog.total > 0) {
+        batchMessage.textContent = `Generating flavor text: ${prog.step} / ${prog.total}`;
+        progressFill.style.width = Math.round((prog.step / prog.total) * 100) + '%';
+      }
+    }, 1000);
+    if (result.error) throw new Error(result.error);
 
     batchMessage.textContent = result.message || 'Done!';
     progressFill.style.width = '100%';
@@ -10303,31 +10453,17 @@ async function generateFlavorTextForCard() {
     }
 
     const jobId = data.job_id;
-    const poll = setInterval(async () => {
-      try {
-        const r = await fetch(`/api/flavor-text/progress/${jobId}`);
-        if (!r.ok) return;
-        const prog = await r.json();
-        if (prog.done) {
-          clearInterval(poll);
-          // Reload cards to get updated flavor text
-          const cardsResp = await fetch('/api/cards');
-          const cards = await cardsResp.json();
-          allCards = cards;
-          const card = allCards.find(c => c.name === selectedCard);
-          if (card) {
-            updateDetailPanel(card);
-          }
-          renderGrid();
-          btn.disabled = false;
-          btn.textContent = 'Generate';
-        } else {
-          btn.textContent = 'Generating...';
-        }
-      } catch (_) {}
-    }, 1000);
+    btn.textContent = 'Generating...';
+    await pollJobProgress(`/api/flavor-text/progress/${jobId}`, null, 1000);
+    // Reload cards to get updated flavor text
+    const cards = await (await fetch('/api/cards')).json();
+    allCards = cards;
+    const card = allCards.find(c => c.name === selectedCard);
+    if (card) updateDetailPanel(card);
+    renderGrid();
   } catch (e) {
-    showToast('Network error: ' + e.message, 'error');
+    showToast(e.message || 'Network error', 'error');
+  } finally {
     btn.disabled = false;
     btn.textContent = 'Generate';
   }
@@ -10390,22 +10526,30 @@ async function generateArt() {
   if (!result) return;
   const feedback = result.feedback || '';
 
-  const resp = await fetch('/api/generate-batch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ card_names: names, skip_existing: false, feedback: feedback || '' }),
-  });
-  const batchResult = await resp.json();
-  if (batchResult.success) {
-    // Instant feedback — show progress in action bar
-    document.getElementById('batchMessage').textContent = 'Preparing...';
-    document.getElementById('actionBarProgress').style.display = 'flex';
-    document.getElementById('batchProgressFill').style.width = '0%';
-    document.getElementById('btnStop').style.display = '';
-    document.getElementById('btnRegenPrompts').style.display = 'none';
-    document.getElementById('btnGenFlavor').style.display = 'none';
-    document.getElementById('btnGenArt').style.display = 'none';
-    document.getElementById('btnRenderFrames').style.display = 'none';
+  try {
+    const resp = await fetch('/api/generate-batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ card_names: names, skip_existing: false, feedback: feedback || '' }),
+    });
+    const batchResult = await resp.json();
+    if (batchResult.success) {
+      // Instant feedback — show progress in action bar
+      document.getElementById('batchMessage').textContent = 'Preparing...';
+      document.getElementById('actionBarProgress').style.display = 'flex';
+      document.getElementById('batchProgressFill').style.width = '0%';
+      document.getElementById('btnStop').style.display = '';
+      document.getElementById('btnRegenPrompts').style.display = 'none';
+      document.getElementById('btnGenFlavor').style.display = 'none';
+      document.getElementById('btnGenArt').style.display = 'none';
+      document.getElementById('btnRenderFrames').style.display = 'none';
+    } else {
+      // e.g. a batch is already running on another deck — say so instead of
+      // silently doing nothing after the dialog closed.
+      showToast(batchResult.error || 'Failed to start batch', 'error');
+    }
+  } catch (e) {
+    showToast('Network error starting batch', 'error');
   }
 }
 
@@ -10486,6 +10630,7 @@ let _frameDeckSettings = {};
 let _framePreviewTimer = null;
 let _activeFrameStyle = 'basic';
 let _fdCompositor = null;  // FrameCompositor instance
+let _fdWired = false;      // frame-designer static listeners wired once
 
 const SWATCH_COLORS = {
   'W': '#DBCFAC', 'U': '#3B90B9', 'B': '#323232', 'R': '#BB5540', 'G': '#718971',
@@ -10695,9 +10840,12 @@ async function initFrameDesigner() {
     _frameDeckSettings = {};
   }
 
-  // Initialize canvas compositor
+  // Initialize canvas compositor ONCE — a fresh FrameCompositor per call (e.g.
+  // every deck switch) re-registered pointer/wheel listeners on the static
+  // container, so the stale instance kept fighting the new one over the shared
+  // canvas and zoom steps multiplied per switch.
   const canvas = document.getElementById('fdCanvas');
-  if (canvas) {
+  if (canvas && !_fdCompositor) {
     _fdCompositor = new FrameCompositor(canvas);
   }
 
@@ -10705,8 +10853,14 @@ async function initFrameDesigner() {
   renderLayerList();
   renderQuickSwatches();
   populateFrameFromSettings(_frameDeckSettings);
+  // wireFrameInputs re-wires the layer rows that renderLayerList just
+  // recreated, so it must run every init. wireZoomControls binds only the
+  // static zoom slider/buttons, so wire it once to avoid multiplied steps.
   wireFrameInputs();
-  wireZoomControls();
+  if (!_fdWired) {
+    wireZoomControls();
+    _fdWired = true;
+  }
 }
 
 function renderStyleStrip() {
@@ -12146,58 +12300,34 @@ async function regeneratePrompts() {
     // Poll for progress — use unified pct (0-100) from backend
     let lastUpdatedCount = 0;
     let _lastRegenPct = 0;
-    let _lastRegenPhase = 'generating';
-    const result = await new Promise((resolve, reject) => {
-      const interval = setInterval(async () => {
-        try {
-          const r = await fetch(`/api/regen-prompts/progress/${jobId}`);
-          if (!r.ok) return;
-          const prog = await r.json();
+    const result = await pollJobProgress(`/api/regen-prompts/progress/${jobId}`, (prog) => {
+      batchMessage.textContent = prog.message || 'Generating prompts...';
+      // Use the backend's unified percentage (0-100). Clamp so it never goes
+      // backward (prevents oscillation while the LLM works through a batch).
+      const pct = Math.max(prog.pct || 0, _lastRegenPct);
+      if (pct > _lastRegenPct) {
+        progressFill.classList.remove('indeterminate');
+      } else if (!prog.done) {
+        progressFill.classList.add('indeterminate');
+      }
+      progressFill.style.width = pct + '%';
+      _lastRegenPct = pct;
 
-          batchMessage.textContent = prog.message || 'Generating prompts...';
-          // Use the backend's unified percentage (0-100). Clamp so it never goes
-          // backward (prevents oscillation while the LLM works through a batch).
-          const pct = Math.max(prog.pct || 0, _lastRegenPct);
-          if (pct > _lastRegenPct) {
-            // Real progress — show determinate bar
-            progressFill.classList.remove('indeterminate');
-          } else if (!prog.done) {
-            // Stalled mid-generation (LLM working) — pulse to show activity
-            progressFill.classList.add('indeterminate');
+      // Refresh card data incrementally as prompts are generated (fire-and-forget)
+      const updatedCards = prog.updated_cards || [];
+      if (updatedCards.length > lastUpdatedCount) {
+        lastUpdatedCount = updatedCards.length;
+        fetch('/api/cards').then(r => r.json()).then(cs => {
+          allCards = cs;
+          renderGrid();
+          if (selectedCard) {
+            const card = allCards.find(c => c.name === selectedCard);
+            if (card) updateDetailPanel(card);
           }
-          progressFill.style.width = pct + '%';
-          _lastRegenPct = pct;
-          _lastRegenPhase = prog.phase;
-
-          // Refresh card data incrementally as prompts are generated
-          const updatedCards = prog.updated_cards || [];
-          if (updatedCards.length > lastUpdatedCount) {
-            lastUpdatedCount = updatedCards.length;
-            try {
-              const cardsResp = await fetch('/api/cards');
-              allCards = await cardsResp.json();
-              renderGrid();
-              if (selectedCard) {
-                const card = allCards.find(c => c.name === selectedCard);
-                if (card) updateDetailPanel(card);
-              }
-            } catch(_) {}
-          }
-
-          if (prog.done) {
-            clearInterval(interval);
-            if (prog.error) reject(new Error(prog.error));
-            else resolve(prog);
-          }
-        } catch (e) {
-          // Server busy (LLM blocking) — show indeterminate pulse at current width
-          if (_lastRegenPct >= 50 || _lastRegenPhase === 'local') {
-            batchMessage.textContent = 'Distilling local prompts (LLM working)...';
-            progressFill.classList.add('indeterminate');
-          }
-        }
-      }, 500);
-    });
+        }).catch(() => {});
+      }
+    }, 500);
+    if (result.error) throw new Error(result.error);
 
     // Success
     progressFill.classList.remove('indeterminate');
@@ -12529,7 +12659,7 @@ async function openModelHub() {
       // Capabilities
       const caps = [];
       const size = m.size || '';
-      const memMatch = m.label?.match(/(\\d+GB)/);
+      const memMatch = m.label?.match(/(\d+GB)/);
       const mem = memMatch ? memMatch[1] + ' VRAM' : '';
 
       return `<div class="model-card ${isActive ? 'active' : ''} ${isDisabled ? 'disabled' : ''}" data-model-key="${escapeHtml(m.key)}">

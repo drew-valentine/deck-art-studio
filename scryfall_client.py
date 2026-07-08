@@ -10,6 +10,7 @@ Handles:
 """
 
 import json
+import os
 import re
 import time
 import urllib.parse
@@ -22,6 +23,51 @@ SCRYFALL_DELAY = 0.12  # seconds between requests
 
 # Cache directory for raw Scryfall responses
 CACHE_DIR = Path(__file__).parent / "shared" / "scryfall_cache"
+
+
+def _cache_slug(name: str) -> str:
+    """Build the on-disk cache slug for a card name.
+
+    Includes the split/double-faced replacements (' // ' -> '__', '/' -> '_')
+    so split cards resolve to the same slug used when the cache is written.
+    """
+    return (name.lower().replace(' // ', '__').replace('/', '_').replace(' ', '_')
+            .replace(',', '').replace("'", "").replace('-', '_'))
+
+
+def _read_cache(cache_path: Path) -> Optional[dict]:
+    """Read a cached Scryfall response, tolerating corrupt/truncated files.
+
+    Returns the parsed dict, or None if the cache is missing or unreadable.
+    A corrupt file is deleted so the caller can re-fetch from the network.
+    """
+    try:
+        with open(cache_path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError, ValueError):
+        try:
+            cache_path.unlink()
+        except OSError:
+            pass
+        return None
+
+
+def _write_cache(cache_path: Path, data: dict) -> None:
+    """Atomically write a Scryfall response to the cache.
+
+    Writes to a temp file then os.replace()s it so a crash mid-write can't
+    leave a truncated cache file behind.
+    """
+    tmp_path = cache_path.with_name(cache_path.name + ".tmp")
+    try:
+        with open(tmp_path, 'w') as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, cache_path)
+    except OSError:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
 
 
 def _scryfall_get(url: str) -> dict:
@@ -40,13 +86,14 @@ def fetch_card_by_name(name: str, use_cache: bool = True) -> Optional[dict]:
     Returns the full Scryfall card object, or None on failure.
     """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    slug = (name.lower().replace(' // ', '__').replace('/', '_').replace(' ', '_')
-            .replace(',', '').replace("'", "").replace('-', '_'))
+    slug = _cache_slug(name)
     cache_path = CACHE_DIR / f"{slug}.json"
 
     if use_cache and cache_path.exists():
-        with open(cache_path) as f:
-            return json.load(f)
+        cached = _read_cache(cache_path)
+        if cached is not None:
+            return cached
+        # Corrupt cache file was removed — fall through to network fetch.
 
     encoded = urllib.parse.quote(name)
     url = f"https://api.scryfall.com/cards/named?exact={encoded}"
@@ -54,16 +101,16 @@ def fetch_card_by_name(name: str, use_cache: bool = True) -> Optional[dict]:
     try:
         data = _scryfall_get(url)
         # Cache the response
-        with open(cache_path, 'w') as f:
-            json.dump(data, f, indent=2)
+        _write_cache(cache_path, data)
         return data
     except Exception as e:
         # Try fuzzy search as fallback
         try:
+            # Rate limit between the two back-to-back network calls
+            time.sleep(SCRYFALL_DELAY)
             url_fuzzy = f"https://api.scryfall.com/cards/named?fuzzy={encoded}"
             data = _scryfall_get(url_fuzzy)
-            with open(cache_path, 'w') as f:
-                json.dump(data, f, indent=2)
+            _write_cache(cache_path, data)
             return data
         except Exception:
             print(f"  [scryfall] Failed to fetch '{name}': {e}")
@@ -81,8 +128,10 @@ def fetch_card_by_set(set_code: str, collector_number: str, use_cache: bool = Tr
     cache_path = CACHE_DIR / f"{slug}.json"
 
     if use_cache and cache_path.exists():
-        with open(cache_path) as f:
-            return json.load(f)
+        cached = _read_cache(cache_path)
+        if cached is not None:
+            return cached
+        # Corrupt cache file was removed — fall through to network fetch.
 
     encoded_set = urllib.parse.quote(set_code.lower())
     encoded_num = urllib.parse.quote(collector_number)
@@ -90,8 +139,7 @@ def fetch_card_by_set(set_code: str, collector_number: str, use_cache: bool = Tr
 
     try:
         data = _scryfall_get(url)
-        with open(cache_path, 'w') as f:
-            json.dump(data, f, indent=2)
+        _write_cache(cache_path, data)
         return data
     except Exception as e:
         print(f"  [scryfall] Set lookup failed for ({set_code}) {collector_number}: {e}")
@@ -379,10 +427,19 @@ def populate_cards(parsed_entries: list[dict], progress_callback=None) -> tuple[
         if progress_callback:
             progress_callback(i + 1, total, name)
 
+        # Determine whether this card is already cached BEFORE fetching, since
+        # fetch_card writes the cache during a successful network fetch (so a
+        # post-fetch existence check would always be True and never rate-limit).
+        set_code = entry.get('set_code')
+        cnum = entry.get('collector_number')
+        was_cached = (CACHE_DIR / f"{_cache_slug(name)}.json").exists()
+        if not was_cached and set_code and cnum:
+            was_cached = (CACHE_DIR / f"{set_code.lower()}_{cnum}.json").exists()
+
         sf = fetch_card(
             name,
-            set_code=entry.get('set_code'),
-            collector_number=entry.get('collector_number'),
+            set_code=set_code,
+            collector_number=cnum,
         )
         if sf:
             card = scryfall_to_card_entry(
@@ -394,14 +451,8 @@ def populate_cards(parsed_entries: list[dict], progress_callback=None) -> tuple[
         else:
             errors.append(f"Card not found: {name}")
 
-        # Rate limit (skip delay for cached results)
-        name_slug = name.lower().replace(' ', '_').replace(',', '').replace("'", "").replace('-', '_')
-        set_code = entry.get('set_code')
-        cnum = entry.get('collector_number')
-        cached = (CACHE_DIR / f"{name_slug}.json").exists()
-        if not cached and set_code and cnum:
-            cached = (CACHE_DIR / f"{set_code.lower()}_{cnum}.json").exists()
-        if not cached:
+        # Rate limit fresh network fetches (skip delay for cached results)
+        if not was_cached:
             time.sleep(SCRYFALL_DELAY)
 
     return cards, errors

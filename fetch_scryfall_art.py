@@ -29,7 +29,7 @@ def name_to_slug(name: str) -> str:
 def _api_get(url: str) -> dict:
     """GET with proper headers."""
     req = urllib.request.Request(url, headers=HEADERS)
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=15) as resp:
         return json.loads(resp.read())
 
 
@@ -69,7 +69,7 @@ def fetch_card_art(card_name: str, force: bool = False) -> Path | None:
         req = urllib.request.Request(art_url, headers={
             "User-Agent": "MTGProxyDeckGen/1.0"
         })
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             img_data = resp.read()
 
         with open(out_path, 'wb') as f:

@@ -9,6 +9,7 @@ Output: 750×1050 PNG at 300 DPI (standard proxy print size).
 
 import copy
 import base64
+import functools
 import io
 import json
 import re
@@ -23,6 +24,16 @@ try:
     import xml.etree.ElementTree as ET
 except ImportError as e:
     raise ImportError(f"Required package missing: {e}. Install with: pip install cairosvg pillow")
+
+
+def _esc(s):
+    """Escape a value for safe interpolation into an SVG text/attribute sink.
+
+    User-editable text_overrides (power/toughness/loyalty/defense) and unknown
+    mana tokens can contain '<', '&', '>' or '"'; an unescaped '<' makes
+    cairosvg raise and blanks the whole card."""
+    return (str(s).replace('&', '&amp;').replace('<', '&lt;')
+            .replace('>', '&gt;').replace('"', '&quot;'))
 
 # ---------------------------------------------------------------------------
 # Load pre-rendered pip images (base64-encoded PNGs)
@@ -188,7 +199,7 @@ def _pip_image_tag(symbol: str, x: float, y: float, size: float) -> str:
             f'fill="#888" stroke="#222" stroke-width="2"/>'
             f'<text x="{x + size/2}" y="{y + size/2 + size*0.15}" text-anchor="middle" '
             f'font-family="serif" font-size="{size*0.55}" '
-            f'font-weight="bold" fill="#000">{symbol}</text>'
+            f'font-weight="bold" fill="#000">{_esc(symbol)}</text>'
         )
     return (
         f'<image x="{x}" y="{y}" width="{size}" height="{size}" '
@@ -518,7 +529,7 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None,
     # not basic (which would add a frosted textbox + oracle over the art).
     _style_remap = {'modern': 'm15', 'retro': 'm15', 'nyx': 'm15', 'vintage': 'm15',
                     'classic': 'basic', 'full-art': 'clean',
-                    'borderless': 'basic', 'minimal': 'basic'}
+                    'borderless': 'basic', 'minimal': 'basic', 'abu': 'm15'}
     _card_style = card_overrides.get('style')
     style_key = _card_style or deck_settings.get('style', 'basic')
     style_key = _style_remap.get(style_key, style_key)
@@ -540,7 +551,17 @@ def resolve_frame_settings(card_dict: dict, deck_settings: dict = None,
     # layers dict, but legacy decks (e.g. v1 'modern' remapped to m15) may have
     # saved layer overrides — indexing blind raised KeyError and made the whole
     # deck unrenderable.
-    deck_layers = deck_settings.get('layers', {})
+    # Skip the deck-layer merge when the card overrode to a DIFFERENT style than
+    # the deck's: those deck layers were tuned for the deck's style (e.g. hiding
+    # a textbox for 'clean'), and bleeding them onto a card that chose another
+    # style desyncs the designer (which shows that style clean) from the
+    # composite. Only skip when the card's own style resolves differently.
+    _deck_style_raw = deck_settings.get('style', 'basic')
+    _deck_style = _style_remap.get(_deck_style_raw, _deck_style_raw)
+    _card_style_resolved = (_style_remap.get(_card_style, _card_style)
+                            if _card_style else _deck_style)
+    deck_layers = (deck_settings.get('layers', {})
+                   if _card_style_resolved == _deck_style else {})
     for key in FRAME_LAYER_ORDER:
         if key in deck_layers:
             layers.setdefault(key, {}).update(deck_layers[key])
@@ -1577,7 +1598,10 @@ def _max_fitting_rules_font(measure, box_h: float, desired: int,
     `measure(font)` returns the needed height at that font size (including
     any flavor reserve / P/T avoid-region wrapping the caller bakes in).
     """
-    f = max(int(desired), floor)
+    # Clamp the ceiling: `desired` comes from an unclamped user rules_font_size,
+    # and a huge value would spin this decrement loop through millions of
+    # measure() calls, hanging the render. Real cards never exceed ~200px.
+    f = min(max(int(desired), floor), 200)
     while f > floor and measure(f) > box_h:
         f -= 1
     return f
@@ -2751,7 +2775,7 @@ def create_card_frame_svg(card: CardData, frame_settings: dict = None) -> str:
             svg.append(
                 f'<text x="{pt_cx}" y="{pt_cy}" text-anchor="middle" '
                 f'font-family="{PT_FONT_FAMILY}" font-size="{PT_FONT}" font-weight="bold" '
-                f'fill="{text_color}">{card.power}/{card.toughness}</text>'
+                f'fill="{text_color}">{_esc(card.power)}/{_esc(card.toughness)}</text>'
             )
 
     # ── Starting Loyalty counter — authentic cardconjurer shield sprite,
@@ -3004,8 +3028,15 @@ def _determine_color_key(card_dict: dict) -> str:
     return color_map.get(colors[0], 'c')
 
 
+@functools.lru_cache(maxsize=64)
 def _load_frame_image(frame_set: str, component: str) -> Optional[Image.Image]:
-    """Load a pre-rendered frame PNG from shared/frames/{frame_set}/{component}.png"""
+    """Load a pre-rendered frame PNG from shared/frames/{frame_set}/{component}.png
+
+    Cached: these multi-MB PNGs were re-decoded on every composite. All callers
+    treat the result as read-only — they .copy(), .resize(), .crop(),
+    Image.composite(), or np.asarray(..., dtype=float) it before mutating — so
+    sharing one decoded RGBA instance is safe. `.convert('RGBA')` returns a fully
+    loaded image detached from the file handle."""
     path = FRAMES_DIR / frame_set / f'{component}.png'
     if path.exists():
         return Image.open(path).convert('RGBA')
@@ -3324,7 +3355,7 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
             svg.append(
                 f'<text x="{pt_cx}" y="{pt_cy}" text-anchor="middle" '
                 f'font-family="{PT_FONT_FAMILY}" font-size="{pt_font}" font-weight="bold" '
-                f'fill="{text_color}">{card.power}/{card.toughness}</text>'
+                f'fill="{text_color}">{_esc(card.power)}/{_esc(card.toughness)}</text>'
             )
         elif 'pt_center_x' in layout:
             pt_cx = layout['pt_center_x']
@@ -3332,7 +3363,7 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
             svg.append(
                 f'<text x="{pt_cx}" y="{pt_cy}" text-anchor="middle" '
                 f'font-family="{PT_FONT_FAMILY}" font-size="{pt_font}" font-weight="bold" '
-                f'fill="{text_color}">{card.power}/{card.toughness}</text>'
+                f'fill="{text_color}">{_esc(card.power)}/{_esc(card.toughness)}</text>'
             )
         else:
             pt_x = VB_W - art_m - pt_w - 6
@@ -3342,7 +3373,7 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
             svg.append(
                 f'<text x="{pt_cx}" y="{pt_cy}" text-anchor="middle" '
                 f'font-family="{PT_FONT_FAMILY}" font-size="{pt_font}" font-weight="bold" '
-                f'fill="{text_color}">{card.power}/{card.toughness}</text>'
+                f'fill="{text_color}">{_esc(card.power)}/{_esc(card.toughness)}</text>'
             )
 
     # ── Loyalty counter ──
@@ -3371,7 +3402,7 @@ def _create_text_only_svg(card: CardData, fs: dict) -> str:
             svg.append(
                 f'<text x="{text_x}" y="{text_y}" text-anchor="middle" '
                 f'font-family="{PT_FONT_FAMILY}" font-size="{loy_font}" font-weight="bold" '
-                f'fill="white">{card.loyalty}</text>'
+                f'fill="white">{_esc(card.loyalty)}</text>'
             )
 
     svg.append('</svg>')
@@ -3521,7 +3552,7 @@ def _create_iko_text_svg(card: CardData, fs: dict) -> str:
     if card.power is not None and card.toughness is not None:
         svg.append(f'<text x="659" y="1002" text-anchor="middle" '
                    f'font-family="{PT_FONT_FAMILY}" font-size="34" font-weight="bold" '
-                   f'fill="{pt_col}">{card.power}/{card.toughness}</text>')
+                   f'fill="{pt_col}">{_esc(card.power)}/{_esc(card.toughness)}</text>')
 
     svg.append('</svg>')
     return '\n'.join(svg)
@@ -3665,7 +3696,7 @@ def _start_loyalty_badge_svg(loyalty: str, cx: float, cy: float,
             text_y = cy + loy_font * 0.35
     parts.append(f'<text x="{cx}" y="{text_y}" text-anchor="middle" '
                  f'font-family="{PT_FONT_FAMILY}" font-size="{loy_font:.0f}" '
-                 f'font-weight="bold" fill="white">{loyalty}</text>')
+                 f'font-weight="bold" fill="white">{_esc(loyalty)}</text>')
     return parts
 
 
@@ -3764,7 +3795,7 @@ def _create_bar_box_text_svg(card: CardData, fs: dict, L: dict,
     if card.power is not None and card.toughness is not None:
         svg.append(f'<text x="{L["pt_cx"]}" y="{L["pt_cy"] + pt_font * 0.35}" text-anchor="middle" '
                    f'font-family="{PT_FONT_FAMILY}" font-size="{pt_font}" font-weight="bold" '
-                   f'fill="{pt_col}">{card.power}/{card.toughness}</text>')
+                   f'fill="{pt_col}">{_esc(card.power)}/{_esc(card.toughness)}</text>')
 
     svg.append('</svg>')
     return '\n'.join(svg)
@@ -3914,12 +3945,12 @@ def _create_pw_frame_text_svg(card: CardData, fs: dict) -> str:
     if card.loyalty:
         svg.append(f'<text x="{L["loy_cx"]}" y="{L["loy_cy"] + 13}" text-anchor="middle" '
                    f'font-family="{PT_FONT_FAMILY}" font-size="38" font-weight="bold" '
-                   f'fill="white">{card.loyalty}</text>')
+                   f'fill="white">{_esc(card.loyalty)}</text>')
     elif card.power is not None and card.toughness is not None:
         # non-planeswalker creature in this frame: P/T on the baked shield
         svg.append(f'<text x="{L["loy_cx"]}" y="{L["loy_cy"] + 11}" text-anchor="middle" '
                    f'font-family="{PT_FONT_FAMILY}" font-size="30" font-weight="bold" '
-                   f'fill="white">{card.power}/{card.toughness}</text>')
+                   f'fill="white">{_esc(card.power)}/{_esc(card.toughness)}</text>')
 
     svg.append('</svg>')
     return '\n'.join(svg)
@@ -4150,7 +4181,7 @@ def _create_lotr_text_svg(card: CardData, fs: dict) -> str:
     if card.power is not None and card.toughness is not None:
         svg.append(f'<text x="{L["pt_cx"]}" y="{L["pt_cy"] + 36 * 0.35}" text-anchor="middle" '
                    f'font-family="{PT_FONT_FAMILY}" font-size="36" font-weight="bold" '
-                   f'fill="{white}">{card.power}/{card.toughness}</text>')
+                   f'fill="{white}">{_esc(card.power)}/{_esc(card.toughness)}</text>')
 
     svg.append('</svg>')
     return '\n'.join(svg)
@@ -4270,7 +4301,7 @@ def _create_crystal_text_svg(card: CardData, fs: dict) -> str:
     if card.power is not None and card.toughness is not None:
         svg.append(f'<text x="{L["pt_cx"]}" y="{L["pt_cy"] + 36 * 0.35}" text-anchor="middle" '
                    f'font-family="{PT_FONT_FAMILY}" font-size="36" font-weight="bold" '
-                   f'fill="{white}">{card.power}/{card.toughness}</text>')
+                   f'fill="{white}">{_esc(card.power)}/{_esc(card.toughness)}</text>')
 
     svg.append('</svg>')
     return '\n'.join(svg)
@@ -4363,7 +4394,7 @@ def _create_abu_text_svg(card: CardData, fs: dict) -> str:
     if card.power is not None and card.toughness is not None:
         svg.append(f'<text x="{L["x_right"] - 2}" y="{L["pt_y"]}" text-anchor="end" '
                    f'font-family="{PT_FONT_FAMILY}" font-size="34" font-weight="bold" '
-                   f'fill="{ink}">{card.power}/{card.toughness}</text>')
+                   f'fill="{ink}">{_esc(card.power)}/{_esc(card.toughness)}</text>')
 
     svg.append('</svg>')
     return '\n'.join(svg)
@@ -4401,7 +4432,9 @@ def _iko_accent_mask():
         m_sat = np.clip((sat - 20) / (60 - 20), 0, 1)
         mask = m_cos * m_sat * (alpha / 255.0)
         shade = np.clip(norms / np.linalg.norm(accent), 0, 1.6)
-        _IKO_ACCENT_MASK = (mask, shade)
+        # Retain as float32 — these full-card arrays live for the process
+        # lifetime; float64 doubled their footprint for no added precision.
+        _IKO_ACCENT_MASK = (mask.astype(np.float32), shade.astype(np.float32))
     return _IKO_ACCENT_MASK
 
 
@@ -5510,7 +5543,7 @@ def _battle_defense_shield_svg(defense: str, cx: float, cy: float,
         f'<path d="{path}" fill="#1a1410" stroke="#cfd2d6" stroke-width="4"/>',
         f'<text x="{cx}" y="{cy + h * 0.02 + font * 0.35}" text-anchor="middle" '
         f'font-family="{PT_FONT_FAMILY}" font-size="{font:.0f}" font-weight="bold" '
-        f'fill="white">{defense}</text>',
+        f'fill="white">{_esc(defense)}</text>',
     ]
 
 
@@ -5594,7 +5627,10 @@ def _create_battle_frame_svg(card: CardData, fs: dict) -> str:
     the fallback when a style has no sliceable assets): full-bleed art with a
     title bar on top and a full-width type bar + rules band at the bottom."""
     W, H = BATTLE_W, BATTLE_H
-    theme = get_color_theme(card)
+    theme = dict(get_color_theme(card))
+    for key in ('bg', 'field', 'textbox', 'border', 'text'):
+        if key in fs.get('color_overrides', {}):
+            theme[key] = fs['color_overrides'][key]
     _hovr, _rovr = _text_color_overrides(fs)
     bar_text = _hovr or '#f4f2ec'
     rules_col = _rovr or '#141210'
@@ -5845,10 +5881,13 @@ def composite_card(card_dict: dict, art_path, frame_path_or_none, output_path,
 
     # Load art, cover-crop to card dimensions (with user offset/zoom)
     art = Image.open(art_path).convert('RGB')
+    card = _build_card_data(card_dict, fs)
 
-    # Battles (sieges): landscape frame rotated into the portrait composite
-    if 'battle' in (card_dict.get('type_line') or '').lower():
-        card = _build_card_data(card_dict, fs)
+    # Battles (sieges): landscape frame rotated into the portrait composite.
+    # Branch on _is_battle(card) (built from resolved text_overrides), not the
+    # raw card_dict type_line, so a type_line override can't desync the
+    # designer preview from the final composite — mirrors _is_saga(card) below.
+    if _is_battle(card):
         _render_battle_composite(card_dict, card, fs, art).save(output_path, 'PNG')
         return
 
@@ -5866,8 +5905,6 @@ def composite_card(card_dict: dict, art_path, frame_path_or_none, output_path,
     if card_dict.get('type_line') == 'Card Back' or (card_dict.get('name') or '').lower().startswith('card back'):
         art_resized.save(output_path, 'PNG')
         return
-
-    card = _build_card_data(card_dict, fs)
 
     # Frameless preset: just save art, no frame overlay
     if fs.get('no_frame'):
@@ -5899,10 +5936,12 @@ def composite_card_preview(card_dict: dict, art_path, frame_settings: dict) -> b
     Used by the live preview endpoint. frame_settings is already fully resolved.
     """
     art = Image.open(art_path).convert('RGB')
+    card = _build_card_data(card_dict, frame_settings)
 
-    # Battles preview exactly like the final composite: landscape → rotated
-    if 'battle' in (card_dict.get('type_line') or '').lower():
-        card = _build_card_data(card_dict, frame_settings)
+    # Battles preview exactly like the final composite: landscape → rotated.
+    # Branch on _is_battle(card) so a type_line override resolves the same way
+    # here as in composite_card (mirrors _is_saga(card) below).
+    if _is_battle(card):
         buf = io.BytesIO()
         _render_battle_composite(card_dict, card, frame_settings, art).save(buf, 'PNG')
         return buf.getvalue()
@@ -5921,8 +5960,6 @@ def composite_card_preview(card_dict: dict, art_path, frame_settings: dict) -> b
         buf = io.BytesIO()
         art_resized.save(buf, 'PNG')
         return buf.getvalue()
-
-    card = _build_card_data(card_dict, frame_settings)
 
     art_rgba = Image.new('RGBA', (CARD_WIDTH, CARD_HEIGHT))
     art_rgba.paste(art_resized, (0, 0))

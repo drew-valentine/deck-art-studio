@@ -53,11 +53,18 @@ class InactivityWatchdog:
         self.kick()
 
     def _fire(self):
-        self.fired = True
-        try:
-            self._proc.kill()
-        except Exception:
-            pass
+        # Take the same lock kick()/stop() use and re-check _done: a timer can
+        # fire in the tiny window between the request succeeding and stop()
+        # cancelling us. Without this guard we'd kill a HEALTHY worker after its
+        # request already returned. Under the lock, if _done is set we bail.
+        with self._lock:
+            if self._done:
+                return
+            self.fired = True
+            try:
+                self._proc.kill()
+            except Exception:
+                pass
 
     def kick(self):
         with self._lock:
