@@ -82,8 +82,11 @@
 
 ## In Progress
 
-- [ ] Separate rules text color from heading text color | Priority: P2 | Started: 2026-07-07 | Owner: drew-valentine
+## In Review
+
+- [ ] Separate rules text color from heading text color | Priority: P2 | Review Started: 2026-07-07 | Owner: drew-valentine
   - Branch: `feat/separate-rules-text-color`
+  - PR: [#17](https://github.com/drew-valentine/deck-art-studio/pull/17) — commit `9ffdd2d`, pushed, awaiting approval
   - User story: The single Colors > Text override currently drives ALL card text. Users want the headings (title / type line / P/T) and the rules-body text colored independently — e.g. white headings with black rules text — instead of every text element sharing one color.
   - Implementation:
     - New `rules_text` color override added alongside the existing `text` override.
@@ -93,13 +96,14 @@
     - New "Rules" color row added to the Frame Designer, wired through gather / populate / visibility / live-preview.
     - Every style's `controls.colors` gained `rules_text`.
   - Acceptance criteria (Given/When/Then):
-    - [ ] Given a card with a `text` override but no `rules_text` override (existing saved decks), when the composite is rendered, then all text (headings + rules body) renders in the `text` color — unchanged from before.
-    - [ ] Given a card with distinct `text` and `rules_text` overrides (e.g. white text / black rules_text), when the composite is rendered, then the title / type / P/T render in `text` and the rules body renders in `rules_text`.
-    - [ ] Given the rules body renders as flavor text, split columns, planeswalker abilities, saga chapters, or battle rules, when `rules_text` is set, then each of those rules surfaces honors `rules_text` (falling back to `text` when unset).
-    - [ ] Given the Frame Designer, when the user edits the new Rules color row, then gather / populate / visibility / live-preview all reflect the `rules_text` override for every style whose `controls.colors` includes it.
+    - [x] Given a card with a `text` override but no `rules_text` override (existing saved decks), when the composite is rendered, then all text (headings + rules body) renders in the `text` color — unchanged from before.
+    - [x] Given a card with distinct `text` and `rules_text` overrides (e.g. white text / black rules_text), when the composite is rendered, then the title / type / P/T render in `text` and the rules body renders in `rules_text`.
+    - [x] Given the rules body renders as flavor text, split columns, planeswalker abilities, saga chapters, or battle rules, when `rules_text` is set, then each of those rules surfaces honors `rules_text` (falling back to `text` when unset).
+    - [x] Given the Frame Designer, when the user edits the new Rules color row, then gather / populate / visibility / live-preview all reflect the `rules_text` override for every style whose `controls.colors` includes it.
   - Validation gate: Playwright browser verification (headings vs rules colored independently across the affected layouts) + full pytest suite.
-
-## In Review
+  - Validation PASSED 2026-07-07:
+    - 251 unit tests green, 4 new: helper fallback chain, IKO heading/rules divergence, text-only back-compat, SVG-style rules color.
+    - Playwright browser verification on Kykar (Auto off, Text white, Rules dark) — live canvas shows white title / type / P/T with dark rules body.
 
 ## Done
 
