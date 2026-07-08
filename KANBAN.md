@@ -84,6 +84,20 @@
 
 ## In Review
 
+- [ ] BUG: Version prompt off-by-one — versions carried the NEXT generation's prompt | Priority: P2 | Started: 2026-07-07 | Owner: drew-valentine
+  - Branch: `fix/version-prompt-off-by-one`
+  - PR: https://github.com/drew-valentine/deck-art-studio/pull/18 (awaiting approval)
+  - Follow-up to the v1.41.0 prompt-versioning feature (PR #15) — the snapshotted prompt was off by one generation.
+  - User repro: generate → save → repeat; restoring version n-1 showed the CURRENT generation's prompt instead of the prompt that produced that older art.
+  - Root cause: prompts were snapshotted at archive time, but archiving is lazy (it runs right before the NEXT generation), by which point the prompt had already been edited for the new art — so the version captured the new prompt, not the one that made the archived art.
+  - Fix: the editable prompt is now stamped into the art's `.meta.json` at generation time (`card_prompt`), and the archiver reads the prompt from there. Archive-time capture stays as a fallback for pre-stamp art (art generated before this fix has no stamped `card_prompt`).
+  - Acceptance criteria (Given/When/Then):
+    - [x] Given a card is generated with prompt A, when the art is saved, then prompt A is stamped into that art's `.meta.json` (`card_prompt`) at generation time.
+    - [x] Given the prompt is edited to B and the card is regenerated, when the older art is archived, then the archiver reads the stamped `card_prompt` (A) from `.meta.json` rather than the current live prompt (B).
+    - [x] Given pre-stamp art with no `card_prompt` in `.meta.json`, when it is archived, then the archive-time capture is used as a fallback (no regression for existing versions).
+    - [x] Given the user restores the older art version, when restore completes, then the panel and `art_prompts.json` return to prompt A.
+  - Validation status: **PASSED (2026-07-07)** — 254 unit tests pass (3 new), plus a real two-generation FLUX repro on Okaun: the archived version carried prompt A while the live prompt was B, and the browser restore returned everything to A.
+
 ## Done
 
 - [x] Separate rules text color from heading text color | Priority: P2 | Completed: 2026-07-07 | Owner: drew-valentine
