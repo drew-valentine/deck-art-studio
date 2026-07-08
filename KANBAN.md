@@ -101,6 +101,16 @@
     - [x] Given the version history UI, when a user views an art version, then the prompt associated with that version is visible.
   - Implementation note: the duplicate archive functions were consolidated — `archive_current_art` now delegates to `_archive_art`.
   - Validation status: **PASSED** 2026-07-07 — 247 unit tests (6 new: prompt snapshot, restore round-trip, flip-forward archiving, pre-feature manifest compatibility, back-face keys, empty-prompt archive), plus the full browser flow via Playwright on Okaun in heads-i-win (archived version with prompt A, changed to B, restored via version modal — modal showed archived prompt, panel and `art_prompts.json` returned to A, B auto-archived as newest version).
+- [ ] BUG: Showcase style — rules box missing the black outer keyline the bars have | Priority: P2 | Started: 2026-07-07 | Owner: drew-valentine
+  - Branch: `fix/showcase-box-outer-keyline` (PR to follow immediately)
+  - Symptom (user-reported with screenshot): the thin black border at the very outer edge of the gold trim is present around the title/type bars but stops where the rules box starts — inconsistent edging along the gold trim.
+  - Root cause: the iko frame's bars are baked assets that include a black outer keyline outside their gold trim, but the DRAWN rules box strokes its outlines inward from the rect (PIL stroke behavior), leaving gold at the outermost edge with no black ring — so the bars and the box don't match.
+  - Fix: draw a 3px black keyline ring on an expanded rect around the rules box (and the P/T plate), in both the base paint path and the two-color-gradient paint path.
+  - Acceptance criteria (Given/When/Then):
+    - [ ] Given a Showcase card, when the composite is rendered, then the black outer keyline runs continuously along the gold trim across the title bar, type bar, and rules box (no break where the box begins).
+    - [ ] Given a two-color-gradient Showcase card, when the composite is rendered, then the rules box and P/T plate carry the same 3px black outer keyline ring (gradient paint path covered).
+    - [ ] Given a P/T plate is present, when rendered, then it also carries the black outer keyline ring.
+  - Validation status: **PENDING REVIEW (2026-07-07)** — 241 tests pass; Kykar (the user's reported card) recomposited and the bar→box transition verified continuous at zoom.
 
 ## Done
 
