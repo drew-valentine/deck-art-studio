@@ -84,9 +84,13 @@
 
 ## In Review
 
-- [ ] Separate rules text color from heading text color | Priority: P2 | Review Started: 2026-07-07 | Owner: drew-valentine
-  - Branch: `feat/separate-rules-text-color`
-  - PR: [#17](https://github.com/drew-valentine/deck-art-studio/pull/17) — commit `9ffdd2d`, pushed, awaiting approval
+## Done
+
+- [x] Separate rules text color from heading text color | Priority: P2 | Completed: 2026-07-07 | Owner: drew-valentine
+  - Branch: `feat/separate-rules-text-color` merged via PR #17 (squash-merged to main as commit 3c12938)
+  - PR: https://github.com/drew-valentine/deck-art-studio/pull/17
+  - Tagged: v1.42.0 (released 2026-07-07) — https://github.com/drew-valentine/deck-art-studio/releases/tag/v1.42.0
+  - Minor bump (new feature): headings and rules-body text can now be colored independently.
   - User story: The single Colors > Text override currently drives ALL card text. Users want the headings (title / type line / P/T) and the rules-body text colored independently — e.g. white headings with black rules text — instead of every text element sharing one color.
   - Implementation:
     - New `rules_text` color override added alongside the existing `text` override.
@@ -104,8 +108,6 @@
   - Validation PASSED 2026-07-07:
     - 251 unit tests green, 4 new: helper fallback chain, IKO heading/rules divergence, text-only back-compat, SVG-style rules color.
     - Playwright browser verification on Kykar (Auto off, Text white, Rules dark) — live canvas shows white title / type / P/T with dark rules body.
-
-## Done
 
 - [x] Version the art prompt with each art version; restore it on revert | Priority: P2 | Completed: 2026-07-07 | Owner: drew-valentine
   - Branch: `feat/version-prompts` merged via PR #15 (squash-merged to main as commit 0373bc4)
