@@ -1725,11 +1725,14 @@ def _archive_art(card_name, raw_art_dir=None, composite_dir=None, versions_dir=N
         'prompt_sent': meta.get('prompt_sent', ''),
         'feedback': meta.get('feedback'),
         'used_scryfall_ref': meta.get('used_scryfall_ref', False),
-        # The EDITABLE card prompt at archive time (art_prompts.json), so a
-        # revert can restore the prompt this art was iterated from — not just
-        # the derived FLUX string in prompt_sent. Face keys ("<name> [back]")
-        # snapshot their own prompt entry.
-        'card_prompt': prompts_map.get(card_name, ''),
+        # The EDITABLE card prompt that PRODUCED this art, stamped into the
+        # art's meta at generation time. Archive-time prompts_map is only the
+        # fallback (art generated before the stamp existed): archiving is
+        # lazy — it runs right before the NEXT generation — so by then the
+        # prompt has usually already been edited for the next art, which
+        # mislabeled versions by one. Face keys ("<name> [back]") carry their
+        # own prompt entry either way.
+        'card_prompt': meta.get('card_prompt') or prompts_map.get(card_name, ''),
     }
 
     manifest_path = vdir / "manifest.json"
@@ -1926,6 +1929,11 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                 'backend': backend,
                 'cost_estimate': model_cfg['cost_per_image'],
                 'prompt_sent': full_prompt,
+                # The EDITABLE prompt this art was generated from — versioning
+                # snapshots THIS, not prompts_map at archive time (archiving is
+                # lazy, so by then the user has often already edited/regenerated
+                # the prompt for the NEXT art: classic off-by-one).
+                'card_prompt': base_prompt,
                 'distilled_subject': active_deck_meta.get('card_subjects', {}).get(card_name, ''),
                 'feedback': feedback,
                 'timestamp': datetime.now().isoformat(),

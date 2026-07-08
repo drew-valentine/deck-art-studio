@@ -101,3 +101,46 @@ class TestRevertRestoresPrompt:
         ok, _ = ds.revert_to_version(key, 1)
         assert ok
         assert ds.prompts_map[key] == 'back face prompt v1'
+
+
+class TestGenerationTimePromptStamp:
+    def _seed_art_with_meta(self, raw_dir, name, card_prompt):
+        import json
+        slug = ds.name_to_slug(name)
+        Image.new('RGB', (8, 8), (200, 40, 40)).save(raw_dir / f'{slug}.png')
+        (raw_dir / f'{slug}.meta.json').write_text(json.dumps({
+            'card': name, 'prompt_sent': f'styled({card_prompt})',
+            'card_prompt': card_prompt,
+        }))
+
+    def test_archive_prefers_generation_time_prompt(self, version_dirs):
+        # The user's off-by-one repro: art was generated with prompt A, then
+        # the prompt was regenerated to B BEFORE the next generation archives
+        # the old art. The version must carry A (what produced the art), not
+        # B (what prompts_map holds at archive time).
+        self._seed_art_with_meta(version_dirs, 'Test Card', 'prompt A')
+        ds.prompts_map['Test Card'] = 'prompt B — already edited for next gen'
+        info = ds.archive_current_art('Test Card')
+        assert info['card_prompt'] == 'prompt A'
+
+    def test_full_iterate_and_restore_flow(self, version_dirs):
+        # gen A -> regen prompt to B -> gen B (archives A's art) ->
+        # restore n-1 must bring back prompt A, and the flip-forward version
+        # must carry B (from current art's meta), not any in-between edit
+        self._seed_art_with_meta(version_dirs, 'Test Card', 'prompt A')
+        ds.prompts_map['Test Card'] = 'prompt B'
+        ds.archive_current_art('Test Card')             # v1: A's art + prompt A
+        self._seed_art_with_meta(version_dirs, 'Test Card', 'prompt B')  # "gen B"
+        ok, msg = ds.revert_to_version('Test Card', 1)  # archives B, restores A
+        assert ok
+        assert ds.prompts_map['Test Card'] == 'prompt A'
+        versions = ds.list_versions('Test Card')
+        assert versions[-1]['card_prompt'] == 'prompt B'
+
+    def test_pre_stamp_art_falls_back_to_prompts_map(self, version_dirs):
+        # Art generated before the stamp existed (no card_prompt in meta)
+        # keeps the archive-time snapshot as a best effort
+        _seed_art(version_dirs, 'Test Card')  # no meta at all
+        ds.prompts_map['Test Card'] = 'current prompt'
+        info = ds.archive_current_art('Test Card')
+        assert info['card_prompt'] == 'current prompt'
