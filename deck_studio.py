@@ -47,6 +47,8 @@ from card_frame_renderer import (
     FRAME_LAYERS,
     FRAME_LAYER_ORDER,
 )
+import generation_queue
+from generation_queue import Job, ART, PROMPT, FLAVOR
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -139,7 +141,6 @@ prompts_map = {}
 # /api/cards — so new fields (e.g. is_split_halves) reach stale tabs
 # without a hard refresh.
 cards_revision = 0
-generation_queue = []
 generation_status = {}  # card_name -> {status, message, timestamp, attempt}
 generation_lock = threading.Lock()
 # Serializes every read-modify-write of deck.json / art_prompts.json across
@@ -148,12 +149,19 @@ generation_lock = threading.Lock()
 # silently drops the other's change (a new card vanishing on next restart), or
 # two simultaneous writes interleave into unparseable JSON that bricks the deck.
 persist_lock = threading.RLock()
-is_generating = False
-batch_phase = None       # None | 'starting' | 'waiting_ollama' | 'prefetching' | 'generating'
-batch_phase_detail = ''  # e.g. "Downloading reference art (12/50)..."
-batch_deck_id = None               # Which deck owns the running batch (None = no batch)
-_batch_generation_status = {}      # card_name -> status dict (batch worker writes here)
-_cancel_single = set()             # card names whose single-card generation should be discarded
+_cancel_single = set()             # (deck_id, card_name) pairs whose running art job should be discarded
+
+
+def _is_cancel_flagged(deck_id, card_name):
+    """True if this deck's card has a pending cooperative-cancel flag. Keyed by
+    (deck_id, card_name) so cancelling one deck's card can't discard a
+    same-named card's art on another deck (Sol Ring, Arcane Signet, …)."""
+    return (deck_id or active_deck_id, card_name) in _cancel_single
+
+# Global, cross-deck generation queue. A single worker drains it FIFO; each job
+# carries its own deck id and runs against that deck regardless of the UI's
+# active deck (started in __main__).
+gen_queue = generation_queue.GenerationQueue()
 style_analysis_progress = {}  # empty = not running; active: {phase, current, total, message}
 model_load_progress = {}      # empty = idle; active: {phase, message, pct, model_key, error}
 ollama_pull_progress = {}     # empty = idle; active: {model, status, completed_gb, total_gb, pct}
@@ -1652,23 +1660,29 @@ def _build_negative_fallback(style_tokens: dict, deck_meta: dict) -> str:
     return ', '.join(neg_parts)
 
 
-def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_override=None):
+def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_override=None,
+                    deck_meta=None):
     """Generate an image with the local FLUX model (mflux). Returns a PIL Image.
 
     Style always rides in the text prompt (the style source name + distilled
     clip_directives.style_tags + the distilled card subject) — FLUX's strong T5
     prompt adherence carries the aesthetic. Always txt2img: FLUX composes the
     scene from the prompt.
+
+    deck_meta: the deck's metadata to draw style from. Defaults to the active
+    deck's meta, but the queue worker passes the JOB's deck meta so a job runs
+    with its own deck's style regardless of which deck the UI shows.
     """
     _status = status_dict if status_dict is not None else generation_status
+    _meta = deck_meta if deck_meta is not None else active_deck_meta
     from local_image_generator import get_generator
 
     gen = get_generator()
     size_str = size_override or model_cfg['size']
     w, h = [int(x) for x in size_str.split('x')]
 
-    clip_directives = active_deck_meta.get('clip_directives', {})
-    style_tokens = active_deck_meta.get('style_tokens', {})
+    clip_directives = _meta.get('clip_directives', {})
+    style_tokens = _meta.get('style_tokens', {})
 
     # --- Subject: the single per-card prompt (art_prompts.json), used directly. ---
     # FLUX's 256-token budget means no distillation/truncation is needed — the card
@@ -1702,8 +1716,8 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     # model often mislabels the medium (e.g. tagging live-action film as "digital
     # painting"), which fights the named style. We keep the accurate descriptive
     # fields — palette, lighting/coloring, mood — for concrete detail.
-    style_source = (active_deck_meta.get('style_source') or '').strip()
-    flux_style_prompt = (active_deck_meta.get('flux_style_prompt') or '').strip()
+    style_source = (_meta.get('style_source') or '').strip()
+    flux_style_prompt = (_meta.get('flux_style_prompt') or '').strip()
     st = style_tokens or {}
 
     style_bits = []
@@ -1762,8 +1776,13 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     )
 
 
-def _archive_art(card_name, raw_art_dir=None, composite_dir=None, versions_dir=None):
-    """Archive current art using explicit paths (defaults to globals)."""
+def _archive_art(card_name, raw_art_dir=None, composite_dir=None, versions_dir=None,
+                 prompt=None):
+    """Archive current art using explicit paths (defaults to globals).
+
+    prompt: base prompt to record when the art's meta.json lacks a stamped
+    card_prompt. The queue worker passes the job's prompt so this doesn't read
+    the active deck's prompts_map (which may be a different deck)."""
     _raw = raw_art_dir or RAW_ART_DIR
     _comp = composite_dir or COMPOSITE_DIR
     _vers = versions_dir or VERSIONS_DIR
@@ -1814,7 +1833,7 @@ def _archive_art(card_name, raw_art_dir=None, composite_dir=None, versions_dir=N
         # prompt has usually already been edited for the next art, which
         # mislabeled versions by one. Face keys ("<name> [back]") carry their
         # own prompt entry either way.
-        'card_prompt': meta.get('card_prompt') or prompts_map.get(card_name, ''),
+        'card_prompt': meta.get('card_prompt') or prompt or prompts_map.get(card_name, ''),
     }
 
     manifest_path = vdir / "manifest.json"
@@ -1848,10 +1867,11 @@ def generate_card_all_faces(card_name, custom_prompt=None, feedback=None,
     else:
         faces = [face]
 
+    _deck_id = ctx.get('deck_id')
     ok, msg = True, "Success"
-    in_batch = ctx.get('status_dict') is not None
     for i, f in enumerate(faces):
-        if card_name in _cancel_single or (in_batch and not is_generating):
+        # Cooperative cancel: the queue's running_cancel_hook adds the card here.
+        if _is_cancel_flagged(_deck_id, card_name):
             return True, "Cancelled"
         f_prompt = custom_prompt if (face != 'all' or f == 'front') else None
         ok, msg = generate_art_for_card(card_name, custom_prompt=f_prompt,
@@ -1863,30 +1883,35 @@ def generate_card_all_faces(card_name, custom_prompt=None, feedback=None,
 
 def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                           status_dict=None, raw_art_dir=None, composite_dir=None,
-                          versions_dir=None, cards_db_snapshot=None, face='front'):
+                          versions_dir=None, cards_db_snapshot=None, face='front',
+                          deck_meta=None, model_key=None, prompt_map=None,
+                          deck_id=None):
     """Generate art for ONE face of a card using the active model config.
 
-    Optional params allow batch worker to pass captured deck context,
-    so file I/O targets the correct deck even if the user switches decks.
-    Single-card generation omits these — defaults to globals.
+    Optional params let the queue worker pass the JOB's captured deck context
+    (paths, deck_meta, model_key, per-face prompt_map), so a job renders with
+    its own deck's data/paths even if the user has switched the UI to another
+    deck. Everything defaults to the active-deck globals for back-compat.
     """
     global openai_client
 
-    # Default to globals when not provided (single-card generation)
+    # Default to globals when not provided
     _status = status_dict if status_dict is not None else generation_status
     _raw_art_dir = Path(raw_art_dir) if raw_art_dir else RAW_ART_DIR
     _composite_dir = Path(composite_dir) if composite_dir else COMPOSITE_DIR
     _versions_dir = Path(versions_dir) if versions_dir else VERSIONS_DIR
     _cards_db = cards_db_snapshot if cards_db_snapshot is not None else cards_db
+    _meta = deck_meta if deck_meta is not None else active_deck_meta
+    _model_key = model_key or active_model_key
 
-    # Get active model configuration
-    model_cfg = MODEL_OPTIONS.get(active_model_key, MODEL_OPTIONS[DEFAULT_MODEL_KEY])
+    # Get model configuration
+    model_cfg = MODEL_OPTIONS.get(_model_key, MODEL_OPTIONS[DEFAULT_MODEL_KEY])
     model_name = model_cfg['model']
     quality = model_cfg['quality']
     backend = model_cfg.get('backend', 'openai')
 
     # Art orientation: portrait (default) or landscape
-    art_orientation = active_deck_meta.get('art_orientation', 'portrait')
+    art_orientation = _meta.get('art_orientation', 'portrait')
     if art_orientation == 'landscape':
         actual_size = model_cfg.get('landscape_size', model_cfg['size'])
     else:
@@ -1939,7 +1964,10 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
     if face == 'back':
         default_prompt = (f"{composite_card_dict.get('name', '')}, "
                           f"{composite_card_dict.get('type_line', '')}")
-    base_prompt = custom_prompt or prompts_map.get(fkey, default_prompt)
+    # custom_prompt > job per-face prompt_map (this job's deck) > active
+    # prompts_map (back-compat) > default.
+    _job_prompt = prompt_map.get(fkey) if prompt_map else None
+    base_prompt = custom_prompt or _job_prompt or prompts_map.get(fkey, default_prompt)
 
     if feedback:
         # Insert feedback BEFORE the --- delimiter so local models (CLIP)
@@ -1969,9 +1997,11 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
     # Users can click "Regenerate" on the local prompt field to get a fresh subject.
     # Re-distilling on every re-roll was overwriting user's manual edits.
 
-    # Archive existing art before overwriting
+    # Archive existing art before overwriting (pass base prompt so the snapshot
+    # doesn't read prompts_map, which is the active deck's, not this job's).
     if raw_path.exists():
-        archived = _archive_art(fkey, _raw_art_dir, _composite_dir, _versions_dir)
+        archived = _archive_art(fkey, _raw_art_dir, _composite_dir, _versions_dir,
+                                prompt=base_prompt)
         if archived:
             print(f"  [{fkey}] Archived as v{archived['version']}")
 
@@ -1988,7 +2018,8 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
         if backend == 'local':
             result_image = _generate_local(card_name, model_cfg, full_prompt,
                                            status_dict=_status,
-                                           size_override=actual_size)
+                                           size_override=actual_size,
+                                           deck_meta=_meta)
         else:
             result_image = _generate_openai(card_name, model_cfg, full_prompt,
                                             status_dict=_status,
@@ -1997,7 +2028,7 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
         # Honor a cancel that arrived DURING generation before writing any
         # files — otherwise the card's art is silently replaced even though
         # the route reports the result was discarded.
-        if card_name in _cancel_single:
+        if _is_cancel_flagged(deck_id, card_name):
             return True, "Cancelled"
 
         # Save raw art
@@ -2013,7 +2044,7 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                 'model': model_name,
                 'quality': quality,
                 'size': actual_size,
-                'model_key': active_model_key,
+                'model_key': _model_key,
                 'backend': backend,
                 'cost_estimate': model_cfg['cost_per_image'],
                 'prompt_sent': full_prompt,
@@ -2022,7 +2053,7 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                 # lazy, so by then the user has often already edited/regenerated
                 # the prompt for the NEXT art: classic off-by-one).
                 'card_prompt': base_prompt,
-                'distilled_subject': active_deck_meta.get('card_subjects', {}).get(card_name, ''),
+                'distilled_subject': _meta.get('card_subjects', {}).get(card_name, ''),
                 'feedback': feedback,
                 'timestamp': datetime.now().isoformat(),
             }, f, indent=2)
@@ -2042,14 +2073,14 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
             # NOT this just-generated right half, which would duplicate its
             # art onto the first half (see comment above).
             render_composite_for_card(card, front_art, _front_comp,
-                                      deck_fs=active_deck_meta.get('frame_settings'),
+                                      deck_fs=_meta.get('frame_settings'),
                                       raw_art_dir=_raw_art_dir)
         else:
             render_composite(composite_card_dict, str(raw_path), None, str(comp_path),
-                                     deck_frame_settings=active_deck_meta.get('frame_settings'))
+                                     deck_frame_settings=_meta.get('frame_settings'))
 
         # Don't overwrite 'cancelled' status if user cancelled during generation
-        if card_name in _cancel_single:
+        if _is_cancel_flagged(deck_id, card_name):
             return True, "Cancelled"
 
         with generation_lock:
@@ -2075,120 +2106,6 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
 
 
 PARALLEL_WORKERS = 2  # concurrent image generation threads (conservative for rate limits)
-
-
-def batch_generate_worker(card_names, feedback_map=None, face_map=None):
-    """Background worker for batch generation — runs up to PARALLEL_WORKERS at once.
-
-    Captures deck context (paths, cards_db) at spawn time so file I/O
-    targets the correct deck even if the user switches decks mid-batch.
-    face_map: per-card face selection ('front'|'back'|'all'), so skip_existing
-    batches only generate the faces that are actually missing.
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    global is_generating, batch_phase, batch_phase_detail
-    global batch_deck_id, _batch_generation_status
-    feedback_map = feedback_map or {}
-    face_map = face_map or {}
-
-    # ── Capture deck context at spawn time ──
-    _deck_id = active_deck_id
-    _raw_art_dir = Path(RAW_ART_DIR)
-    _composite_dir = Path(COMPOSITE_DIR)
-    _versions_dir = Path(VERSIONS_DIR)
-    _cards_db = list(cards_db)  # snapshot — immune to switch_deck()
-
-    batch_deck_id = _deck_id
-    _batch_generation_status.clear()
-
-    try:
-        # Use single worker for local models (GPU handles one at a time)
-        model_cfg = MODEL_OPTIONS.get(active_model_key, MODEL_OPTIONS[DEFAULT_MODEL_KEY])
-        is_local = model_cfg.get('backend') == 'local'
-        workers = 1 if is_local else PARALLEL_WORKERS
-
-        # Gate: wait for any in-flight LLM/VLM work to finish and unload it, then
-        # ensure the FLUX image model is loaded — auto-load on the user's behalf so
-        # "Generate" just works. If the load fails (e.g. a gated model with no HF
-        # login), mark the cards with a clear error instead of silently hanging.
-        if is_local:
-            batch_phase = 'waiting_ollama'
-            batch_phase_detail = 'Waiting for style analysis to finish...'
-            _wait_for_ollama_idle(timeout=900)
-
-            from local_image_generator import get_generator
-            gen = get_generator()
-            if not gen.is_loaded:
-                batch_phase = 'loading_model'
-                batch_phase_detail = 'Loading image model (first run downloads weights)...'
-                ok, load_msg = gen.load_model(model_cfg['model'])
-                if not ok:
-                    err = f'Image model failed to load: {load_msg}'
-                    print(f"  [batch] Aborting — {err}")
-                    with generation_lock:
-                        for name in card_names:
-                            prev = _batch_generation_status.get(name, {})
-                            _batch_generation_status[name] = {
-                                'status': 'error',
-                                'message': err,
-                                'has_raw_art': prev.get('has_raw_art', False),
-                                'has_composite': prev.get('has_composite', False),
-                            }
-                    return  # finally block resets is_generating / batch_phase
-
-        # Transition to generating phase
-        batch_phase = 'generating'
-        batch_phase_detail = ''
-
-        # Mark all as queued in batch status dict
-        for i, name in enumerate(card_names):
-            if not is_generating:
-                break
-            with generation_lock:
-                _batch_generation_status[name] = {
-                    'status': 'queued',
-                    'message': f'Queued ({i+1}/{len(card_names)})',
-                    'has_raw_art': _batch_generation_status.get(name, {}).get('has_raw_art', False),
-                    'has_composite': _batch_generation_status.get(name, {}).get('has_composite', False),
-                }
-
-        def gen_one(name):
-            if not is_generating:
-                return
-            feedback = feedback_map.get(name)
-            generate_card_all_faces(
-                name, feedback=feedback,
-                face=face_map.get(name, 'all'),
-                status_dict=_batch_generation_status,
-                raw_art_dir=_raw_art_dir,
-                composite_dir=_composite_dir,
-                versions_dir=_versions_dir,
-                cards_db_snapshot=_cards_db,
-            )
-
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(gen_one, name): name for name in card_names}
-            for future in as_completed(futures):
-                if not is_generating:
-                    pool.shutdown(wait=False, cancel_futures=True)
-                    break
-                try:
-                    future.result()
-                except Exception as e:
-                    card = futures[future]
-                    print(f"  [batch] Error generating {card}: {e}")
-
-    finally:
-        # Merge batch results into generation_status if still viewing this deck
-        with generation_lock:
-            if active_deck_id == _deck_id:
-                generation_status.update(_batch_generation_status)
-            _batch_generation_status.clear()
-            batch_deck_id = None
-
-        is_generating = False
-        batch_phase = None
-        batch_phase_detail = ''
 
 
 # ===========================================================================
@@ -2247,12 +2164,8 @@ def _validate_deck_id_in_url():
 
 @app.route('/api/decks/<deck_id>/activate', methods=['POST'])
 def api_activate_deck(deck_id):
-    """Switch the active deck."""
-    # Refuse while art is generating: the in-flight worker resolves the deck's
-    # paths/style/prompts from live globals, so repointing them mid-generation
-    # writes one deck's art into another's directories.
-    if is_generating:
-        return jsonify({'error': 'Cannot switch decks while art is generating'}), 409
+    """Switch the active deck. Safe during generation — the queue runs each job
+    against its own deck's context, so rendering continues across switches."""
     if switch_deck(deck_id):
         return jsonify({'success': True, 'active_deck_id': deck_id})
     return jsonify({'error': f'Deck not found: {deck_id}'}), 404
@@ -2260,13 +2173,18 @@ def api_activate_deck(deck_id):
 
 @app.route('/api/decks/<deck_id>', methods=['DELETE'])
 def api_delete_deck(deck_id):
-    """Delete a deck. If it's the active deck, auto-switch to another first."""
+    """Delete a deck. Cancels any queued/running jobs for it first so the
+    worker doesn't race the rmtree, then auto-switches away if it was active."""
     global active_deck_id, cards_db, prompts_map
 
-    # Refuse while a batch is writing into this deck — rmtree would race the
-    # worker (zombie half-recreated dir, or a 500 with the deck half-deleted).
-    if is_generating and (batch_deck_id == deck_id or deck_id == active_deck_id):
-        return jsonify({'error': 'Cannot delete a deck while art is generating'}), 409
+    # Cancel this deck's jobs before removing its files (the running job's
+    # writes are discarded by the cooperative cancel hook), then WAIT for the
+    # worker to actually drain any in-flight render for this deck. A cooperative
+    # cancel only flags the job — the worker may still be mid-render and would
+    # re-create the deck directory (mkdir + image.save) after rmtree, leaving a
+    # zombie half-populated folder. Waiting closes that race.
+    gen_queue.cancel_deck(deck_id, running_cancel_hook=_running_cancel_hook)
+    gen_queue.wait_for_deck_idle(deck_id, timeout=180.0)
 
     registry = _load_deck_registry()
     other_decks = [d for d in registry['decks'] if d['id'] != deck_id]
@@ -3758,26 +3676,17 @@ def distill_subjects(deck_id):
     })
 
 
-# ---------------------------------------------------------------------------
-# Prompt regeneration progress tracking
-# ---------------------------------------------------------------------------
-prompt_regen_progress = {}  # job_id -> {step, total, message, done, error, count}
-flavor_text_progress = {}   # job_id -> {step, total, message, done, error}
-
-
 @app.route('/api/decks/<deck_id>/regenerate-prompts', methods=['POST'])
 def regenerate_prompts_from_inspiration(deck_id):
-    """Kick off prompt regeneration as a background job. Returns job_id for polling."""
+    """Enqueue one prompt-regen job per card/face unit (returns immediately)."""
     from prompt_generator import generate_style_preamble_from_analysis
 
     deck_dir = DECKS_DIR / deck_id
     if not deck_dir.exists():
         return jsonify({'error': 'Deck not found'}), 404
 
-    deck_json = deck_dir / "deck.json"
-    with open(deck_json) as f:
+    with open(deck_dir / "deck.json") as f:
         data = json.load(f)
-
     cards = data.get('cards', [])
     if not cards:
         return jsonify({'error': 'No cards in deck'}), 400
@@ -3785,208 +3694,36 @@ def regenerate_prompts_from_inspiration(deck_id):
     req_data = request.json or {}
     use_ai = req_data.get('use_ai', False)
     card_names = req_data.get('card_names')
-    steer = (req_data.get('steer') or '').strip()  # optional free-text direction
+    steer = (req_data.get('steer') or '').strip()
 
-    # Expand cards into per-face prompt units. A double-faced card gets a
-    # second unit keyed "<full name> [back]" whose card data is the back face,
-    # so the LLM describes the actual back-face scene.
-    units = []
+    # Per-face unit KEYS; the executor re-resolves each unit's card data.
+    unit_keys = []
     for c in cards:
-        # Rotated splits: the front unit describes ONLY the first half —
-        # the combined card's oracle text would mix both halves' scenes
-        front = split_half_card(c, 0) if is_rotated_split(c) else c
-        units.append((c['name'], front))
+        unit_keys.append(c['name'])
         if has_second_art_face(c):
-            second = (split_half_card(c, 1) if is_rotated_split(c)
-                      else back_face_card(c))
-            units.append((face_key(c['name'], 'back'), second))
+            unit_keys.append(face_key(c['name'], 'back'))
 
-    # If specific unit keys requested, filter to just those. Plain names mean
-    # the front face; "<name> [back]" targets the back face.
+    # Keep the style preamble fresh (used by rule-based generation).
+    _save_deck_meta_field(deck_id, style_preamble=generate_style_preamble_from_analysis(
+        data.get('inspiration_style_description', ''),
+        style_source=data.get('style_source', '')))
+
     if card_names:
         requested = set(card_names)
-        units = [(k, c) for k, c in units if k in requested]
-        if not units:
+        unit_keys = [k for k in unit_keys if k in requested]
+        if not unit_keys:
             return jsonify({'error': 'No matching cards found'}), 400
 
-    # Build style preamble from inspiration analysis + manual source
-    style_desc = data.get('inspiration_style_description', '')
-    style_source = data.get('style_source', '')
-    style_preamble = generate_style_preamble_from_analysis(
-        style_desc, style_source=style_source)
-    _save_deck_meta_field(deck_id, style_preamble=style_preamble)
-
-    job_id = f"regen_{int(time.time() * 1000)}"
-    prompt_regen_progress[job_id] = {
-        'step': 0,
-        'total': len(units),
-        'pct': 0,           # 0-100 unified progress across both phases
-        'phase': 'generating',
-        'message': 'Starting prompt generation...',
-        'done': False,
-        'error': None,
-        'count': 0,
-        'style_preamble_preview': '',
-    }
-
-    def regen_worker():
-        _ollama_work_start()
-        from prompt_generator import (generate_prompt,
-                                       generate_subject_with_ai)
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        prog = prompt_regen_progress[job_id]
-        preamble = style_preamble
-        bcfg = backend_config.load_config()
-
-        # Build the subject-generation style hint from the CLEAN image-first
-        # descriptors (flux_style_prompt) + source name — NOT the SDXL-era mood/
-        # themes tokens. Those mislabel (e.g. tagging Wes Anderson "unsettling,
-        # eerie"), which trips the subject generator's dark/dramatic path and makes
-        # scenes dramatic — the very drama that drowns a calm style. The clean
-        # descriptors keep the subject's TONE matched to the actual style (calm
-        # styles stay calm/concrete; genuinely dark styles still read as dark).
-        _style_hint = style_source or ''
-        _flux_style = data.get('flux_style_prompt', '').strip()
-        if _flux_style:
-            _style_hint = f"{_style_hint} — {_flux_style}" if _style_hint else _flux_style
-        try:
-            total = len(units)
-            new_prompts = [None] * total  # preserve order
-            completed = [0]
-            lock = threading.Lock()
-
-            can_do_ai = (bcfg['llm_backend'] == 'local') or openai_client
-            if use_ai and can_do_ai:
-                # ── Parallel AI prompt generation ──
-                if bcfg['llm_backend'] == 'local':
-                    prog['message'] = 'Loading language model...'
-                else:
-                    prog['message'] = f'Generating AI prompts: 0/{total}'
-
-                def gen_one_ai(idx_unit):
-                    idx, (key, card) = idx_unit
-                    max_retries = 5
-                    subject = None
-                    for attempt in range(max_retries):
-                        try:
-                            subject = generate_subject_with_ai(
-                                card, openai_client,
-                                backend=bcfg['llm_backend'],
-                                local_model=bcfg['ollama_model'],
-                                style_hint=_style_hint,
-                                steer=steer,
-                            )
-                            break
-                        except Exception as e:
-                            err_str = str(e)
-                            if '429' in err_str and attempt < max_retries - 1:
-                                import re as _re
-                                wait_match = _re.search(r'try again in (\d+\.?\d*)s', err_str)
-                                wait_time = float(wait_match.group(1)) + 1 if wait_match else 15
-                                time.sleep(wait_time)
-                            else:
-                                # Fall back to rule-based
-                                from prompt_generator import generate_subject_description
-                                subject = generate_subject_description(card)
-                                break
-
-                    # Store the rich subject as the single per-face prompt. Style is
-                    # applied separately (deck-level flux_style_prompt) at generation,
-                    # so we no longer bundle a style preamble or distill it down.
-                    prompt = subject
-                    new_prompts[idx] = {'name': key, 'prompt': prompt}
-                    with lock:
-                        completed[0] += 1
-                        prog['step'] = completed[0]
-                        prog['pct'] = 5 + int(45 * completed[0] / total)
-                        prog['message'] = f'Generating prompts: {completed[0]}/{total}'
-                        # Update in-memory immediately so frontend sees it on next poll
-                        if deck_id == active_deck_id:
-                            prompts_map[key] = prompt
-                        if 'updated_cards' not in prog:
-                            prog['updated_cards'] = []
-                        prog['updated_cards'].append(key)
-                    time.sleep(0.05)
-
-                with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as pool:
-                    list(pool.map(gen_one_ai, enumerate(units)))
-            else:
-                # ── Rule-based (fast, but still track progress) ──
-                if use_ai and not can_do_ai:
-                    prog['ai_fallback'] = True
-                    print(f"  [regen] AI requested but no backend available — using rule-based prompts")
-                for i, (key, card) in enumerate(units):
-                    prompt = generate_prompt(card, None)  # plain scene, no style preamble
-                    new_prompts[i] = {'name': key, 'prompt': prompt}
-                    prog['step'] = i + 1
-                    # Update in-memory immediately
-                    if deck_id == active_deck_id:
-                        prompts_map[key] = prompt
-                    if 'updated_cards' not in prog:
-                        prog['updated_cards'] = []
-                    prog['updated_cards'].append(key)
-                    prog['pct'] = 5 + int(45 * (i + 1) / total)
-                    prog['message'] = f'Generating prompts: {i + 1}/{total}'
-
-            # Filter any Nones (shouldn't happen but safety)
-            new_prompts = [p for p in new_prompts if p]
-
-            # Save prompts (merge with existing to support partial regen)
-            prompts_path = deck_dir / "art_prompts.json"
-            if prompts_path.exists():
-                with open(prompts_path) as f:
-                    existing = json.load(f)
-            else:
-                existing = []
-            merged = {p['name']: p['prompt'] for p in existing}
-            for p in new_prompts:
-                merged[p['name']] = p['prompt']
-            all_prompts = [{'name': n, 'prompt': p} for n, p in merged.items()]
-            with open(prompts_path, 'w') as f:
-                json.dump(all_prompts, f, indent=2)
-
-            # Update in-memory prompts if active deck
-            if deck_id == active_deck_id:
-                for p in new_prompts:
-                    prompts_map[p['name']] = p['prompt']
-
-            prog['count'] = len(new_prompts)
-            prog['style_preamble_preview'] = (preamble[:200] + '...') if len(preamble) > 200 else preamble
-            print(f"  [regen] Prompts done: {deck_id} — {len(new_prompts)} prompts")
-
-            # One rich prompt per card now drives generation directly — no separate
-            # subject-distillation pass (FLUX has the token budget for the full scene).
-            if prog.get('ai_fallback'):
-                prog['message'] = f'Generated {len(new_prompts)} rule-based prompts (AI unavailable)'
-            else:
-                prog['message'] = f'Regenerated {len(new_prompts)} prompts!'
-            prog['pct'] = 100
-            prog['done'] = True
-
-        except Exception as e:
-            prog['error'] = str(e)[:300]
-            prog['done'] = True
-            print(f"  [regen] Failed: {e}")
-        finally:
-            _ollama_work_done()
-
-    threading.Thread(target=regen_worker, daemon=True).start()
-
-    return jsonify({
-        'success': True,
-        'job_id': job_id,
-        'total': len(units),
-    })
-
-
-@app.route('/api/regen-prompts/progress/<job_id>')
-def api_regen_prompts_progress(job_id):
-    """Poll prompt regeneration progress."""
-    prog = prompt_regen_progress.get(job_id)
-    if not prog:
-        return jsonify({'error': 'Job not found'}), 404
-    return jsonify(prog)
+    dname = _deck_display_name(deck_id)
+    job_ids = []
+    for key in unit_keys:
+        job = Job(type=PROMPT, deck_id=deck_id, deck_name=dname, card_name=key,
+                  use_ai=bool(use_ai), feedback=(steer or None),
+                  label=key.replace(BACK_FACE_SUFFIX, ''))
+        gen_queue.enqueue(job)
+        job_ids.append(job.id)
+    return jsonify({'success': True, 'queued': len(job_ids), 'job_ids': job_ids,
+                    'total': len(job_ids)})
 
 
 # ---------------------------------------------------------------------------
@@ -3994,143 +3731,272 @@ def api_regen_prompts_progress(job_id):
 # ---------------------------------------------------------------------------
 @app.route('/api/decks/<deck_id>/generate-flavor-text', methods=['POST'])
 def generate_flavor_text_endpoint(deck_id):
-    """Kick off flavor text generation as a background job. Returns job_id for polling."""
+    """Enqueue one flavor-text job per card (returns immediately)."""
     deck_dir = DECKS_DIR / deck_id
     if not deck_dir.exists():
         return jsonify({'error': 'Deck not found'}), 404
 
-    deck_json = deck_dir / "deck.json"
-    with open(deck_json) as f:
+    with open(deck_dir / "deck.json") as f:
         data = json.load(f)
-
     cards = data.get('cards', [])
     if not cards:
         return jsonify({'error': 'No cards in deck'}), 400
 
     req_data = request.json or {}
     card_names = req_data.get('card_names')
-
     if card_names:
-        card_name_set = set(card_names)
-        cards = [c for c in cards if c['name'] in card_name_set]
+        want = set(card_names)
+        cards = [c for c in cards if c['name'] in want]
         if not cards:
             return jsonify({'error': 'No matching cards found'}), 400
 
-    inspiration_desc = data.get('inspiration_style_description', '')
+    dname = _deck_display_name(deck_id)
+    job_ids = []
+    for c in cards:
+        job = Job(type=FLAVOR, deck_id=deck_id, deck_name=dname,
+                  card_name=c['name'], label=c['name'])
+        gen_queue.enqueue(job)
+        job_ids.append(job.id)
+    return jsonify({'success': True, 'queued': len(job_ids), 'job_ids': job_ids,
+                    'total': len(job_ids)})
 
-    job_id = f"flavor_{int(time.time() * 1000)}"
-    flavor_text_progress[job_id] = {
-        'step': 0,
-        'total': len(cards),
-        'message': 'Starting flavor text generation...',
-        'done': False,
-        'error': None,
+
+# ===========================================================================
+# Global generation queue — executor
+# ===========================================================================
+# The queue worker calls _execute_job(job) one at a time. Each executor loads
+# the job's deck context FRESH from job.deck_id, so a job runs against its own
+# deck's files/style/model even if the UI has switched to another deck. The
+# active deck's in-memory globals are additionally synced so the UI updates.
+
+def _load_deck_ctx(deck_id):
+    """Load a job's deck context from disk. None if the deck no longer exists."""
+    deck_dir = DECKS_DIR / deck_id
+    deck_json = deck_dir / "deck.json"
+    if not deck_json.exists():
+        return None
+    data = _load_json_safe(deck_json, {})
+    if not isinstance(data, dict):
+        data = {}
+    prompts = {}
+    ppath = deck_dir / "art_prompts.json"
+    if ppath.exists():
+        for e in _load_json_safe(ppath, []):
+            if isinstance(e, dict) and 'name' in e:
+                prompts[e['name']] = e.get('prompt', '')
+    reg = _load_deck_registry()
+    deck_name = next((d['name'] for d in reg.get('decks', []) if d['id'] == deck_id), deck_id)
+    return {
+        'deck_id': deck_id, 'deck_name': deck_name, 'deck_dir': deck_dir,
+        'raw_art_dir': deck_dir / "raw_art", 'composite_dir': deck_dir / "composites",
+        'versions_dir': deck_dir / "art_versions", 'meta': data,
+        'prompts': prompts, 'cards': data.get('cards', []),
     }
 
-    def flavor_worker():
-        _ollama_work_start()
-        from prompt_generator import generate_flavor_text
-        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        prog = flavor_text_progress[job_id]
+class _JobStatusSink(dict):
+    """Status dict for generate_art_for_card. Mirrors each per-card status entry
+    into the job's live progress (by reference, so the step callback's in-place
+    updates flow through) and, when the job's deck is CURRENTLY active, into the
+    global generation_status so the grid badge animates.
+
+    The active check is re-evaluated on every write (not captured once at
+    construction): deck switching is permitted mid-render, and if this job's
+    deck is switched away we must STOP writing into generation_status — else a
+    same-named card in the newly-active deck shows a spurious spinner/'complete'
+    for art it never generated."""
+    def __init__(self, job):
+        super().__init__()
+        self._job = job
+
+    def __setitem__(self, key, val):
+        super().__setitem__(key, val)
+        self._job.progress = val
+        if self._job.deck_id == active_deck_id:
+            generation_status[key] = val
+
+
+def _face_unit_for(card, fkey):
+    """Face-specific card dict for a prompt/flavor unit key."""
+    if fkey.endswith(BACK_FACE_SUFFIX):
+        return (split_half_card(card, 1) if is_rotated_split(card)
+                else back_face_card(card))
+    return split_half_card(card, 0) if is_rotated_split(card) else card
+
+
+def _execute_art_job(job, ctx):
+    sink = _JobStatusSink(job)
+    job.progress = {'status': 'generating', 'message': 'Waiting for analysis...',
+                    'step': 0, 'total_steps': 0}
+    _wait_for_ollama_idle()   # FLUX must not co-reside with LLM/VLM work (18 GB)
+    ok, msg = generate_card_all_faces(
+        job.card_name, custom_prompt=job.custom_prompt, feedback=job.feedback,
+        face=job.face, status_dict=sink, raw_art_dir=ctx['raw_art_dir'],
+        composite_dir=ctx['composite_dir'], versions_dir=ctx['versions_dir'],
+        cards_db_snapshot=ctx['cards'], deck_meta=ctx['meta'],
+        model_key=job.model_key, prompt_map=ctx['prompts'], deck_id=job.deck_id)
+    if not ok and msg != 'Cancelled':
+        raise RuntimeError(msg)
+    if job.deck_id == active_deck_id:
+        global cards_revision
+        cards_revision = int(time.time() * 1000)
+
+
+def _write_deck_prompt(ctx, key, prompt):
+    ppath = ctx['deck_dir'] / "art_prompts.json"
+    with persist_lock:
+        existing = _load_json_safe(ppath, []) if ppath.exists() else []
+        merged = {e['name']: e.get('prompt', '') for e in existing
+                  if isinstance(e, dict) and 'name' in e}
+        merged[key] = prompt
+        _atomic_json_dump(ppath, [{'name': n, 'prompt': p} for n, p in merged.items()])
+    if ctx['deck_id'] == active_deck_id:
+        prompts_map[key] = prompt
+        for c in cards_db:
+            if c['name'] == key:
+                c['prompt'] = prompt
+        global cards_revision
+        cards_revision = int(time.time() * 1000)
+
+
+def _execute_prompt_job(job, ctx):
+    from prompt_generator import (generate_prompt, generate_subject_with_ai,
+                                  generate_subject_description)
+    _ollama_work_start()
+    try:
+        job.progress = {'message': 'Generating prompt...', 'pct': 30}
+        base = job.card_name.replace(BACK_FACE_SUFFIX, '')
+        card = next((c for c in ctx['cards'] if c['name'] == base), None)
+        if not card:
+            raise RuntimeError(f"Card not found: {job.card_name}")
+        unit = _face_unit_for(card, job.card_name)
         bcfg = backend_config.load_config()
-        try:
-            total = len(cards)
-            completed = [0]
-            lock = threading.Lock()
-            updated_names = []
-
-            def gen_one(card):
-                max_retries = 5
-                text = ''
-                for attempt in range(max_retries):
-                    try:
-                        text = generate_flavor_text(
-                            card,
-                            inspiration_description=inspiration_desc,
-                            openai_client=openai_client,
-                            backend=bcfg['llm_backend'],
-                            local_model=bcfg['ollama_model'],
-                        )
+        data = ctx['meta']
+        style_hint = (data.get('style_source') or '').strip()
+        flux_style = (data.get('flux_style_prompt') or '').strip()
+        if flux_style:
+            style_hint = f"{style_hint} — {flux_style}" if style_hint else flux_style
+        can_ai = (bcfg['llm_backend'] == 'local') or openai_client
+        if job.use_ai and can_ai:
+            # Retry on transient rate limits (429) with backoff before falling
+            # back to the lower-quality rule-based prompt — a momentary blip
+            # shouldn't silently persist a degraded prompt the user didn't want.
+            max_retries = 5
+            prompt = None
+            for attempt in range(max_retries):
+                try:
+                    prompt = generate_subject_with_ai(
+                        unit, openai_client, backend=bcfg['llm_backend'],
+                        local_model=bcfg['ollama_model'], style_hint=style_hint,
+                        steer=(job.feedback or ''))
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    if '429' in err_str and attempt < max_retries - 1:
+                        import re as _re
+                        wait_match = _re.search(r'try again in (\d+\.?\d*)s', err_str)
+                        wait_time = float(wait_match.group(1)) + 1 if wait_match else 15
+                        time.sleep(wait_time)
+                    else:
+                        prompt = generate_subject_description(unit)
                         break
-                    except Exception as e:
-                        err_str = str(e)
-                        if '429' in err_str and attempt < max_retries - 1:
-                            import re as _re
-                            wait_match = _re.search(r'try again in (\d+\.?\d*)s', err_str)
-                            wait_time = float(wait_match.group(1)) + 1 if wait_match else 15
-                            time.sleep(wait_time)
-                        else:
-                            break
-
-                # Update card in memory
-                with lock:
-                    db_card = next((c for c in cards_db if c['name'] == card['name']), None)
-                    if db_card and text:
-                        db_card['flavor_text'] = text
-                        updated_names.append(card['name'])
-                    completed[0] += 1
-                    prog['step'] = completed[0]
-                    prog['message'] = f'Flavor text: {completed[0]}/{total}'
-                time.sleep(0.05)
-
-            with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as pool:
-                list(pool.map(gen_one, cards))
-
-            # Persist to deck.json
-            _persist_cards_and_prompts()
-
-            # Auto-recomposite cards that got new flavor text
-            # Only re-render cards that already have art — don't inflate generation stats
-            for cname in updated_names:
-                slug = name_to_slug(cname)
-                raw_path = RAW_ART_DIR / f"{slug}.png"
-                comp_path = COMPOSITE_DIR / f"{slug}.png"
-                if raw_path.exists():
-                    db_card = next((c for c in cards_db if c['name'] == cname), None)
-                    if db_card:
-                        try:
-                            render_composite_for_card(db_card, raw_path, comp_path,
-                                             deck_fs=active_deck_meta.get('frame_settings'))
-                            with generation_lock:
-                                existing = generation_status.get(cname)
-                                if existing:
-                                    existing['message'] = 'Flavor text updated'
-                                    existing['has_composite'] = True
-                        except Exception as e:
-                            print(f"  [flavor] Recomposite failed for {cname}: {e}")
-
-            failed = total - len(updated_names)
-            if failed:
-                prog['message'] = f'Generated flavor text for {len(updated_names)}/{total} cards ({failed} failed)'
-            else:
-                prog['message'] = f'Generated flavor text for {len(updated_names)} cards!'
-            prog['done'] = True
-            print(f"  [flavor] Complete: {deck_id} — {len(updated_names)} cards")
-
-        except Exception as e:
-            prog['error'] = str(e)[:300]
-            prog['done'] = True
-            print(f"  [flavor] Failed: {e}")
-        finally:
-            _ollama_work_done()
-
-    threading.Thread(target=flavor_worker, daemon=True).start()
-
-    return jsonify({
-        'success': True,
-        'job_id': job_id,
-        'total': len(cards),
-    })
+        else:
+            prompt = generate_prompt(unit, None)
+        _write_deck_prompt(ctx, job.card_name, prompt)
+        job.progress = {'message': 'Prompt ready', 'pct': 100, 'result': prompt}
+    finally:
+        _ollama_work_done()
 
 
-@app.route('/api/flavor-text/progress/<job_id>')
-def api_flavor_text_progress(job_id):
-    """Poll flavor text generation progress."""
-    prog = flavor_text_progress.get(job_id)
-    if not prog:
-        return jsonify({'error': 'Job not found'}), 404
-    return jsonify(prog)
+def _execute_flavor_job(job, ctx):
+    from prompt_generator import generate_flavor_text
+    _ollama_work_start()
+    try:
+        job.progress = {'message': 'Generating flavor text...', 'pct': 30}
+        card = next((c for c in ctx['cards'] if c['name'] == job.card_name), None)
+        if not card:
+            raise RuntimeError(f"Card not found: {job.card_name}")
+        bcfg = backend_config.load_config()
+        text = generate_flavor_text(
+            card, inspiration_description=ctx['meta'].get('inspiration_style_description', ''),
+            openai_client=openai_client, backend=bcfg['llm_backend'],
+            local_model=bcfg['ollama_model'])
+        if not text:
+            raise RuntimeError('No flavor text produced')
+        # Update the in-memory card dict too — the recomposite below renders
+        # from THIS `card`, so without this the freshly generated flavor text
+        # wouldn't appear on the frame until a manual recomposite or reload.
+        card['flavor_text'] = text
+        with persist_lock:
+            data = _load_json_safe(ctx['deck_dir'] / "deck.json", {})
+            for c in data.get('cards', []):
+                if c['name'] == job.card_name:
+                    c['flavor_text'] = text
+            _atomic_json_dump(ctx['deck_dir'] / "deck.json", data)
+        is_active = job.deck_id == active_deck_id
+        if is_active:
+            for c in cards_db:
+                if c['name'] == job.card_name:
+                    c['flavor_text'] = text
+        slug = name_to_slug(job.card_name)
+        raw_path = ctx['raw_art_dir'] / f"{slug}.png"
+        comp_path = ctx['composite_dir'] / f"{slug}.png"
+        if raw_path.exists():
+            try:
+                render_composite_for_card(card, raw_path, comp_path,
+                                          deck_fs=ctx['meta'].get('frame_settings'))
+            except Exception as e:
+                print(f"  [flavor] recomposite failed for {job.card_name}: {e}")
+        if is_active:
+            global cards_revision
+            cards_revision = int(time.time() * 1000)
+        job.progress = {'message': 'Flavor ready', 'pct': 100}
+    finally:
+        _ollama_work_done()
+
+
+def _execute_job(job):
+    """Queue worker entrypoint — dispatch by job type. Raises on failure."""
+    ctx = _load_deck_ctx(job.deck_id)
+    if ctx is None:
+        raise RuntimeError('Deck no longer exists')
+    job.deck_name = ctx['deck_name']
+    try:
+        if job.type == ART:
+            _execute_art_job(job, ctx)
+        elif job.type == PROMPT:
+            _execute_prompt_job(job, ctx)
+        elif job.type == FLAVOR:
+            _execute_flavor_job(job, ctx)
+        else:
+            raise RuntimeError(f'Unknown job type: {job.type}')
+    finally:
+        # Clear any cooperative-cancel flag for this job so it can't leak onto a
+        # later job for the same (deck, card).
+        if job.type == ART:
+            _cancel_single.discard((job.deck_id, job.card_name))
+        if job.deck_id == active_deck_id and job.type == ART:
+            with generation_lock:
+                s = generation_status.get(job.card_name)
+                if s:
+                    slug = name_to_slug(job.card_name)
+                    s['has_raw_art'] = (RAW_ART_DIR / f"{slug}.png").exists()
+                    s['has_composite'] = (COMPOSITE_DIR / f"{slug}.png").exists()
+                    # Only settle to 'complete' from a non-terminal state — never
+                    # clobber an 'error'/'cancelled' badge just because an OLD
+                    # composite is still on disk (a failed re-roll leaves the
+                    # previous art behind; that must read as a failure, not
+                    # silent success).
+                    if s['has_composite'] and s.get('status') not in ('error', 'cancelled'):
+                        s['status'] = 'complete'
+
+
+def _running_cancel_hook(job):
+    """Cooperative cancel for a RUNNING art job — flag the card so
+    generate_art_for_card discards the in-flight result before writing. Keyed by
+    (deck_id, card_name) so it can't discard a same-named card on another deck."""
+    if job.type == ART:
+        _cancel_single.add((job.deck_id, job.card_name))
 
 
 @app.route('/api/cards/flavor-text', methods=['POST'])
@@ -4718,17 +4584,20 @@ def api_remove_card():
     if not card:
         return jsonify({'error': f'Card not found in deck: {card_name}'}), 404
 
-    # Refuse while this card is generating — a still-running worker would
-    # re-write its files and re-insert a status entry for a card that no
-    # longer exists (ghost entry + orphan files).
-    if is_generating and (card_name in _batch_generation_status
-                          or generation_status.get(card_name, {}).get('status') == 'generating'):
+    # Refuse while this exact card is the queue's RUNNING job — the worker
+    # would re-write its files after removal. Queued jobs for it are cancelled.
+    running = gen_queue.running_job()
+    if running and running.deck_id == active_deck_id and \
+            running.card_name.replace(BACK_FACE_SUFFIX, '') == card_name:
         return jsonify({'error': 'Cannot remove a card while it is generating'}), 409
+    for job in gen_queue.jobs_for_deck(active_deck_id, active_only=True):
+        if job.card_name.replace(BACK_FACE_SUFFIX, '') == card_name and job.status == 'queued':
+            gen_queue.cancel(job.id)
 
     # Remove from in-memory state
     cards_db.remove(card)
     prompts_map.pop(card_name, None)
-    _cancel_single.discard(card_name)
+    _cancel_single.discard((active_deck_id, card_name))
     with generation_lock:
         generation_status.pop(card_name, None)
 
@@ -4757,123 +4626,59 @@ def api_remove_card():
     })
 
 
+def _deck_display_name(deck_id):
+    reg = _load_deck_registry()
+    return next((d['name'] for d in reg.get('decks', []) if d['id'] == deck_id), deck_id)
+
+
+def _enqueue_art(deck_id, card_name, face='all', custom_prompt=None, feedback=None,
+                 label=None, deck_name=None):
+    """Build + enqueue an ART job, snapshotting the current model. Pass
+    ``deck_name`` to skip the per-call registry read when enqueuing in a loop."""
+    job = Job(type=ART, deck_id=deck_id,
+              deck_name=deck_name if deck_name is not None else _deck_display_name(deck_id),
+              card_name=card_name, face=face, custom_prompt=custom_prompt,
+              feedback=feedback, model_key=active_model_key,
+              label=label or card_name.replace(BACK_FACE_SUFFIX, ''))
+    _cancel_single.discard((deck_id, card_name))  # clear stale cancel so job isn't discarded
+    return gen_queue.enqueue(job)
+
+
 @app.route('/api/generate', methods=['POST'])
 def generate_single():
-    """Generate art for a single card."""
+    """Enqueue an art job for a single card (returns immediately)."""
     model_cfg = MODEL_OPTIONS.get(active_model_key, MODEL_OPTIONS[DEFAULT_MODEL_KEY])
     if model_cfg.get('backend', 'openai') == 'openai' and not openai_client:
         return jsonify({'error': 'API key not set'}), 400
 
-    data = request.json
+    data = request.json or {}
     card_name = data.get('card_name')
     feedback = data.get('feedback')
     custom_prompt = data.get('custom_prompt')
     face = data.get('face', 'all')
     if face not in ('front', 'back', 'all'):
         return jsonify({'error': 'face must be front, back, or all'}), 400
-
     if not card_name:
         return jsonify({'error': 'No card name'}), 400
 
-    # 404 unknown cards so a typo'd/arbitrary name from a LAN client can't
-    # seed a permanent phantom generation_status entry.
     _base = card_name[:-len(BACK_FACE_SUFFIX)] if card_name.endswith(BACK_FACE_SUFFIX) else card_name
     if not any(c['name'] == _base for c in cards_db):
         return jsonify({'error': f'Card not in deck: {card_name}'}), 404
 
-    # Clear any stale cancel flag from a prior cancel that raced completion —
-    # otherwise this fresh generation would self-cancel before doing anything.
-    _cancel_single.discard(card_name)
-
-    # NB: no "model not loaded" guard — the worker (via generate_art_for_card)
-    # auto-loads the image model on demand, showing a "Loading image model..."
-    # status, and surfaces a clear error on the card if the load fails.
-
-    # Set status immediately so the poller picks it up before the thread starts
-    slug = name_to_slug(card_name)
-    with generation_lock:
-        generation_status[card_name] = {
-            'status': 'generating',
-            'message': 'Starting...',
-            'has_raw_art': (RAW_ART_DIR / f"{slug}.png").exists(),
-            'has_composite': (COMPOSITE_DIR / f"{slug}.png").exists(),
-        }
-
-    # Run in background thread
-    def worker():
-        try:
-            # Check for early cancel (before Ollama wait)
-            if card_name in _cancel_single:
-                _cancel_single.discard(card_name)
-                return
-
-            # Gate: ensure all LLM/VLM (style analysis) work is done before FLUX
-            # generation, so the FLUX worker doesn't co-reside with the analysis
-            # models and OOM the server.
-            if model_cfg.get('backend') == 'local':
-                _wait_for_ollama_idle(timeout=900)
-
-            # Check for cancel after Ollama wait
-            if card_name in _cancel_single:
-                _cancel_single.discard(card_name)
-                return
-
-            success, msg = generate_card_all_faces(card_name, custom_prompt=custom_prompt,
-                                                   feedback=feedback, face=face)
-
-            # If cancelled while generating, discard result
-            if card_name in _cancel_single:
-                _cancel_single.discard(card_name)
-                print(f"[generate] {card_name} cancelled — result discarded")
-                return
-
-            if not success:
-                with generation_lock:
-                    generation_status[card_name] = {
-                        'status': 'error',
-                        'message': msg[:200],
-                        'has_raw_art': False,
-                        'has_composite': False,
-                    }
-        except Exception as e:
-            print(f"[generate] Thread error for {card_name}: {e}")
-            import traceback
-            traceback.print_exc()
-            with generation_lock:
-                generation_status[card_name] = {
-                    'status': 'error',
-                    'message': f'Error: {str(e)[:200]}',
-                    'has_raw_art': False,
-                    'has_composite': False,
-                }
-        finally:
-            _cancel_single.discard(card_name)
-
-    thread = threading.Thread(target=worker)
-    thread.start()
-
-    return jsonify({'success': True, 'message': f'Generating art for {card_name}...'})
+    job = _enqueue_art(active_deck_id, card_name, face=face,
+                       custom_prompt=custom_prompt, feedback=feedback)
+    return jsonify({'success': True, 'queued': 1, 'job_ids': [job.id],
+                    'message': f'Queued art for {card_name}'})
 
 
 @app.route('/api/generate-batch', methods=['POST'])
 def generate_batch():
-    """Generate art for multiple cards."""
-    global is_generating, batch_phase, batch_phase_detail
+    """Enqueue one art job per requested card (returns immediately)."""
     model_cfg = MODEL_OPTIONS.get(active_model_key, MODEL_OPTIONS[DEFAULT_MODEL_KEY])
     if model_cfg.get('backend', 'openai') == 'openai' and not openai_client:
         return jsonify({'error': 'API key not set'}), 400
 
-    # Atomic claim: check-and-set under the lock so two near-simultaneous
-    # POSTs (double-click / two tabs) can't both start a worker and then fight
-    # over the shared batch globals.
-    with generation_lock:
-        if is_generating:
-            return jsonify({'error': 'Batch generation already in progress'}), 400
-        is_generating = True
-        batch_phase = 'starting'
-        batch_phase_detail = 'Preparing...'
-
-    data = request.json
+    data = request.json or {}
     card_names = data.get('card_names', [])
     skip_existing = data.get('skip_existing', True)
     feedback = data.get('feedback', '')
@@ -4882,7 +4687,6 @@ def generate_batch():
         # Generate all
         card_names = [c['name'] for c in cards_db]
     elif not isinstance(card_names, list):
-        is_generating = False
         return jsonify({'error': 'card_names must be a list'}), 400
 
     face_map = {}
@@ -4927,34 +4731,66 @@ def generate_batch():
         card_names = filtered
 
     if not card_names:
-        is_generating = False  # release the claim — nothing to do
-        return jsonify({'success': True, 'message': 'All cards already generated'})
+        return jsonify({'success': True, 'queued': 0, 'message': 'All cards already generated'})
 
-    batch_phase_detail = f'Preparing to generate {len(card_names)} cards...'
-
-    # Apply same feedback to all selected cards
-    feedback_map = {name: feedback for name in card_names} if feedback else {}
-    thread = threading.Thread(target=batch_generate_worker,
-                              args=(card_names, feedback_map, face_map))
-    thread.start()
-
-    return jsonify({
-        'success': True,
-        'message': f'Queued {len(card_names)} cards for generation',
-        'count': len(card_names),
-    })
+    dname = _deck_display_name(active_deck_id)   # hoisted: one registry read for the whole batch
+    job_ids = []
+    for n in card_names:
+        job = _enqueue_art(active_deck_id, n, face=face_map.get(n, 'all'),
+                           feedback=(feedback or None), deck_name=dname)
+        job_ids.append(job.id)
+    return jsonify({'success': True, 'queued': len(job_ids), 'job_ids': job_ids,
+                    'count': len(job_ids),
+                    'message': f'Queued {len(job_ids)} cards for generation'})
 
 
 @app.route('/api/stop-batch', methods=['POST'])
 def stop_batch():
-    """Stop batch generation."""
-    global is_generating, batch_deck_id, _batch_generation_status
-    is_generating = False
-    # Clear batch state — worker's finally block will also clean up
-    with generation_lock:
-        _batch_generation_status.clear()
-        batch_deck_id = None
-    return jsonify({'success': True, 'message': 'Batch generation stopped'})
+    """Cancel the active deck's queued + running art jobs."""
+    snap = gen_queue.snapshot()
+    n = 0
+    for job in snap['queued'] + snap['running']:
+        if job['deck_id'] == active_deck_id and job['type'] == ART:
+            if gen_queue.cancel(job['id'], running_cancel_hook=_running_cancel_hook):
+                n += 1
+    return jsonify({'success': True, 'message': f'Stopped {n} art jobs'})
+
+
+# ---------------------------------------------------------------------------
+# Global generation queue — management API
+# ---------------------------------------------------------------------------
+@app.route('/api/queue')
+def api_queue():
+    """Full cross-deck queue snapshot for the drawer."""
+    return jsonify(gen_queue.snapshot())
+
+
+@app.route('/api/queue/<job_id>/cancel', methods=['POST'])
+def api_queue_cancel(job_id):
+    ok = gen_queue.cancel(job_id, running_cancel_hook=_running_cancel_hook)
+    return jsonify({'success': ok})
+
+
+@app.route('/api/queue/<job_id>/bump', methods=['POST'])
+def api_queue_bump(job_id):
+    return jsonify({'success': gen_queue.bump(job_id)})
+
+
+@app.route('/api/queue/clear-completed', methods=['POST'])
+def api_queue_clear():
+    return jsonify({'success': True, 'removed': gen_queue.clear_completed()})
+
+
+@app.route('/api/queue/pause', methods=['POST'])
+def api_queue_pause():
+    gen_queue.set_paused(True)
+    return jsonify({'success': True, 'paused': True})
+
+
+@app.route('/api/queue/resume', methods=['POST'])
+def api_queue_resume():
+    gen_queue.set_paused(False)
+    return jsonify({'success': True, 'paused': False})
 
 
 @app.route('/api/cancel-single', methods=['POST'])
@@ -4965,7 +4801,16 @@ def cancel_single():
     if not card_name:
         return jsonify({'error': 'card_name required'}), 400
 
-    _cancel_single.add(card_name)
+    # Cancel the underlying queue job(s) for this card on the active deck — a
+    # queued job drops instantly; a running one is flagged cooperatively via the
+    # hook (which also adds to _cancel_single). Without this the job stays in the
+    # queue and the /api/status overlay rewrites the badge back to 'generating'.
+    for job in gen_queue.jobs_for_deck(active_deck_id, active_only=True):
+        if job.card_name.replace(BACK_FACE_SUFFIX, '') == card_name:
+            gen_queue.cancel(job.id, running_cancel_hook=_running_cancel_hook)
+    # Belt-and-suspenders: flag the active-deck card so an in-flight render that
+    # already dequeued discards its result before writing.
+    _cancel_single.add((active_deck_id, card_name))
     with generation_lock:
         if card_name in generation_status:
             generation_status[card_name] = {
@@ -4979,16 +4824,29 @@ def cancel_single():
 
 @app.route('/api/status')
 def get_status():
-    """Get generation status for all cards.
+    """Get generation status for all cards + the global queue.
 
-    Merges batch progress when viewing the deck that owns the running batch.
-    Returns batch_deck_id so frontend knows if a batch runs on another deck.
+    Per-card badges for the active deck are the on-disk baseline overlaid with
+    the queue's active-deck jobs (queued/running). The `queue` field carries the
+    full cross-deck queue for the drawer.
     """
     with generation_lock:
         statuses = dict(generation_status)
-        # Merge batch status if viewing the batch's deck
-        if batch_deck_id and batch_deck_id == active_deck_id:
-            statuses.update(_batch_generation_status)
+    # Overlay the queue's ACTIVE-deck jobs onto the per-card badges so a queued
+    # card shows 'queued' and a running one shows 'generating' with progress —
+    # regardless of which deck owns them.
+    for job in gen_queue.jobs_for_deck(active_deck_id, active_only=True):
+        name = job.card_name
+        base = statuses.get(name, {})
+        prog = job.progress or {}
+        if job.status == 'running':
+            statuses[name] = {**base, 'status': 'generating',
+                              'message': prog.get('message', 'Generating...'),
+                              'step': prog.get('step', 0),
+                              'total_steps': prog.get('total_steps', 0)}
+        elif job.status == 'queued':
+            # Don't downgrade a card that already has a composite; just mark queued.
+            statuses[name] = {**base, 'status': 'queued', 'message': 'Queued'}
     # Attach composite_mtime to each status entry so the poller can detect
     # composite changes without re-fetching /api/cards.
     _dfc_names = {c['name'] for c in cards_db if has_second_art_face(c)}
@@ -5007,17 +4865,16 @@ def get_status():
         if extra:
             statuses[name] = {**s, **extra}
     return jsonify({
-        'is_generating': is_generating,
+        'is_generating': gen_queue.is_generating,
         'has_api_key': openai_client is not None,
         'ollama_busy': not ollama_idle.is_set(),
-        'batch_phase': batch_phase,
-        'batch_phase_detail': batch_phase_detail,
-        'batch_deck_id': batch_deck_id,
         'style_progress': style_analysis_progress,
         'model_load_progress': model_load_progress,
         'cards_rev': cards_revision,
         'ollama_pull_progress': ollama_pull_progress,
         'statuses': statuses,
+        'active_deck_id': active_deck_id,
+        'queue': gen_queue.snapshot(),
     })
 
 
@@ -7790,6 +7647,89 @@ header .separator {
   text-decoration-style: dotted; text-underline-offset: 2px;
 }
 .model-hub-change-key:hover { color: var(--text-dim); }
+
+/* --- Global generation queue --- */
+.queue-btn {
+  display: inline-flex; align-items: center; gap: 6px; position: relative;
+  background: var(--surface2, #1a1a2a); color: var(--text); cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 6px 12px; font-size: 0.85em; transition: var(--transition);
+}
+.queue-btn:hover { border-color: var(--gold-dim); }
+.queue-btn.active-jobs { border-color: var(--generating); color: var(--generating); }
+.queue-btn-icon { font-size: 1.05em; line-height: 1; }
+.queue-btn-badge {
+  background: var(--generating); color: #1a1a1a; border-radius: 10px;
+  font-size: 0.72em; font-weight: 700; padding: 1px 6px; min-width: 16px;
+  text-align: center;
+}
+.queue-scrim {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 900;
+  opacity: 0; pointer-events: none; transition: opacity 0.25s ease;
+}
+.queue-scrim.open { opacity: 1; pointer-events: auto; }
+.queue-drawer {
+  position: fixed; top: 0; right: 0; height: 100vh; width: 380px; max-width: 90vw;
+  background: var(--surface); border-left: 1px solid var(--border);
+  box-shadow: -8px 0 32px rgba(0,0,0,0.5); z-index: 950;
+  display: flex; flex-direction: column;
+  transform: translateX(100%); transition: transform 0.28s cubic-bezier(.4,0,.2,1);
+}
+.queue-drawer.open { transform: translateX(0); }
+.queue-drawer-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 18px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.queue-drawer-title { font-weight: 700; font-size: 1.02em; }
+.queue-close {
+  background: none; border: none; color: var(--text-dim); font-size: 1.5em;
+  line-height: 1; cursor: pointer; padding: 0 4px;
+}
+.queue-close:hover { color: var(--text); }
+.queue-drawer-body { flex: 1; overflow-y: auto; padding: 12px 14px; }
+.queue-drawer-foot {
+  display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.queue-empty { color: var(--text-muted); font-size: 0.85em; text-align: center;
+  padding: 40px 12px; line-height: 1.5; }
+.queue-section-label {
+  font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-muted); margin: 14px 2px 6px; font-weight: 700;
+}
+.queue-section-label:first-child { margin-top: 2px; }
+.queue-row {
+  display: flex; align-items: center; gap: 10px; padding: 9px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  margin-bottom: 6px; background: var(--surface2, #16162400);
+}
+.queue-row.running { border-color: var(--generating); }
+.queue-row-clickable { cursor: pointer; }
+.queue-row-clickable:hover { border-color: var(--gold-dim); background: var(--surface3, #22223a); }
+.queue-type {
+  font-size: 0.72em; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+  flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.03em;
+}
+.queue-type.art { background: rgba(240,192,64,0.18); color: var(--gold); }
+.queue-type.prompt { background: rgba(33,150,243,0.18); color: var(--queued); }
+.queue-type.flavor { background: rgba(76,175,80,0.18); color: var(--success); }
+.queue-row-main { flex: 1; min-width: 0; }
+.queue-row-card {
+  font-size: 0.88em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.queue-row-deck { font-size: 0.72em; color: var(--text-muted); }
+.queue-row .progress-bar { height: 4px; margin-top: 5px; max-width: none; }
+.queue-row-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.queue-row-btn {
+  background: none; border: none; color: var(--text-dim); cursor: pointer;
+  font-size: 1em; line-height: 1; padding: 3px 5px; border-radius: 4px;
+}
+.queue-row-btn:hover { color: var(--text); background: var(--surface3, #22223a); }
+.queue-row-btn.danger:hover { color: var(--error); }
+.queue-row-status { font-size: 0.72em; flex-shrink: 0; }
+.queue-row-status.done { color: var(--success); }
+.queue-row-status.failed { color: var(--error); }
+.queue-row-status.cancelled { color: var(--text-muted); }
 </style>
 </head>
 <body>
@@ -7826,10 +7766,10 @@ header .separator {
     <button class="filter-toggle" id="filterToggle" onclick="toggleFilterStrip()">
       Filter <span class="filter-dot"></span>
     </button>
-    <select id="modelSelect" onchange="changeModel()" title="Image generation model"></select>
-    <button class="models-btn" onclick="openModelHub()" title="Browse all models">Models</button>
-    <span id="costEstimate" class="cost-estimate" title="Estimated cost for remaining cards"></span>
-    <span id="modelStatus" class="model-status" style="display:none;"></span>
+    <button class="queue-btn" id="queueBtn" onclick="toggleQueueDrawer()" title="Generation queue">
+      <span class="queue-btn-icon">&#9776;</span> Queue
+      <span class="queue-btn-badge" id="queueBtnBadge" style="display:none;">0</span>
+    </button>
 
   </div>
 </header>
@@ -8632,35 +8572,59 @@ async function loadDecks() {
 }
 
 async function switchDeck() {
-  const deckId = document.getElementById('deckSelect').value;
-  if (!deckId) return;
+  await switchDeckTo(document.getElementById('deckSelect').value);
+}
 
+// Activate a specific deck and reload the UI. Returns true on success.
+async function switchDeckTo(deckId) {
+  if (!deckId) return false;
   const resp = await fetch(`/api/decks/${deckId}/activate`, { method: 'POST' });
   const data = await resp.json();
-  if (data.success) {
-    // Bust browser image cache for the new deck
-    deckCacheBust = Date.now();
-    // Reload everything
-    const [cardsResp, configResp] = await Promise.all([
-      fetch('/api/cards'),
-      fetch('/api/model-config'),
-    ]);
-    allCards = await cardsResp.json();
-    modelConfig = await configResp.json();
-    populateModelDropdown();
-    updateCostEstimate();
-    selectedCard = null;
-    checkedCards.clear();
+  if (!data.success) return false;
+  // Keep the dropdown in sync when the switch was driven programmatically.
+  const sel = document.getElementById('deckSelect');
+  if (sel && sel.value !== deckId) sel.value = deckId;
+  // Bust browser image cache for the new deck
+  deckCacheBust = Date.now();
+  const [cardsResp, configResp] = await Promise.all([
+    fetch('/api/cards'),
+    fetch('/api/model-config'),
+  ]);
+  allCards = await cardsResp.json();
+  modelConfig = await configResp.json();
+  populateModelDropdown();
+  updateCostEstimate();
+  selectedCard = null;
+  checkedCards.clear();
 
-    switchPanelTab('style');
-    renderGrid();
-    loadDecks();
-    loadDeckSettings();
-    initFrameDesigner();
-    // Update export link in deck menu
-    const exportLink = document.getElementById('deckMenuExportZip');
-    if (exportLink) exportLink.href = `/api/decks/${deckId}/export`;
+  switchPanelTab('style');
+  renderGrid();
+  loadDecks();
+  loadDeckSettings();
+  initFrameDesigner();
+  const exportLink = document.getElementById('deckMenuExportZip');
+  if (exportLink) exportLink.href = `/api/decks/${deckId}/export`;
+  return true;
+}
+
+// Clicking a queue row jumps to that card's art details, switching decks first
+// if the job belongs to another deck.
+async function openQueueJob(deckId, cardName) {
+  toggleQueueDrawer(false);
+  const isBack = cardName.endsWith(' [back]');
+  const base = isBack ? cardName.slice(0, -' [back]'.length) : cardName;
+  const activeDeck = document.getElementById('deckSelect').value;
+  if (deckId && deckId !== activeDeck) {
+    if (!(await switchDeckTo(deckId))) {
+      showToast('Could not open that deck', 'error');
+      return;
+    }
   }
+  const card = allCards.find(c => c.name === base);
+  if (!card) { showToast('Card not found in this deck', 'warning'); return; }
+  selectCard(base);
+  if (isBack && (card.is_dfc || card.is_split_halves)) setFace('back');
+  switchPanelTab('card');
 }
 
 async function renameDeck() {
@@ -9003,7 +8967,9 @@ async function doImport() {
 let _pendingModelLoad = null;  // {key, localModelKey} — set when async model load is in progress
 
 async function changeModel() {
-  const key = document.getElementById('modelSelect').value;
+  const sel = document.getElementById('modelSelect');
+  if (!sel) return;  // model picker removed from the header (single local model)
+  const key = sel.value;
   if (!key) return;  // "None" placeholder selected
   const isLocal = key.startsWith('local-');
 
@@ -9091,6 +9057,127 @@ function getActiveCostPerImage() {
 let _wasActive = false; // track if generation/analysis was active last tick
 let _lastCardsRev = null;
 
+// ── Global generation queue (drawer) ──
+let _queueOpen = false;
+let _queuePaused = false;
+
+function toggleQueueDrawer(force) {
+  _queueOpen = (force === undefined) ? !_queueOpen : !!force;
+  document.getElementById('queueDrawer').classList.toggle('open', _queueOpen);
+  document.getElementById('queueScrim').classList.toggle('open', _queueOpen);
+}
+
+function _queueTypeLabel(t) { return t === 'art' ? 'Art' : t === 'prompt' ? 'Prompt' : 'Flavor'; }
+
+function _queueRowHtml(job, kind) {
+  // kind: 'running' | 'queued' | 'recent'
+  const prog = job.progress || {};
+  const pct = prog.pct != null ? prog.pct
+    : (prog.total_steps ? Math.round(100 * (prog.step || 0) / prog.total_steps) : 0);
+  const label = job.label || job.card_name || '';
+  let mid = `<div class="queue-row-card" title="${escapeHtml(label)}">${escapeHtml(label)}</div>` +
+            `<div class="queue-row-deck">${escapeHtml(job.deck_name || '')}</div>`;
+  if (kind === 'running') {
+    const barCls = pct > 0 ? '' : 'indeterminate';
+    mid += `<div class="progress-bar"><div class="progress-bar-fill ${barCls}" style="width:${pct}%"></div></div>`;
+  }
+  // Actions use inline onclick with job.id (safe internal hex) + stopPropagation
+  // so they don't trigger the row's navigate-to-card click.
+  let actions = '';
+  if (kind === 'queued') {
+    actions = `<button class="queue-row-btn" title="Move to top" onclick="event.stopPropagation();bumpQueueJob('${job.id}')">&#10514;</button>` +
+              `<button class="queue-row-btn danger" title="Cancel" onclick="event.stopPropagation();cancelQueueJob('${job.id}')">&times;</button>`;
+  } else if (kind === 'running') {
+    actions = `<button class="queue-row-btn danger" title="Cancel (finishes current image)" onclick="event.stopPropagation();cancelQueueJob('${job.id}')">&times;</button>`;
+  } else {
+    const s = job.status;
+    const glyph = s === 'done' ? '&#10003;' : s === 'failed' ? '&#33;' : '&#8722;';
+    actions = `<span class="queue-row-status ${s}" title="${escapeHtml(job.error || s)}">${glyph}</span>`;
+  }
+  // deck id + card name ride on data attributes (attribute-escaped, no inline
+  // onclick with the card name — apostrophe-safe); a delegated listener on the
+  // drawer body opens the card's art details.
+  return `<div class="queue-row queue-row-clickable ${kind === 'running' ? 'running' : ''}" ` +
+         `data-deck="${escapeHtml(job.deck_id || '')}" data-card="${escapeHtml(job.card_name || '')}" ` +
+         `title="Open art details">` +
+         `<span class="queue-type ${job.type}">${_queueTypeLabel(job.type)}</span>` +
+         `<div class="queue-row-main">${mid}</div>` +
+         `<div class="queue-row-actions">${actions}</div></div>`;
+}
+
+// One delegated click listener: a row (outside its action buttons) opens the
+// card's art details. Wired once.
+let _queueRowClickWired = false;
+function _wireQueueRowClicks() {
+  if (_queueRowClickWired) return;
+  const body = document.getElementById('queueDrawerBody');
+  if (!body) return;
+  body.addEventListener('click', (e) => {
+    const row = e.target.closest('.queue-row-clickable');
+    if (!row) return;
+    openQueueJob(row.dataset.deck, row.dataset.card);
+  });
+  _queueRowClickWired = true;
+}
+
+function renderQueue(q) {
+  if (!q) return;
+  _wireQueueRowClicks();
+  _queuePaused = !!q.paused;
+  const active = (q.counts.running || 0) + (q.counts.queued || 0);
+  // Header badge + button state
+  const badge = document.getElementById('queueBtnBadge');
+  const btn = document.getElementById('queueBtn');
+  if (badge) {
+    badge.textContent = active;
+    badge.style.display = active > 0 ? '' : 'none';
+  }
+  if (btn) btn.classList.toggle('active-jobs', active > 0);
+  const pauseBtn = document.getElementById('queuePauseBtn');
+  if (pauseBtn) pauseBtn.textContent = _queuePaused ? 'Resume' : 'Pause';
+
+  const body = document.getElementById('queueDrawerBody');
+  if (!body) return;
+  let html = '';
+  if (q.running.length) {
+    html += '<div class="queue-section-label">Running</div>';
+    html += q.running.map(j => _queueRowHtml(j, 'running')).join('');
+  }
+  if (q.queued.length) {
+    html += `<div class="queue-section-label">Queued (${q.queued.length})</div>`;
+    html += q.queued.map(j => _queueRowHtml(j, 'queued')).join('');
+  }
+  if (q.recent.length) {
+    html += '<div class="queue-section-label">Recent</div>';
+    html += q.recent.map(j => _queueRowHtml(j, 'recent')).join('');
+  }
+  body.innerHTML = html ||
+    '<div class="queue-empty">Nothing queued. Generate art, prompts, or flavor to fill the queue.</div>';
+}
+
+async function cancelQueueJob(id) {
+  await fetch(`/api/queue/${id}/cancel`, { method: 'POST' }).catch(() => {});
+  refreshQueueSoon();
+}
+async function bumpQueueJob(id) {
+  await fetch(`/api/queue/${id}/bump`, { method: 'POST' }).catch(() => {});
+  refreshQueueSoon();
+}
+async function toggleQueuePause() {
+  await fetch(`/api/queue/${_queuePaused ? 'resume' : 'pause'}`, { method: 'POST' }).catch(() => {});
+  refreshQueueSoon();
+}
+async function clearQueueCompleted() {
+  await fetch('/api/queue/clear-completed', { method: 'POST' }).catch(() => {});
+  refreshQueueSoon();
+}
+async function refreshQueueSoon() {
+  try {
+    const q = await (await fetch('/api/queue')).json();
+    renderQueue(q);
+  } catch (e) {}
+}
+
 function startPolling() {
   if (pollInterval) clearInterval(pollInterval);
   async function poll() {
@@ -9099,6 +9186,7 @@ function startPolling() {
 
     ollamaBusy = !!data.ollama_busy;
     isGeneratingBatch = !!data.is_generating;
+    renderQueue(data.queue);
 
     // Card list changed on the server (deck reload, add/remove, backfill,
     // server restart with new capabilities) — refresh allCards so flags
@@ -9150,73 +9238,43 @@ function startPolling() {
         updateCostEstimate();
       }).catch(() => {});
     }
-    // Check if batch is running on a different deck
-    const batchDeckId = data.batch_deck_id;
-    const currentDeckId = document.getElementById('deckSelect') ? document.getElementById('deckSelect').value : null;
-    const batchOnOtherDeck = data.is_generating && batchDeckId && currentDeckId && batchDeckId !== currentDeckId;
-
-    if (data.is_generating) {
-      // Show progress mode in action bar: hide action buttons, show stop + progress
+    // Action-bar activity summary, driven by the global queue. Anything active
+    // (this deck or another) keeps the Stop + progress affordance visible.
+    const q = data.queue || { counts: {}, running: [], queued: [] };
+    const runningHere = (q.running || []).filter(j => j.deck_id === data.active_deck_id);
+    const queuedHere = (q.queued || []).filter(j => j.deck_id === data.active_deck_id);
+    const anyActive = (q.counts.running || 0) + (q.counts.queued || 0) > 0;
+    if (anyActive) {
       document.getElementById('btnStop').style.display = '';
       document.getElementById('actionBarProgress').style.display = 'flex';
-      document.getElementById('btnRegenPrompts').style.display = 'none';
-      document.getElementById('btnGenFlavor').style.display = 'none';
-      document.getElementById('btnGenArt').style.display = 'none';
-      document.getElementById('btnRenderFrames').style.display = 'none';
       const msgEl = document.getElementById('batchMessage');
-      const phase = data.batch_phase;
-      const detail = data.batch_phase_detail;
-
-      if (batchOnOtherDeck) {
-        // Batch is running on another deck — show informational message
-        document.getElementById('batchProgressFill').style.width = '';
-        document.getElementById('batchProgressFill').classList.add('indeterminate');
-        msgEl.textContent = 'Generating art on another deck...';
-      } else if (phase === 'starting') {
-        document.getElementById('batchProgressFill').classList.remove('indeterminate');
-        document.getElementById('batchProgressFill').style.width = '0%';
-        msgEl.textContent = detail || 'Preparing...';
-      } else if (phase === 'waiting_ollama') {
-        document.getElementById('batchProgressFill').classList.remove('indeterminate');
-        document.getElementById('batchProgressFill').style.width = '10%';
-        msgEl.textContent = detail || 'Waiting for style analysis to finish...';
-      } else if (phase === 'prefetching') {
-        document.getElementById('batchProgressFill').classList.remove('indeterminate');
-        const match = detail && detail.match(/\((\d+)\/(\d+)\)/);
-        if (match) {
-          const pct = Math.round((parseInt(match[1]) / parseInt(match[2])) * 100);
-          document.getElementById('batchProgressFill').style.width = pct + '%';
-        }
-        msgEl.textContent = detail || 'Downloading reference art...';
-      } else if (phase === 'loading_model') {
-        document.getElementById('batchProgressFill').classList.add('indeterminate');
-        msgEl.textContent = detail || 'Loading image model...';
+      const fill = document.getElementById('batchProgressFill');
+      const running = runningHere[0];
+      if (running) {
+        const prog = running.progress || {};
+        const pct = prog.pct != null ? prog.pct
+          : (prog.total_steps ? Math.round(100 * (prog.step || 0) / prog.total_steps) : 0);
+        fill.classList.toggle('indeterminate', pct <= 0);
+        fill.style.width = pct + '%';
+        msgEl.textContent = `Rendering ${running.label}${queuedHere.length ? ` · ${queuedHere.length} queued` : ''}`;
+      } else if (queuedHere.length) {
+        fill.classList.add('indeterminate');
+        msgEl.textContent = `${queuedHere.length} queued on this deck`;
       } else {
-        // Phase is 'generating' — show card-level progress
-        document.getElementById('batchProgressFill').classList.remove('indeterminate');
-        const done = allCards.filter(c => c.status === 'complete' && c.has_composite).length;
-        const total = allCards.length;
-        const pct = (done / total * 100).toFixed(0);
-        document.getElementById('batchProgressFill').style.width = pct + '%';
-        msgEl.textContent = '';
+        fill.classList.add('indeterminate');
+        msgEl.textContent = 'Working on another deck…';
       }
     } else {
-      // Restore action buttons, hide progress — but NOT if another bulk op owns the bar
       document.getElementById('btnStop').style.display = 'none';
       if (!_bulkOpActive) {
         document.getElementById('actionBarProgress').style.display = 'none';
         document.getElementById('batchProgressFill').classList.remove('indeterminate');
-      }
-      document.getElementById('btnRegenPrompts').style.display = '';
-      document.getElementById('btnGenFlavor').style.display = '';
-      document.getElementById('btnGenArt').style.display = '';
-      document.getElementById('btnRenderFrames').style.display = '';
-      const msgEl = document.getElementById('batchMessage');
-      if (msgEl.textContent.startsWith('Preparing') ||
-          msgEl.textContent.startsWith('Waiting for style') ||
-          msgEl.textContent.startsWith('Downloading reference') ||
-          msgEl.textContent.startsWith('Generating art on another')) {
-        msgEl.textContent = '';
+        const msgEl = document.getElementById('batchMessage');
+        if (msgEl.textContent.startsWith('Rendering') ||
+            msgEl.textContent.startsWith('Working on') ||
+            msgEl.textContent.endsWith('queued on this deck')) {
+          msgEl.textContent = '';
+        }
       }
     }
 
@@ -9286,7 +9344,8 @@ function startPolling() {
         updateToast(toastId, 'Load failed: ' + (mlp.message || ''), 'error');
         if (_pendingModelLoad) {
           // Revert dropdown to previous model
-          document.getElementById('modelSelect').value = modelConfig.active;
+          const _msel = document.getElementById('modelSelect');
+          if (_msel) _msel.value = modelConfig.active;
           _pendingModelLoad = null;
         }
       } else {
@@ -9772,7 +9831,7 @@ function renderActionArea(card) {
       <button class="detail-action-primary btn-generating" disabled>
         <span class="generating-dot"></span> ${label}
       </button>
-      ${!isGeneratingBatch ? `<button class="detail-generate-new" onclick="cancelCurrentGeneration()">Cancel</button>` : ''}`;
+      <button class="detail-generate-new" onclick="cancelCurrentGeneration()">Cancel</button>`;
   } else if (card.status === 'queued') {
     const label = ollamaBusy ? 'Waiting for analysis...' : 'Queued...';
     area.innerHTML = `
@@ -10208,12 +10267,9 @@ async function generateCurrent(btn) {
         face: face,
       }),
     });
-    if (!resp.ok) {
-      const data = await resp.json().catch(() => ({}));
-      showToast(data.error || 'Generation failed', 'error');
-    }
-    // Kick fast polling to pick up real status
-    startPolling();
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) showToast(data.error || 'Generation failed', 'error');
+    startPolling();  // the queue badge/drawer signals the enqueue
   } catch (e) {
     showToast('Network error: ' + e.message, 'error');
   }
@@ -10233,33 +10289,21 @@ async function regenerateCurrent(btn) {
   const face = (selCard && (selCard.is_dfc || selCard.is_split_halves)) ? selectedFace : 'all';
 
   _showGeneratingState(selectedCard);
-  if (btn) { btn.disabled = true; btn.textContent = 'Steering…'; }
+  if (btn) { btn.disabled = true; }
   try {
-    // 1) Regenerate the prompt, steered by the user's direction.
-    const resp = await fetch(`/api/decks/${deckId}/regenerate-prompts`, {
+    // Chain two queued jobs: a steered prompt-regen, then an art render for
+    // the same card. FIFO order + fresh per-job deck load means the art job
+    // reads the newly-written prompt. Both enqueue instantly — no waiting.
+    const r1 = await fetch(`/api/decks/${deckId}/regenerate-prompts`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ use_ai: true, card_names: [promptKey], steer }),
     });
-    const data = await resp.json();
-    if (!data.success) { showToast(data.error || 'Failed to regenerate prompt', 'error'); return; }
+    const d1 = await r1.json();
+    if (!d1.success) { showToast(d1.error || 'Failed to queue prompt', 'error'); return; }
 
-    // 2) Wait for the new prompt.
-    const jobId = data.job_id;
-    await pollJobProgress(`/api/regen-prompts/progress/${jobId}`);
-
-    // 3) Pull the steered prompt into the field, then render art from it.
-    const cards = await (await fetch('/api/cards')).json();
-    allCards = cards;
-    const card = allCards.find(c => c.name === selectedCard);
-    const newPrompt = card ? cleanScenePrompt(isBack ? (card.back_prompt || '') : card.prompt)
-                           : document.getElementById('detailPrompt').value;
-    const promptEl = document.getElementById('detailPrompt');
-    if (promptEl) promptEl.value = newPrompt;
-
-    if (btn) btn.textContent = 'Generating…';
     await fetch('/api/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ card_name: selectedCard, custom_prompt: newPrompt, face: face }),
+      body: JSON.stringify({ card_name: selectedCard, face: face }),  // no custom_prompt → uses the regenerated one
     });
     startPolling();
   } catch (e) {
@@ -10320,8 +10364,6 @@ async function regeneratePromptForCard() {
   }
 
   try {
-    // Target the face being viewed — "<name> [back]" regenerates the DFC
-    // back / split right-half prompt instead of the front's
     const _rpCard = allCards.find(c => c.name === selectedCard);
     const _rpKey = faceKeyFor(_rpCard);
     const resp = await fetch(`/api/decks/${deckId}/regenerate-prompts`, {
@@ -10330,27 +10372,8 @@ async function regeneratePromptForCard() {
       body: JSON.stringify({ use_ai: useAi, card_names: [_rpKey] }),
     });
     const data = await resp.json();
-    if (!data.success) {
-      showToast(data.error || 'Failed to regenerate prompt', 'error');
-      btn.disabled = false;
-      btn.textContent = 'Generate Random';
-      return;
-    }
-
-    // Poll for completion
-    const jobId = data.job_id;
-    btn.textContent = 'Generating…';
-    await pollJobProgress(`/api/regen-prompts/progress/${jobId}`, null, 1000);
-    // Reload cards to get updated prompt
-    const cards = await (await fetch('/api/cards')).json();
-    allCards = cards;
-    const card = allCards.find(c => c.name === selectedCard);
-    if (card) {
-      document.getElementById('detailPrompt').value = cleanScenePrompt(
-        viewingBack(card) ? (card.back_prompt || '') : card.prompt);
-      updateDetailPanel(card);
-    }
-    showToast('Prompt regenerated', 'success');
+    if (!data.success) showToast(data.error || 'Failed to queue prompt', 'error');
+    else startPolling();
   } catch (e) {
     showToast(e.message || 'Network error', 'error');
   } finally {
@@ -10374,15 +10397,6 @@ async function generateFlavorText() {
   });
   if (!dialogResult) return;
 
-  const progressFill = document.getElementById('batchProgressFill');
-  const batchMessage = document.getElementById('batchMessage');
-
-  disableBulkButtons();
-  batchMessage.textContent = 'Starting flavor text generation...';
-  progressFill.style.width = '0%';
-  progressFill.style.background = '';
-  progressFill.classList.remove('indeterminate');
-
   try {
     const resp = await fetch(`/api/decks/${deckId}/generate-flavor-text`, {
       method: 'POST',
@@ -10391,41 +10405,13 @@ async function generateFlavorText() {
     });
     const data = await resp.json();
     if (!data.success) {
-      batchMessage.textContent = data.error || 'Failed';
-      enableBulkButtons();
+      showToast(data.error || 'Failed to queue flavor text', 'error');
       return;
     }
-
-    const jobId = data.job_id;
-
-    const result = await pollJobProgress(`/api/flavor-text/progress/${jobId}`, (prog) => {
-      batchMessage.textContent = 'Generating flavor text...';
-      if (prog.total > 0) {
-        batchMessage.textContent = `Generating flavor text: ${prog.step} / ${prog.total}`;
-        progressFill.style.width = Math.round((prog.step / prog.total) * 100) + '%';
-      }
-    }, 1000);
-    if (result.error) throw new Error(result.error);
-
-    batchMessage.textContent = result.message || 'Done!';
-    progressFill.style.width = '100%';
-    progressFill.style.background = 'var(--success, #4caf50)';
-
-    // Reload cards to get updated flavor text
-    const cardsResp = await fetch('/api/cards');
-    const cards = await cardsResp.json();
-    allCards = cards;
-    renderGrid();
-    if (selectedCard) {
-      const card = allCards.find(c => c.name === selectedCard);
-      if (card) updateDetailPanel(card);
-    }
-
+    toggleQueueDrawer(true);
+    startPolling();
   } catch (e) {
-    batchMessage.textContent = `Error: ${e.message || 'Unknown'}`;
-    progressFill.style.background = 'var(--error, #f44336)';
-  } finally {
-    enableBulkButtons();
+    showToast('Network error: ' + (e.message || ''), 'error');
   }
 }
 
@@ -10452,15 +10438,7 @@ async function generateFlavorTextForCard() {
       return;
     }
 
-    const jobId = data.job_id;
-    btn.textContent = 'Generating...';
-    await pollJobProgress(`/api/flavor-text/progress/${jobId}`, null, 1000);
-    // Reload cards to get updated flavor text
-    const cards = await (await fetch('/api/cards')).json();
-    allCards = cards;
-    const card = allCards.find(c => c.name === selectedCard);
-    if (card) updateDetailPanel(card);
-    renderGrid();
+    startPolling();
   } catch (e) {
     showToast(e.message || 'Network error', 'error');
   } finally {
@@ -10534,19 +10512,10 @@ async function generateArt() {
     });
     const batchResult = await resp.json();
     if (batchResult.success) {
-      // Instant feedback — show progress in action bar
-      document.getElementById('batchMessage').textContent = 'Preparing...';
-      document.getElementById('actionBarProgress').style.display = 'flex';
-      document.getElementById('batchProgressFill').style.width = '0%';
-      document.getElementById('btnStop').style.display = '';
-      document.getElementById('btnRegenPrompts').style.display = 'none';
-      document.getElementById('btnGenFlavor').style.display = 'none';
-      document.getElementById('btnGenArt').style.display = 'none';
-      document.getElementById('btnRenderFrames').style.display = 'none';
+      toggleQueueDrawer(true);
+      startPolling();
     } else {
-      // e.g. a batch is already running on another deck — say so instead of
-      // silently doing nothing after the dialog closed.
-      showToast(batchResult.error || 'Failed to start batch', 'error');
+      showToast(batchResult.error || 'Failed to queue art', 'error');
     }
   } catch (e) {
     showToast('Network error starting batch', 'error');
@@ -12274,15 +12243,6 @@ async function regeneratePrompts() {
   if (!result) return;
   const useAi = result.useAi;
 
-  const progressFill = document.getElementById('batchProgressFill');
-  const batchMessage = document.getElementById('batchMessage');
-
-  disableBulkButtons();
-  batchMessage.textContent = 'Starting prompt generation...';
-  progressFill.style.width = '0%';
-  progressFill.style.background = '';
-  progressFill.classList.remove('indeterminate');
-
   try {
     const resp = await fetch(`/api/decks/${deckId}/regenerate-prompts`, {
       method: 'POST',
@@ -12291,75 +12251,15 @@ async function regeneratePrompts() {
     });
     const data = await resp.json();
     if (!data.success) {
-      batchMessage.textContent = data.error || 'Failed';
+      showToast(data.error || 'Failed to queue prompts', 'error');
       return;
     }
-
-    const jobId = data.job_id;
-
-    // Poll for progress — use unified pct (0-100) from backend
-    let lastUpdatedCount = 0;
-    let _lastRegenPct = 0;
-    const result = await pollJobProgress(`/api/regen-prompts/progress/${jobId}`, (prog) => {
-      batchMessage.textContent = prog.message || 'Generating prompts...';
-      // Use the backend's unified percentage (0-100). Clamp so it never goes
-      // backward (prevents oscillation while the LLM works through a batch).
-      const pct = Math.max(prog.pct || 0, _lastRegenPct);
-      if (pct > _lastRegenPct) {
-        progressFill.classList.remove('indeterminate');
-      } else if (!prog.done) {
-        progressFill.classList.add('indeterminate');
-      }
-      progressFill.style.width = pct + '%';
-      _lastRegenPct = pct;
-
-      // Refresh card data incrementally as prompts are generated (fire-and-forget)
-      const updatedCards = prog.updated_cards || [];
-      if (updatedCards.length > lastUpdatedCount) {
-        lastUpdatedCount = updatedCards.length;
-        fetch('/api/cards').then(r => r.json()).then(cs => {
-          allCards = cs;
-          renderGrid();
-          if (selectedCard) {
-            const card = allCards.find(c => c.name === selectedCard);
-            if (card) updateDetailPanel(card);
-          }
-        }).catch(() => {});
-      }
-    }, 500);
-    if (result.error) throw new Error(result.error);
-
-    // Success
-    progressFill.classList.remove('indeterminate');
-    progressFill.style.width = '100%';
-    batchMessage.textContent = result.message || `Regenerated ${result.count} prompts!`;
-    showToast(result.message || `Regenerated ${result.count} prompts!`, 'success');
-    if (result.ai_fallback) {
-      showToast('AI backend unavailable — used rule-based prompts.', 'warning');
-    }
-    if (result.local_prompt_warning) {
-      showToast(`${result.local_prompt_warning} cards got basic prompts (LLM enhancement failed). Try Generate Random on individual cards.`, 'warning');
-    }
-
-    // Reload cards to get new prompts
-    const cardsResp = await fetch('/api/cards');
-    allCards = await cardsResp.json();
-    renderGrid();
-    if (selectedCard) {
-      const card = allCards.find(c => c.name === selectedCard);
-      if (card) updateDetailPanel(card);
-    }
-
-    // Remove next-step hint since prompts now exist
+    toggleQueueDrawer(true);
+    startPolling();
     const nextHint = document.querySelector('.next-step-hint');
     if (nextHint) nextHint.remove();
-
   } catch (e) {
-    batchMessage.textContent = `Failed: ${e.message}`;
-    progressFill.style.width = '0%';
-    progressFill.style.background = 'var(--error)';
-  } finally {
-    enableBulkButtons();
+    showToast('Network error: ' + (e.message || ''), 'error');
   }
 }
 
@@ -12748,10 +12648,20 @@ function updateModelHubProgress(mlp) {
 }
 
 async function selectModelFromHub(key) {
-  // Set the dropdown and trigger changeModel
+  // Header dropdown removed (single local model); post the selection directly.
   const select = document.getElementById('modelSelect');
-  select.value = key;
-  await changeModel();
+  if (select) {
+    select.value = key;
+    await changeModel();
+  } else {
+    await fetch('/api/model-config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model_key: key}),
+    });
+    const cfg = await fetch('/api/model-config').then(r => r.json());
+    modelConfig = cfg;
+  }
   // Refresh the hub to update active state
   openModelHub();
 }
@@ -12796,6 +12706,20 @@ init();
 </div>
 
 <!-- Toast Container -->
+<div id="queueScrim" class="queue-scrim" onclick="toggleQueueDrawer(false)"></div>
+<aside id="queueDrawer" class="queue-drawer" aria-label="Generation queue">
+  <div class="queue-drawer-head">
+    <span class="queue-drawer-title">Generation Queue</span>
+    <button class="queue-close" onclick="toggleQueueDrawer(false)" title="Close">&times;</button>
+  </div>
+  <div class="queue-drawer-body" id="queueDrawerBody">
+    <div class="queue-empty">Nothing queued. Generate art, prompts, or flavor to fill the queue.</div>
+  </div>
+  <div class="queue-drawer-foot">
+    <button class="btn btn-ghost btn-sm" id="queuePauseBtn" onclick="toggleQueuePause()">Pause</button>
+    <button class="btn btn-ghost btn-sm" onclick="clearQueueCompleted()">Clear finished</button>
+  </div>
+</aside>
 <div id="toastContainer"></div>
 
 </body>
@@ -12853,6 +12777,10 @@ if __name__ == '__main__':
         COMPOSITE_DIR.mkdir(parents=True, exist_ok=True)
         VERSIONS_DIR.mkdir(parents=True, exist_ok=True)
         load_data()
+
+    # Launch the global generation-queue worker (one daemon thread that drains
+    # art/prompt/flavor jobs FIFO, above decks).
+    gen_queue.start(_execute_job)
 
     # Auto-download MTG fonts (Beleren + MPlantin) if missing
     try:

@@ -146,11 +146,17 @@ class TestApiStopBatch:
         resp = client.post('/api/stop-batch')
         assert resp.status_code == 200
 
-    def test_stop_clears_flag(self, client):
-        deck_studio.is_generating = True
+    def test_stop_cancels_active_deck_art_jobs(self, client, populated_state):
+        # stop-batch now cancels the active deck's queued art jobs on the
+        # global queue (is_generating is derived from the queue worker).
+        job = deck_studio.gen_queue.enqueue(
+            deck_studio.Job(type=deck_studio.ART,
+                            deck_id=deck_studio.active_deck_id,
+                            card_name='Sol Ring'))
         resp = client.post('/api/stop-batch')
         assert resp.status_code == 200
-        assert deck_studio.is_generating is False
+        assert deck_studio.gen_queue.get(job.id).status == 'cancelled'
+        deck_studio.gen_queue.clear_completed()
 
 
 class TestApiCancelSingle:
@@ -158,7 +164,9 @@ class TestApiCancelSingle:
         resp = client.post('/api/cancel-single',
                            json={'card_name': 'Sol Ring'})
         assert resp.status_code == 200
-        assert 'Sol Ring' in deck_studio._cancel_single
+        # Cancel flags are keyed by (deck_id, card_name) so a cancel on one deck
+        # can't discard a same-named card's art on another deck.
+        assert (deck_studio.active_deck_id, 'Sol Ring') in deck_studio._cancel_single
 
 
 class TestApiSavePrompt:
