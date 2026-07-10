@@ -7668,6 +7668,8 @@ header .separator {
   margin-bottom: 6px; background: var(--surface2, #16162400);
 }
 .queue-row.running { border-color: var(--generating); }
+.queue-row-clickable { cursor: pointer; }
+.queue-row-clickable:hover { border-color: var(--gold-dim); background: var(--surface3, #22223a); }
 .queue-type {
   font-size: 0.72em; font-weight: 700; padding: 2px 6px; border-radius: 4px;
   flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.03em;
@@ -7728,11 +7730,6 @@ header .separator {
     <button class="filter-toggle" id="filterToggle" onclick="toggleFilterStrip()">
       Filter <span class="filter-dot"></span>
     </button>
-    <select id="modelSelect" onchange="changeModel()" title="Image generation model"></select>
-    <button class="models-btn" onclick="openModelHub()" title="Browse all models">Models</button>
-    <span id="costEstimate" class="cost-estimate" title="Estimated cost for remaining cards"></span>
-    <span id="modelStatus" class="model-status" style="display:none;"></span>
-
     <button class="queue-btn" id="queueBtn" onclick="toggleQueueDrawer()" title="Generation queue">
       <span class="queue-btn-icon">&#9776;</span> Queue
       <span class="queue-btn-badge" id="queueBtnBadge" style="display:none;">0</span>
@@ -8539,35 +8536,59 @@ async function loadDecks() {
 }
 
 async function switchDeck() {
-  const deckId = document.getElementById('deckSelect').value;
-  if (!deckId) return;
+  await switchDeckTo(document.getElementById('deckSelect').value);
+}
 
+// Activate a specific deck and reload the UI. Returns true on success.
+async function switchDeckTo(deckId) {
+  if (!deckId) return false;
   const resp = await fetch(`/api/decks/${deckId}/activate`, { method: 'POST' });
   const data = await resp.json();
-  if (data.success) {
-    // Bust browser image cache for the new deck
-    deckCacheBust = Date.now();
-    // Reload everything
-    const [cardsResp, configResp] = await Promise.all([
-      fetch('/api/cards'),
-      fetch('/api/model-config'),
-    ]);
-    allCards = await cardsResp.json();
-    modelConfig = await configResp.json();
-    populateModelDropdown();
-    updateCostEstimate();
-    selectedCard = null;
-    checkedCards.clear();
+  if (!data.success) return false;
+  // Keep the dropdown in sync when the switch was driven programmatically.
+  const sel = document.getElementById('deckSelect');
+  if (sel && sel.value !== deckId) sel.value = deckId;
+  // Bust browser image cache for the new deck
+  deckCacheBust = Date.now();
+  const [cardsResp, configResp] = await Promise.all([
+    fetch('/api/cards'),
+    fetch('/api/model-config'),
+  ]);
+  allCards = await cardsResp.json();
+  modelConfig = await configResp.json();
+  populateModelDropdown();
+  updateCostEstimate();
+  selectedCard = null;
+  checkedCards.clear();
 
-    switchPanelTab('style');
-    renderGrid();
-    loadDecks();
-    loadDeckSettings();
-    initFrameDesigner();
-    // Update export link in deck menu
-    const exportLink = document.getElementById('deckMenuExportZip');
-    if (exportLink) exportLink.href = `/api/decks/${deckId}/export`;
+  switchPanelTab('style');
+  renderGrid();
+  loadDecks();
+  loadDeckSettings();
+  initFrameDesigner();
+  const exportLink = document.getElementById('deckMenuExportZip');
+  if (exportLink) exportLink.href = `/api/decks/${deckId}/export`;
+  return true;
+}
+
+// Clicking a queue row jumps to that card's art details, switching decks first
+// if the job belongs to another deck.
+async function openQueueJob(deckId, cardName) {
+  toggleQueueDrawer(false);
+  const isBack = cardName.endsWith(' [back]');
+  const base = isBack ? cardName.slice(0, -' [back]'.length) : cardName;
+  const activeDeck = document.getElementById('deckSelect').value;
+  if (deckId && deckId !== activeDeck) {
+    if (!(await switchDeckTo(deckId))) {
+      showToast('Could not open that deck', 'error');
+      return;
+    }
   }
+  const card = allCards.find(c => c.name === base);
+  if (!card) { showToast('Card not found in this deck', 'warning'); return; }
+  selectCard(base);
+  if (isBack && (card.is_dfc || card.is_split_halves)) setFace('back');
+  switchPanelTab('card');
 }
 
 async function renameDeck() {
@@ -8910,7 +8931,9 @@ async function doImport() {
 let _pendingModelLoad = null;  // {key, localModelKey} — set when async model load is in progress
 
 async function changeModel() {
-  const key = document.getElementById('modelSelect').value;
+  const sel = document.getElementById('modelSelect');
+  if (!sel) return;  // model picker removed from the header (single local model)
+  const key = sel.value;
   if (!key) return;  // "None" placeholder selected
   const isLocal = key.startsWith('local-');
 
@@ -9022,25 +9045,48 @@ function _queueRowHtml(job, kind) {
     const barCls = pct > 0 ? '' : 'indeterminate';
     mid += `<div class="progress-bar"><div class="progress-bar-fill ${barCls}" style="width:${pct}%"></div></div>`;
   }
+  // Actions use inline onclick with job.id (safe internal hex) + stopPropagation
+  // so they don't trigger the row's navigate-to-card click.
   let actions = '';
   if (kind === 'queued') {
-    actions = `<button class="queue-row-btn" title="Move to top" onclick="bumpQueueJob('${job.id}')">&#10514;</button>` +
-              `<button class="queue-row-btn danger" title="Cancel" onclick="cancelQueueJob('${job.id}')">&times;</button>`;
+    actions = `<button class="queue-row-btn" title="Move to top" onclick="event.stopPropagation();bumpQueueJob('${job.id}')">&#10514;</button>` +
+              `<button class="queue-row-btn danger" title="Cancel" onclick="event.stopPropagation();cancelQueueJob('${job.id}')">&times;</button>`;
   } else if (kind === 'running') {
-    actions = `<button class="queue-row-btn danger" title="Cancel (finishes current image)" onclick="cancelQueueJob('${job.id}')">&times;</button>`;
+    actions = `<button class="queue-row-btn danger" title="Cancel (finishes current image)" onclick="event.stopPropagation();cancelQueueJob('${job.id}')">&times;</button>`;
   } else {
     const s = job.status;
     const glyph = s === 'done' ? '&#10003;' : s === 'failed' ? '&#33;' : '&#8722;';
     actions = `<span class="queue-row-status ${s}" title="${escapeHtml(job.error || s)}">${glyph}</span>`;
   }
-  return `<div class="queue-row ${kind === 'running' ? 'running' : ''}">` +
+  // deck id + card name ride on data attributes (attribute-escaped, no inline
+  // onclick with the card name — apostrophe-safe); a delegated listener on the
+  // drawer body opens the card's art details.
+  return `<div class="queue-row queue-row-clickable ${kind === 'running' ? 'running' : ''}" ` +
+         `data-deck="${escapeHtml(job.deck_id || '')}" data-card="${escapeHtml(job.card_name || '')}" ` +
+         `title="Open art details">` +
          `<span class="queue-type ${job.type}">${_queueTypeLabel(job.type)}</span>` +
          `<div class="queue-row-main">${mid}</div>` +
          `<div class="queue-row-actions">${actions}</div></div>`;
 }
 
+// One delegated click listener: a row (outside its action buttons) opens the
+// card's art details. Wired once.
+let _queueRowClickWired = false;
+function _wireQueueRowClicks() {
+  if (_queueRowClickWired) return;
+  const body = document.getElementById('queueDrawerBody');
+  if (!body) return;
+  body.addEventListener('click', (e) => {
+    const row = e.target.closest('.queue-row-clickable');
+    if (!row) return;
+    openQueueJob(row.dataset.deck, row.dataset.card);
+  });
+  _queueRowClickWired = true;
+}
+
 function renderQueue(q) {
   if (!q) return;
+  _wireQueueRowClicks();
   _queuePaused = !!q.paused;
   const active = (q.counts.running || 0) + (q.counts.queued || 0);
   // Header badge + button state
@@ -9262,7 +9308,8 @@ function startPolling() {
         updateToast(toastId, 'Load failed: ' + (mlp.message || ''), 'error');
         if (_pendingModelLoad) {
           // Revert dropdown to previous model
-          document.getElementById('modelSelect').value = modelConfig.active;
+          const _msel = document.getElementById('modelSelect');
+          if (_msel) _msel.value = modelConfig.active;
           _pendingModelLoad = null;
         }
       } else {
@@ -10185,12 +10232,8 @@ async function generateCurrent(btn) {
       }),
     });
     const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) {
-      showToast(data.error || 'Generation failed', 'error');
-    } else {
-      showToast('Queued for rendering', 'success');
-    }
-    startPolling();  // picks up queue state on the next tick
+    if (!resp.ok) showToast(data.error || 'Generation failed', 'error');
+    startPolling();  // the queue badge/drawer signals the enqueue
   } catch (e) {
     showToast('Network error: ' + e.message, 'error');
   }
@@ -10226,7 +10269,6 @@ async function regenerateCurrent(btn) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ card_name: selectedCard, face: face }),  // no custom_prompt → uses the regenerated one
     });
-    showToast('Queued: steer prompt → render', 'success');
     startPolling();
   } catch (e) {
     showToast('Network error: ' + e.message, 'error');
@@ -10294,12 +10336,8 @@ async function regeneratePromptForCard() {
       body: JSON.stringify({ use_ai: useAi, card_names: [_rpKey] }),
     });
     const data = await resp.json();
-    if (!data.success) {
-      showToast(data.error || 'Failed to queue prompt', 'error');
-    } else {
-      showToast('Queued prompt regeneration', 'success');
-      startPolling();
-    }
+    if (!data.success) showToast(data.error || 'Failed to queue prompt', 'error');
+    else startPolling();
   } catch (e) {
     showToast(e.message || 'Network error', 'error');
   } finally {
@@ -10334,7 +10372,6 @@ async function generateFlavorText() {
       showToast(data.error || 'Failed to queue flavor text', 'error');
       return;
     }
-    showToast(`Queued flavor text for ${data.queued} card${data.queued === 1 ? '' : 's'}`, 'success');
     toggleQueueDrawer(true);
     startPolling();
   } catch (e) {
@@ -10365,7 +10402,6 @@ async function generateFlavorTextForCard() {
       return;
     }
 
-    showToast('Queued flavor text', 'success');
     startPolling();
   } catch (e) {
     showToast(e.message || 'Network error', 'error');
@@ -10440,7 +10476,6 @@ async function generateArt() {
     });
     const batchResult = await resp.json();
     if (batchResult.success) {
-      showToast(`Queued ${batchResult.queued} card${batchResult.queued === 1 ? '' : 's'} for rendering`, 'success');
       toggleQueueDrawer(true);
       startPolling();
     } else {
@@ -12183,7 +12218,6 @@ async function regeneratePrompts() {
       showToast(data.error || 'Failed to queue prompts', 'error');
       return;
     }
-    showToast(`Queued ${data.queued} prompt${data.queued === 1 ? '' : 's'}`, 'success');
     toggleQueueDrawer(true);
     startPolling();
     const nextHint = document.querySelector('.next-step-hint');
@@ -12578,10 +12612,20 @@ function updateModelHubProgress(mlp) {
 }
 
 async function selectModelFromHub(key) {
-  // Set the dropdown and trigger changeModel
+  // Header dropdown removed (single local model); post the selection directly.
   const select = document.getElementById('modelSelect');
-  select.value = key;
-  await changeModel();
+  if (select) {
+    select.value = key;
+    await changeModel();
+  } else {
+    await fetch('/api/model-config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model_key: key}),
+    });
+    const cfg = await fetch('/api/model-config').then(r => r.json());
+    modelConfig = cfg;
+  }
   // Refresh the hub to update active state
   openModelHub();
 }
