@@ -10,10 +10,9 @@ import deck_studio
 # Global state snapshot/restore — prevents test pollution
 # ---------------------------------------------------------------------------
 _GLOBALS_TO_SAVE = [
-    'cards_db', 'prompts_map', 'generation_status', 'is_generating',
+    'cards_db', 'prompts_map', 'generation_status',
     'active_deck_id', 'active_deck_meta', 'active_model_key',
-    'batch_phase', 'batch_phase_detail',
-    'batch_deck_id', 'openai_client', 'ref_image_b64',
+    'openai_client', 'ref_image_b64',
     'cards_revision', 'style_analysis_progress',
     'active_inspiration_path', 'active_inspiration_paths',
     # Path globals mutated by deck activation — restore so a test that switches
@@ -34,9 +33,8 @@ def _reset_global_state():
         else:
             saved[name] = val
 
-    # Also snapshot sets and events
+    # Also snapshot the cancel set
     cancel_set = set(deck_studio._cancel_single)
-    batch_status = copy.deepcopy(deck_studio._batch_generation_status)
 
     yield
 
@@ -44,8 +42,6 @@ def _reset_global_state():
         setattr(deck_studio, name, val)
     deck_studio._cancel_single.clear()
     deck_studio._cancel_single.update(cancel_set)
-    deck_studio._batch_generation_status.clear()
-    deck_studio._batch_generation_status.update(batch_status)
 
 
 # ---------------------------------------------------------------------------

@@ -146,11 +146,17 @@ class TestApiStopBatch:
         resp = client.post('/api/stop-batch')
         assert resp.status_code == 200
 
-    def test_stop_clears_flag(self, client):
-        deck_studio.is_generating = True
+    def test_stop_cancels_active_deck_art_jobs(self, client, populated_state):
+        # stop-batch now cancels the active deck's queued art jobs on the
+        # global queue (is_generating is derived from the queue worker).
+        job = deck_studio.gen_queue.enqueue(
+            deck_studio.Job(type=deck_studio.ART,
+                            deck_id=deck_studio.active_deck_id,
+                            card_name='Sol Ring'))
         resp = client.post('/api/stop-batch')
         assert resp.status_code == 200
-        assert deck_studio.is_generating is False
+        assert deck_studio.gen_queue.get(job.id).status == 'cancelled'
+        deck_studio.gen_queue.clear_completed()
 
 
 class TestApiCancelSingle:
