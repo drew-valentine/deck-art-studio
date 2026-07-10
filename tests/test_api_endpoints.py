@@ -164,7 +164,9 @@ class TestApiCancelSingle:
         resp = client.post('/api/cancel-single',
                            json={'card_name': 'Sol Ring'})
         assert resp.status_code == 200
-        assert 'Sol Ring' in deck_studio._cancel_single
+        # Cancel flags are keyed by (deck_id, card_name) so a cancel on one deck
+        # can't discard a same-named card's art on another deck.
+        assert (deck_studio.active_deck_id, 'Sol Ring') in deck_studio._cancel_single
 
 
 class TestApiSavePrompt:

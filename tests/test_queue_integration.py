@@ -87,6 +87,27 @@ class TestQueueManagementApi:
         assert client.post('/api/queue/clear-completed').get_json()['removed'] >= 1
 
 
+class TestCancelSingleFixes:
+    """Regressions for the cross-deck cancel bugs (findings 2 & 3)."""
+
+    def test_cancel_single_cancels_the_queue_job(self, client, populated_state):
+        # /api/cancel-single must actually drop the underlying queue job, not
+        # merely flip a badge the status overlay would then revert.
+        name = ds.cards_db[0]['name']
+        jid = client.post('/api/generate', json={'card_name': name}
+                          ).get_json()['job_ids'][0]
+        assert ds.gen_queue.get(jid).status == 'queued'
+        client.post('/api/cancel-single', json={'card_name': name})
+        assert ds.gen_queue.get(jid).status == 'cancelled'
+
+    def test_cancel_flag_is_deck_scoped(self, client, populated_state):
+        # Cancelling the active deck's card flags only THAT (deck, card) — a
+        # same-named card on another deck is untouched.
+        client.post('/api/cancel-single', json={'card_name': 'Sol Ring'})
+        assert ds._is_cancel_flagged(ds.active_deck_id, 'Sol Ring')
+        assert not ds._is_cancel_flagged('some-other-deck', 'Sol Ring')
+
+
 class TestExecutorDeckScoping:
     def test_prompt_executor_writes_only_its_deck(self, tmp_path, monkeypatch):
         # Two decks on disk; run a PROMPT job for deck B while deck A is active.

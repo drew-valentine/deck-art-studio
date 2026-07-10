@@ -192,6 +192,26 @@ class GenerationQueue:
                     n += 1
         return n
 
+    def wait_for_deck_idle(self, deck_id: str, timeout: float = 120.0) -> bool:
+        """Block until no RUNNING job belongs to ``deck_id`` (or timeout).
+
+        Used on deck delete: a cooperative cancel only *flags* the in-flight
+        job, so the worker may still be mid-render (and would recreate the deck
+        directory it's writing into). Waiting for the worker to drain that job
+        before ``rmtree`` avoids resurrecting a zombie deck folder. Returns True
+        if the deck went idle, False on timeout."""
+        deadline = time.time() + timeout
+        with self._cond:
+            while True:
+                running = next((j for j in self._jobs
+                                if j.id == self._running_id), None)
+                if running is None or running.deck_id != deck_id:
+                    return True
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return False
+                self._cond.wait(timeout=min(remaining, 1.0))
+
     def bump(self, job_id: str) -> bool:
         """Move a queued job to the front (above all other queued jobs)."""
         with self._cond:

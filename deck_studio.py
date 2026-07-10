@@ -149,7 +149,14 @@ generation_lock = threading.Lock()
 # silently drops the other's change (a new card vanishing on next restart), or
 # two simultaneous writes interleave into unparseable JSON that bricks the deck.
 persist_lock = threading.RLock()
-_cancel_single = set()             # card names whose running art job should be discarded
+_cancel_single = set()             # (deck_id, card_name) pairs whose running art job should be discarded
+
+
+def _is_cancel_flagged(deck_id, card_name):
+    """True if this deck's card has a pending cooperative-cancel flag. Keyed by
+    (deck_id, card_name) so cancelling one deck's card can't discard a
+    same-named card's art on another deck (Sol Ring, Arcane Signet, …)."""
+    return (deck_id or active_deck_id, card_name) in _cancel_single
 
 # Global, cross-deck generation queue. A single worker drains it FIFO; each job
 # carries its own deck id and runs against that deck regardless of the UI's
@@ -1860,10 +1867,11 @@ def generate_card_all_faces(card_name, custom_prompt=None, feedback=None,
     else:
         faces = [face]
 
+    _deck_id = ctx.get('deck_id')
     ok, msg = True, "Success"
     for i, f in enumerate(faces):
         # Cooperative cancel: the queue's running_cancel_hook adds the card here.
-        if card_name in _cancel_single:
+        if _is_cancel_flagged(_deck_id, card_name):
             return True, "Cancelled"
         f_prompt = custom_prompt if (face != 'all' or f == 'front') else None
         ok, msg = generate_art_for_card(card_name, custom_prompt=f_prompt,
@@ -1876,7 +1884,8 @@ def generate_card_all_faces(card_name, custom_prompt=None, feedback=None,
 def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                           status_dict=None, raw_art_dir=None, composite_dir=None,
                           versions_dir=None, cards_db_snapshot=None, face='front',
-                          deck_meta=None, model_key=None, prompt_map=None):
+                          deck_meta=None, model_key=None, prompt_map=None,
+                          deck_id=None):
     """Generate art for ONE face of a card using the active model config.
 
     Optional params let the queue worker pass the JOB's captured deck context
@@ -2019,7 +2028,7 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
         # Honor a cancel that arrived DURING generation before writing any
         # files — otherwise the card's art is silently replaced even though
         # the route reports the result was discarded.
-        if card_name in _cancel_single:
+        if _is_cancel_flagged(deck_id, card_name):
             return True, "Cancelled"
 
         # Save raw art
@@ -2071,7 +2080,7 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                                      deck_frame_settings=_meta.get('frame_settings'))
 
         # Don't overwrite 'cancelled' status if user cancelled during generation
-        if card_name in _cancel_single:
+        if _is_cancel_flagged(deck_id, card_name):
             return True, "Cancelled"
 
         with generation_lock:
@@ -2169,8 +2178,13 @@ def api_delete_deck(deck_id):
     global active_deck_id, cards_db, prompts_map
 
     # Cancel this deck's jobs before removing its files (the running job's
-    # writes are discarded by the cooperative cancel hook).
+    # writes are discarded by the cooperative cancel hook), then WAIT for the
+    # worker to actually drain any in-flight render for this deck. A cooperative
+    # cancel only flags the job — the worker may still be mid-render and would
+    # re-create the deck directory (mkdir + image.save) after rmtree, leaving a
+    # zombie half-populated folder. Waiting closes that race.
     gen_queue.cancel_deck(deck_id, running_cancel_hook=_running_cancel_hook)
+    gen_queue.wait_for_deck_idle(deck_id, timeout=180.0)
 
     registry = _load_deck_registry()
     other_decks = [d for d in registry['decks'] if d['id'] != deck_id]
@@ -3662,13 +3676,6 @@ def distill_subjects(deck_id):
     })
 
 
-# ---------------------------------------------------------------------------
-# Prompt regeneration progress tracking
-# ---------------------------------------------------------------------------
-prompt_regen_progress = {}  # job_id -> {step, total, message, done, error, count}
-flavor_text_progress = {}   # job_id -> {step, total, message, done, error}
-
-
 @app.route('/api/decks/<deck_id>/regenerate-prompts', methods=['POST'])
 def regenerate_prompts_from_inspiration(deck_id):
     """Enqueue one prompt-regen job per card/face unit (returns immediately)."""
@@ -3718,14 +3725,6 @@ def regenerate_prompts_from_inspiration(deck_id):
     return jsonify({'success': True, 'queued': len(job_ids), 'job_ids': job_ids,
                     'total': len(job_ids)})
 
-@app.route('/api/regen-prompts/progress/<job_id>')
-def api_regen_prompts_progress(job_id):
-    """Poll prompt regeneration progress."""
-    prog = prompt_regen_progress.get(job_id)
-    if not prog:
-        return jsonify({'error': 'Job not found'}), 404
-    return jsonify(prog)
-
 
 # ---------------------------------------------------------------------------
 # Flavor text generation
@@ -3760,14 +3759,6 @@ def generate_flavor_text_endpoint(deck_id):
         job_ids.append(job.id)
     return jsonify({'success': True, 'queued': len(job_ids), 'job_ids': job_ids,
                     'total': len(job_ids)})
-
-@app.route('/api/flavor-text/progress/<job_id>')
-def api_flavor_text_progress(job_id):
-    """Poll flavor text generation progress."""
-    prog = flavor_text_progress.get(job_id)
-    if not prog:
-        return jsonify({'error': 'Job not found'}), 404
-    return jsonify(prog)
 
 
 # ===========================================================================
@@ -3806,18 +3797,23 @@ def _load_deck_ctx(deck_id):
 class _JobStatusSink(dict):
     """Status dict for generate_art_for_card. Mirrors each per-card status entry
     into the job's live progress (by reference, so the step callback's in-place
-    updates flow through) and, when the job's deck is active, into the global
-    generation_status so the grid badge animates."""
-    def __init__(self, job, mirror=None):
+    updates flow through) and, when the job's deck is CURRENTLY active, into the
+    global generation_status so the grid badge animates.
+
+    The active check is re-evaluated on every write (not captured once at
+    construction): deck switching is permitted mid-render, and if this job's
+    deck is switched away we must STOP writing into generation_status — else a
+    same-named card in the newly-active deck shows a spurious spinner/'complete'
+    for art it never generated."""
+    def __init__(self, job):
         super().__init__()
         self._job = job
-        self._mirror = mirror
 
     def __setitem__(self, key, val):
         super().__setitem__(key, val)
         self._job.progress = val
-        if self._mirror is not None:
-            self._mirror[key] = val
+        if self._job.deck_id == active_deck_id:
+            generation_status[key] = val
 
 
 def _face_unit_for(card, fkey):
@@ -3829,8 +3825,7 @@ def _face_unit_for(card, fkey):
 
 
 def _execute_art_job(job, ctx):
-    is_active = job.deck_id == active_deck_id
-    sink = _JobStatusSink(job, mirror=generation_status if is_active else None)
+    sink = _JobStatusSink(job)
     job.progress = {'status': 'generating', 'message': 'Waiting for analysis...',
                     'step': 0, 'total_steps': 0}
     _wait_for_ollama_idle()   # FLUX must not co-reside with LLM/VLM work (18 GB)
@@ -3839,10 +3834,10 @@ def _execute_art_job(job, ctx):
         face=job.face, status_dict=sink, raw_art_dir=ctx['raw_art_dir'],
         composite_dir=ctx['composite_dir'], versions_dir=ctx['versions_dir'],
         cards_db_snapshot=ctx['cards'], deck_meta=ctx['meta'],
-        model_key=job.model_key, prompt_map=ctx['prompts'])
+        model_key=job.model_key, prompt_map=ctx['prompts'], deck_id=job.deck_id)
     if not ok and msg != 'Cancelled':
         raise RuntimeError(msg)
-    if is_active:
+    if job.deck_id == active_deck_id:
         global cards_revision
         cards_revision = int(time.time() * 1000)
 
@@ -3883,13 +3878,28 @@ def _execute_prompt_job(job, ctx):
             style_hint = f"{style_hint} — {flux_style}" if style_hint else flux_style
         can_ai = (bcfg['llm_backend'] == 'local') or openai_client
         if job.use_ai and can_ai:
-            try:
-                prompt = generate_subject_with_ai(
-                    unit, openai_client, backend=bcfg['llm_backend'],
-                    local_model=bcfg['ollama_model'], style_hint=style_hint,
-                    steer=(job.feedback or ''))
-            except Exception:
-                prompt = generate_subject_description(unit)
+            # Retry on transient rate limits (429) with backoff before falling
+            # back to the lower-quality rule-based prompt — a momentary blip
+            # shouldn't silently persist a degraded prompt the user didn't want.
+            max_retries = 5
+            prompt = None
+            for attempt in range(max_retries):
+                try:
+                    prompt = generate_subject_with_ai(
+                        unit, openai_client, backend=bcfg['llm_backend'],
+                        local_model=bcfg['ollama_model'], style_hint=style_hint,
+                        steer=(job.feedback or ''))
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    if '429' in err_str and attempt < max_retries - 1:
+                        import re as _re
+                        wait_match = _re.search(r'try again in (\d+\.?\d*)s', err_str)
+                        wait_time = float(wait_match.group(1)) + 1 if wait_match else 15
+                        time.sleep(wait_time)
+                    else:
+                        prompt = generate_subject_description(unit)
+                        break
         else:
             prompt = generate_prompt(unit, None)
         _write_deck_prompt(ctx, job.card_name, prompt)
@@ -3913,6 +3923,10 @@ def _execute_flavor_job(job, ctx):
             local_model=bcfg['ollama_model'])
         if not text:
             raise RuntimeError('No flavor text produced')
+        # Update the in-memory card dict too — the recomposite below renders
+        # from THIS `card`, so without this the freshly generated flavor text
+        # wouldn't appear on the frame until a manual recomposite or reload.
+        card['flavor_text'] = text
         with persist_lock:
             data = _load_json_safe(ctx['deck_dir'] / "deck.json", {})
             for c in data.get('cards', []):
@@ -3957,6 +3971,10 @@ def _execute_job(job):
         else:
             raise RuntimeError(f'Unknown job type: {job.type}')
     finally:
+        # Clear any cooperative-cancel flag for this job so it can't leak onto a
+        # later job for the same (deck, card).
+        if job.type == ART:
+            _cancel_single.discard((job.deck_id, job.card_name))
         if job.deck_id == active_deck_id and job.type == ART:
             with generation_lock:
                 s = generation_status.get(job.card_name)
@@ -3964,15 +3982,21 @@ def _execute_job(job):
                     slug = name_to_slug(job.card_name)
                     s['has_raw_art'] = (RAW_ART_DIR / f"{slug}.png").exists()
                     s['has_composite'] = (COMPOSITE_DIR / f"{slug}.png").exists()
-                    if s['has_composite']:
+                    # Only settle to 'complete' from a non-terminal state — never
+                    # clobber an 'error'/'cancelled' badge just because an OLD
+                    # composite is still on disk (a failed re-roll leaves the
+                    # previous art behind; that must read as a failure, not
+                    # silent success).
+                    if s['has_composite'] and s.get('status') not in ('error', 'cancelled'):
                         s['status'] = 'complete'
 
 
 def _running_cancel_hook(job):
     """Cooperative cancel for a RUNNING art job — flag the card so
-    generate_art_for_card discards the in-flight result before writing."""
+    generate_art_for_card discards the in-flight result before writing. Keyed by
+    (deck_id, card_name) so it can't discard a same-named card on another deck."""
     if job.type == ART:
-        _cancel_single.add(job.card_name)
+        _cancel_single.add((job.deck_id, job.card_name))
 
 
 @app.route('/api/cards/flavor-text', methods=['POST'])
@@ -4573,7 +4597,7 @@ def api_remove_card():
     # Remove from in-memory state
     cards_db.remove(card)
     prompts_map.pop(card_name, None)
-    _cancel_single.discard(card_name)
+    _cancel_single.discard((active_deck_id, card_name))
     with generation_lock:
         generation_status.pop(card_name, None)
 
@@ -4608,13 +4632,15 @@ def _deck_display_name(deck_id):
 
 
 def _enqueue_art(deck_id, card_name, face='all', custom_prompt=None, feedback=None,
-                 label=None):
-    """Build + enqueue an ART job, snapshotting the current model."""
-    job = Job(type=ART, deck_id=deck_id, deck_name=_deck_display_name(deck_id),
+                 label=None, deck_name=None):
+    """Build + enqueue an ART job, snapshotting the current model. Pass
+    ``deck_name`` to skip the per-call registry read when enqueuing in a loop."""
+    job = Job(type=ART, deck_id=deck_id,
+              deck_name=deck_name if deck_name is not None else _deck_display_name(deck_id),
               card_name=card_name, face=face, custom_prompt=custom_prompt,
               feedback=feedback, model_key=active_model_key,
               label=label or card_name.replace(BACK_FACE_SUFFIX, ''))
-    _cancel_single.discard(card_name)  # clear stale cancel so job isn't discarded
+    _cancel_single.discard((deck_id, card_name))  # clear stale cancel so job isn't discarded
     return gen_queue.enqueue(job)
 
 
@@ -4707,10 +4733,11 @@ def generate_batch():
     if not card_names:
         return jsonify({'success': True, 'queued': 0, 'message': 'All cards already generated'})
 
+    dname = _deck_display_name(active_deck_id)   # hoisted: one registry read for the whole batch
     job_ids = []
     for n in card_names:
         job = _enqueue_art(active_deck_id, n, face=face_map.get(n, 'all'),
-                           feedback=(feedback or None))
+                           feedback=(feedback or None), deck_name=dname)
         job_ids.append(job.id)
     return jsonify({'success': True, 'queued': len(job_ids), 'job_ids': job_ids,
                     'count': len(job_ids),
@@ -4774,7 +4801,16 @@ def cancel_single():
     if not card_name:
         return jsonify({'error': 'card_name required'}), 400
 
-    _cancel_single.add(card_name)
+    # Cancel the underlying queue job(s) for this card on the active deck — a
+    # queued job drops instantly; a running one is flagged cooperatively via the
+    # hook (which also adds to _cancel_single). Without this the job stays in the
+    # queue and the /api/status overlay rewrites the badge back to 'generating'.
+    for job in gen_queue.jobs_for_deck(active_deck_id, active_only=True):
+        if job.card_name.replace(BACK_FACE_SUFFIX, '') == card_name:
+            gen_queue.cancel(job.id, running_cancel_hook=_running_cancel_hook)
+    # Belt-and-suspenders: flag the active-deck card so an in-flight render that
+    # already dequeued discards its result before writing.
+    _cancel_single.add((active_deck_id, card_name))
     with generation_lock:
         if card_name in generation_status:
             generation_status[card_name] = {
@@ -9795,7 +9831,7 @@ function renderActionArea(card) {
       <button class="detail-action-primary btn-generating" disabled>
         <span class="generating-dot"></span> ${label}
       </button>
-      ${!isGeneratingBatch ? `<button class="detail-generate-new" onclick="cancelCurrentGeneration()">Cancel</button>` : ''}`;
+      <button class="detail-generate-new" onclick="cancelCurrentGeneration()">Cancel</button>`;
   } else if (card.status === 'queued') {
     const label = ollamaBusy ? 'Waiting for analysis...' : 'Queued...';
     area.innerHTML = `
