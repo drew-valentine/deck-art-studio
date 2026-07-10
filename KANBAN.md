@@ -84,6 +84,23 @@
 
 ## In Review
 
+- [ ] Global cross-deck generation queue | Priority: P1 | Implemented: 2026-07-10 | Owner: drew-valentine
+  - Branch: `feat/global-generation-queue` | PR #20: https://github.com/drew-valentine/deck-art-studio/pull/20 | Status: awaiting Drew's review
+  - Summary: A single global in-memory generation queue that sits ABOVE decks. Enqueue is instant and non-blocking; a background worker drains the queue FIFO (with manual bump), and rendering continues across UI deck switches because each job carries its own deck context. Foundational fix for the blocking critique loop and the deck-switch-stops-rendering problem.
+  - Implementation:
+    - New `generation_queue.py` module — `Job` model, background worker, unit-testable in isolation.
+    - Deck-context parameterization of the art / prompt / flavor generation functions so each job renders against its own deck rather than the globally-active deck.
+    - Right slide-in queue drawer UI: Running / Queued / Recent sections with cancel / bump / pause / clear controls.
+    - Queue management endpoints for enqueue, status, and job actions (cancel / bump / pause / resume / clear).
+    - Removed the 409 deck-switch guard (switching decks no longer aborts in-flight rendering).
+  - Decisions: in-memory only (no persistence across restart); right-side drawer; FIFO ordering with manual bump.
+  - Acceptance criteria (Given/When/Then):
+    - [x] Given a generation is requested, when it is enqueued, then the call returns immediately (non-blocking) and a background worker drains the queue FIFO.
+    - [x] Given a job is running, when the user switches the UI to a different deck, then the job keeps running and writes its output to the correct (originating) deck.
+    - [x] Given queued jobs, when the user bumps / cancels / pauses / resumes / clears the queue, then the queue state and worker behavior update accordingly.
+    - [x] Given `generation_queue.py`, when the unit suite runs, then the Job model and worker are covered in isolation.
+  - Validation status: **PASSED (2026-07-10)** — 317 unit tests (36 new); Playwright with real FLUX confirmed 18ms non-blocking enqueue, an art job kept running and wrote to the correct deck after switching the UI to another deck, bump/cancel/pause/resume/clear verified, 0 console errors.
+
 ## Done
 
 - [x] Full-codebase review: document all findings, fix in a single PR | Priority: P1 | Completed: 2026-07-08 | Owner: drew-valentine
