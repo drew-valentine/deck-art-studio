@@ -86,6 +86,13 @@
 
 ## Done
 
+- [x] Always-on filter bar | Priority: P3 | Completed: 2026-07-12 | Owner: drew-valentine
+  - Squash-merged to main via PR #21 (commit 4b09261); tagged v1.44.1 (patch/UI bump, released 2026-07-12).
+  - The deck filter strip is now always visible — removed the header Filter toggle button and its dead styles/handler.
+  - Moved the "Add Card" and "Add Card Back" actions out of the deck overflow menu into the filter bar as buttons (they were unintuitive to find in the menu).
+  - Active-filter cue now highlights the Clear button.
+  - Validation: 319 pytest tests green; validated in-browser via Playwright.
+
 - [x] Global cross-deck generation queue | Priority: P1 | Completed: 2026-07-10 | Owner: drew-valentine
   - Branch: `feat/global-generation-queue` merged via PR #20 (squash-merged to main as commit a0bac32)
   - PR: https://github.com/drew-valentine/deck-art-studio/pull/20
