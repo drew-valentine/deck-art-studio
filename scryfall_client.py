@@ -12,7 +12,9 @@ Handles:
 import json
 import os
 import re
+import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -20,6 +22,27 @@ from typing import Optional
 
 # Scryfall rate limit: 10 requests/sec, we'll be conservative
 SCRYFALL_DELAY = 0.12  # seconds between requests
+
+# Global cross-thread rate limiter. The import worker fetches with several
+# threads at once; without a shared throttle their combined request rate blows
+# past Scryfall's ~10 req/s ceiling and Scryfall starts returning HTTP 429,
+# which used to silently drop cards from the imported deck. This lock ensures
+# AT MOST one request per SCRYFALL_DELAY across ALL threads.
+_rate_lock = threading.Lock()
+_last_request_at = [0.0]
+
+# 429 retry policy: how many times to retry a throttled request before giving up
+SCRYFALL_MAX_RETRIES = 5
+
+
+def _throttle():
+    """Block until at least SCRYFALL_DELAY has elapsed since the last request,
+    then stamp the new request time. Serializes callers across threads."""
+    with _rate_lock:
+        wait = SCRYFALL_DELAY - (time.monotonic() - _last_request_at[0])
+        if wait > 0:
+            time.sleep(wait)
+        _last_request_at[0] = time.monotonic()
 
 # Cache directory for raw Scryfall responses
 CACHE_DIR = Path(__file__).parent / "shared" / "scryfall_cache"
@@ -71,13 +94,32 @@ def _write_cache(cache_path: Path, data: dict) -> None:
 
 
 def _scryfall_get(url: str) -> dict:
-    """Make a GET request to Scryfall API with rate limiting."""
+    """Make a GET request to Scryfall API, rate-limited and 429-aware.
+
+    Honors a global throttle so concurrent threads can't exceed Scryfall's
+    rate limit, and retries on HTTP 429 (Too Many Requests) with backoff —
+    respecting the Retry-After header when present. Non-429 errors (e.g. a 404
+    for an unknown card name) propagate immediately so callers can fall back to
+    fuzzy search."""
     req = urllib.request.Request(url, headers={
         'User-Agent': 'DeckArtStudio/1.0',
         'Accept': 'application/json',
     })
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
+    for attempt in range(SCRYFALL_MAX_RETRIES + 1):
+        _throttle()
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < SCRYFALL_MAX_RETRIES:
+                # Prefer the server's Retry-After; otherwise exponential backoff.
+                try:
+                    retry_after = float(e.headers.get('Retry-After', '') or 0)
+                except (TypeError, ValueError):
+                    retry_after = 0
+                time.sleep(max(retry_after, SCRYFALL_DELAY * (2 ** attempt)) + 0.1)
+                continue
+            raise
 
 
 def fetch_card_by_name(name: str, use_cache: bool = True) -> Optional[dict]:
