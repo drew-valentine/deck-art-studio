@@ -86,6 +86,12 @@
 
 ## Done
 
+- [x] BUG: Deck import silently drops cards on Scryfall rate limits | Priority: P1 | Completed: 2026-07-12 | Owner: drew-valentine
+  - Squash-merged to main via PR #22 (commit 91c684e); tagged v1.44.2 (patch, released 2026-07-12).
+  - Importing a ~90-card decklist only pulled in ~72 cards. The import fetched card data with 4 parallel threads at a combined rate over Scryfall's ~10 req/s limit; Scryfall returned HTTP 429 and `_scryfall_get` had no retry, so throttled cards were dropped.
+  - Fix (scryfall_client.py): global cross-thread throttle + 429 retry-with-backoff honoring the Retry-After header; non-429 errors still fall through to fuzzy search.
+  - Validation: fresh cache-less fetch 90/90 (zero drops) under active throttling; full end-to-end import created all 90 unique cards (+ Card Back). 4 regression tests added; full suite 323 green.
+
 - [x] Always-on filter bar | Priority: P3 | Completed: 2026-07-12 | Owner: drew-valentine
   - Squash-merged to main via PR #21 (commit 4b09261); tagged v1.44.1 (patch/UI bump, released 2026-07-12).
   - The deck filter strip is now always visible — removed the header Filter toggle button and its dead styles/handler.
