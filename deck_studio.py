@@ -7594,13 +7594,12 @@ header .separator {
 }
 .models-btn:hover { border-color: var(--border-light); color: var(--text); }
 
-/* --- Filter Strip (collapsible) --- */
+/* --- Filter Strip (always visible) --- */
 .filter-strip {
-  display: none; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 10px;
   padding: 6px 20px; background: var(--surface2);
   border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
-.filter-strip.open { display: flex; }
 .filter-strip label { font-size: 0.78em; color: var(--text-dim); white-space: nowrap; }
 .filter-strip select, .filter-strip input[type="text"] {
   padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius);
@@ -7608,17 +7607,8 @@ header .separator {
 }
 .filter-strip input[type="text"] { width: 180px; }
 .filter-strip input[type="text"]:focus { border-color: var(--gold); outline: none; }
-.filter-toggle {
-  background: none; border: 1px solid var(--border); border-radius: var(--radius);
-  color: var(--text-dim); font-size: 0.8em; padding: 5px 10px; cursor: pointer;
-  transition: all var(--transition); display: flex; align-items: center; gap: 4px;
-}
-.filter-toggle:hover { border-color: var(--border-light); color: var(--text); }
-.filter-toggle.has-active-filter { border-color: var(--gold); color: var(--gold); }
-.filter-toggle .filter-dot {
-  width: 6px; height: 6px; border-radius: 50%; background: var(--gold); display: none;
-}
-.filter-toggle.has-active-filter .filter-dot { display: block; }
+/* Active-filter cue on the Clear button now that the bar is always shown */
+#filterClearBtn.has-active-filter { color: var(--gold); }
 
 /* --- Model Hub: API Key Inline --- */
 .model-hub-apikey {
@@ -7747,8 +7737,6 @@ header .separator {
       <div class="deck-overflow-wrap">
         <button class="btn btn-ghost deck-overflow-btn" onclick="toggleDeckMenu()" title="Deck actions">&ctdot;</button>
         <div id="deckOverflowMenu" class="deck-overflow-menu" style="display:none;">
-          <button class="deck-menu-item" onclick="closeDeckMenu();openAddCardModal();">Add Card</button>
-          <button class="deck-menu-item" onclick="closeDeckMenu();addCardBack();">Add Card Back</button>
           <button class="deck-menu-item" onclick="closeDeckMenu();renameDeck();">Rename</button>
           <button class="deck-menu-item" onclick="closeDeckMenu();clearSelection();switchPanelTab('frame');">Deck Frame Style</button>
           <div class="deck-menu-sep"></div>
@@ -7763,9 +7751,6 @@ header .separator {
 
     <div class="separator"></div>
 
-    <button class="filter-toggle" id="filterToggle" onclick="toggleFilterStrip()">
-      Filter <span class="filter-dot"></span>
-    </button>
     <button class="queue-btn" id="queueBtn" onclick="toggleQueueDrawer()" title="Generation queue">
       <span class="queue-btn-icon">&#9776;</span> Queue
       <span class="queue-btn-badge" id="queueBtnBadge" style="display:none;">0</span>
@@ -7798,8 +7783,10 @@ header .separator {
     <option value="pinned">Pinned</option>
     <option value="generating">Generating</option>
   </select>
+  <button class="btn btn-ghost btn-xs" id="filterClearBtn" onclick="clearFilters()">Clear</button>
   <div style="flex:1;"></div>
-  <button class="btn btn-ghost btn-xs" onclick="clearFilters()">Clear</button>
+  <button class="btn btn-secondary btn-sm" onclick="openAddCardModal()" title="Add a card to this deck">+ Add Card</button>
+  <button class="btn btn-secondary btn-sm" onclick="addCardBack()" title="Add a &quot;Card Back&quot; card to this deck">+ Card Back</button>
 </div>
 
 <!-- Setup Bar -->
@@ -9539,12 +9526,6 @@ function getFilteredCards() {
 
 function applyFilters() { updateFilterIndicator(); renderGrid(); }
 
-function toggleFilterStrip() {
-  const strip = document.getElementById('filterStrip');
-  strip.classList.toggle('open');
-  if (strip.classList.contains('open')) document.getElementById('searchInput').focus();
-}
-
 function clearFilters() {
   document.getElementById('searchInput').value = '';
   document.getElementById('filterType').value = 'all';
@@ -9557,7 +9538,8 @@ function updateFilterIndicator() {
   const hasFilter = document.getElementById('searchInput').value !== '' ||
     document.getElementById('filterType').value !== 'all' ||
     document.getElementById('filterStatus').value !== 'all';
-  document.getElementById('filterToggle').classList.toggle('has-active-filter', hasFilter);
+  const clearBtn = document.getElementById('filterClearBtn');
+  if (clearBtn) clearBtn.classList.toggle('has-active-filter', hasFilter);
 }
 
 function updateBadges() {
