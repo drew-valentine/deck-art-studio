@@ -1721,7 +1721,10 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     st = style_tokens or {}
 
     style_bits = []
-    if style_source:
+    # Franchise names are kept OUT of the render prompt (character leakage — a
+    # literal Rick once rendered as card art); their design language is already
+    # baked into flux_style_prompt at distill time. Artist/movement names stay.
+    if style_source and _meta.get('style_name_in_prompt', True):
         style_bits.append(f"in the style of {style_source}")
     if flux_style_prompt:
         # Image-first descriptors (the vision model read the actual inspiration,
@@ -2957,19 +2960,29 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         if progress_callback:
             progress_callback('Building style descriptors from inspiration...')
         from vision_analyzer import (build_flux_style_block,
-                                     build_flux_style_descriptors)
+                                     build_flux_style_descriptors,
+                                     is_character_franchise)
         # Compact high-signal style block: medium anchors + specific hues +
         # signature motifs, ≤~38 words. Empirically the winning geometry — a
         # short pure-signal block in front of a FULL subject keeps schnell's
         # 256-token budget intact (heavy style paragraphs truncated the scene
         # and degraded subject coherence). Tag path as fallback when thin.
-        first_desc = next((img.get('style_description', '') for img in insp_imgs
-                           if (deck_dir / img.get('filename', '')) == first_img), '')
+        # Hue pool from ALL inspiration analyses (each has a dedicated Colors:
+        # line) — single-image seeding once poisoned a palette via one
+        # misanalyzed reference.
+        all_descs = '\n'.join(img.get('style_description', '')
+                              for img in insp_imgs
+                              if img.get('style_description'))
+        # Franchise names never reach the render prompt (character leakage);
+        # the flag gates the "in the style of <name>" prepend at render time.
+        franchise = bool(style_source) and is_character_franchise(
+            style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
+        data['style_name_in_prompt'] = not franchise
         flux_style_prompt = build_flux_style_block(
             first_img, style_source=style_source,
             vision_model=bcfg.get('ollama_vision_model', 'llava:7b'),
             text_model=bcfg.get('ollama_model', 'llama3.2:3b'),
-            stored_description=first_desc)
+            stored_description=all_descs, franchise=franchise)
         if len(flux_style_prompt.split()) < 10:
             flux_style_prompt = build_flux_style_descriptors(
                 first_img, style_source=style_source, backend=llm_backend,
@@ -2986,6 +2999,7 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         active_deck_meta['style_tokens'] = tokens
         active_deck_meta['clip_directives'] = clip_dirs
         active_deck_meta['flux_style_prompt'] = flux_style_prompt
+        active_deck_meta['style_name_in_prompt'] = data.get('style_name_in_prompt', True)
 
     if tokens:
         print(f"  [distill] Style tokens saved for {deck_id}: {list(tokens.keys())}")

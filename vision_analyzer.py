@@ -66,7 +66,8 @@ def build_flux_style_block(image_path, style_source: str = '',
                            vision_model: str = 'llava:7b',
                            text_model: str = 'llama3.1:8b',
                            max_words: int = 38,
-                           stored_description: str = '') -> str:
+                           stored_description: str = '',
+                           franchise: bool = None) -> str:
     """Compact, high-signal style block: the shipping style prompt.
 
     FLUX-schnell has a HARD 256-token budget shared with the card's subject
@@ -119,6 +120,14 @@ def build_flux_style_block(image_path, style_source: str = '',
     anchors = _medium_anchors(_classify_style_medium(style_source, text_model,
                                                      img_desc=best_prose[:400])) \
         if style_source else []
+    # Franchise names never reach the render prompt (character leakage — a
+    # literal Rick once appeared as card art). Expand into anonymous design-
+    # language cues instead, plus an explicit original-designs guard.
+    if franchise is None:
+        franchise = bool(style_source) and is_character_franchise(style_source,
+                                                                  text_model)
+    design_cues = (_expand_design_language(style_source, text_model)
+                   if franchise else [])
     # The stored per-image analysis (deck.json inspiration_images[].style_
     # description) carries a dedicated "Colors:" line from a prior focused
     # pass — the highest-quality hue source available, so it seeds the pool.
@@ -134,23 +143,31 @@ def build_flux_style_block(image_path, style_source: str = '',
             if m not in motifs:
                 motifs.append(m)
         influence = influence or _extract_influence(source)
-    hues, motifs = hues[:6], motifs[:2]
+    # Modified hues first — bare colors are attractor bait ("yellow, red,
+    # pink" + cartoonish rendered a Pikachu); "dark maroon" is directional.
+    modified = [h for h in hues if ' ' in h]
+    bare = [h for h in hues if ' ' not in h]
+    hues = (modified + bare)[:6] if len(modified) < 3 else modified[:6]
+    motifs = motifs[:2]
 
-    parts = list(anchors)
+    parts = list(anchors) + design_cues
     if hues:
         parts.append('palette of ' + ', '.join(hues))
     parts.extend(motifs)
     if influence:
         parts.append(influence)
+    if franchise:
+        parts.append('original creature and character designs')
     # Cap on phrase boundaries, never mid-phrase; anchors always survive.
+    budget = max_words + (18 if franchise else 0)   # design cues earn headroom
     out, count = [], 0
     for p in parts:
         n = len(p.split())
-        if out and count + n > max_words:
+        if out and count + n > budget:
             continue
         out.append(p)
         count += n
-    return _clean_descriptors(', '.join(out), style_source, max_descriptors=20)
+    return _clean_descriptors(', '.join(out), style_source, max_descriptors=24)
 
 
 def _extract_hue_phrases(text: str, cap: int = 6) -> list:
@@ -501,6 +518,87 @@ _MEDIUM_ANCHORS = {
     'comic book': ['comic book art', 'bold ink outlines', 'dynamic panel energy'],
     'pixel art': ['pixel art', 'crisp pixel edges', 'limited color palette'],
 }
+
+
+# Franchises with iconic characters: putting their NAME in the render prompt
+# injects the cast (a literal Rick appeared as card art). For these, the name
+# is used only as a KNOWLEDGE KEY at distill time — expanded into anonymous
+# design-language cues — and never reaches the render prompt. Artist and
+# movement names (Victo Ngai, ligne claire) have no cast to leak and stay.
+_FRANCHISE_KEYWORDS = frozenset({
+    'morty', 'rick', 'simpsons', 'spongebob', 'futurama', 'pokemon', 'pokémon',
+    'disney', 'pixar', 'ghibli', 'looney', 'marvel', 'batman', 'naruto',
+    'dragonball', 'zelda', 'mario', 'adventure', 'gravity', 'archer',
+    'southpark', 'south',
+})
+
+
+def is_character_franchise(style_source: str, text_model: str = '') -> bool:
+    """True when the style name refers to a fictional franchise/show whose
+    characters could leak into generated art. Keyword map first; optional LLM
+    yes/no for the long tail (skipped when text_model is '')."""
+    tokens = set(style_source.lower().replace('&', ' ').replace('-', ' ').split())
+    if tokens & _FRANCHISE_KEYWORDS:
+        return True
+    if not text_model:
+        return False
+    try:
+        import mlx_llm
+        reply = mlx_llm.chat(
+            messages=[
+                {'role': 'system', 'content':
+                    "Answer with exactly 'yes' or 'no'."},
+                {'role': 'user', 'content':
+                    "Is 'Studio Ghibli' a fictional franchise or show with "
+                    "famous recognizable characters?"},
+                {'role': 'assistant', 'content': "yes"},
+                {'role': 'user', 'content':
+                    "Is 'Victo Ngai' a fictional franchise or show with famous "
+                    "recognizable characters?"},
+                {'role': 'assistant', 'content': "no"},
+                {'role': 'user', 'content':
+                    f"Is '{style_source}' a fictional franchise or show with "
+                    "famous recognizable characters?"},
+            ],
+            model=text_model, max_tokens=4, temperature=0.0)
+        return 'yes' in (reply or '').lower()
+    except Exception:
+        return False
+
+
+def _expand_design_language(style_source: str, text_model: str) -> list:
+    """Expand a franchise name into anonymous design-language cues — HOW things
+    are drawn (line quality, eye/face conventions, shading, backgrounds) with
+    no character or franchise names. This carries the school's hand into the
+    prompt without the cast."""
+    try:
+        import mlx_llm
+        out = mlx_llm.chat(
+            messages=[
+                {'role': 'system', 'content':
+                    "You describe the visual DESIGN LANGUAGE of animated shows "
+                    "for a text-to-image model. Output ONE line of 5-7 comma-"
+                    "separated cues describing HOW things are drawn: line "
+                    "quality, eye and face conventions, shading, backgrounds. "
+                    "NEVER name a character, show, or franchise."},
+                {'role': 'user', 'content': "Style: The Simpsons"},
+                {'role': 'assistant', 'content':
+                    "flat yellow-tinted skin tones, large round white eyes, "
+                    "overbite mouths, thin even outlines, flat television-"
+                    "cartoon shading, plain suburban backgrounds"},
+                {'role': 'user', 'content': "Style: Studio Ghibli"},
+                {'role': 'assistant', 'content':
+                    "soft painted watercolor backgrounds, round gentle faces "
+                    "with small features, delicate hand-drawn linework, lush "
+                    "natural scenery, warm diffuse lighting"},
+                {'role': 'user', 'content': f"Style: {style_source}"},
+            ],
+            model=text_model, max_tokens=90, temperature=0.2)
+    except Exception as e:
+        print(f"  [style] design-language expansion failed: {e}")
+        return []
+    line = _clean_descriptors(out or '', style_source, max_descriptors=7)
+    return [d.strip() for d in line.split(',') if d.strip()]
 
 
 # Deterministic style-name → medium mapping for well-known cases. Curated,
