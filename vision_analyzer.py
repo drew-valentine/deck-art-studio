@@ -61,12 +61,15 @@ def build_flux_style_descriptors(image_path, style_source: str = '',
         "given (a) a visual-style read of reference images and (b) the NAME of the "
         "intended style. Output ONE line of 10-16 comma-separated descriptors that "
         "best reproduce the intended style.\n"
-        "Trust the NAMED style's true medium and signature techniques — use your "
-        "knowledge to CORRECT any medium error in the image read (e.g. a live-action "
-        "film still wrongly called 'digital painting'). Keep the specific color "
-        "palette and mood from the image read. Use concrete multi-word phrases. "
-        "Describe ONLY visual style — no subject, no proper nouns, no character or "
-        "place names. Output ONLY the comma-separated descriptors."
+        "PRESERVE the image read's concrete medium, linework/edges, rendering "
+        "technique, and color palette — copy those phrases through nearly verbatim. "
+        "Use the NAMED style ONLY to CORRECT a CLEAR medium error in the image read "
+        "(e.g. a live-action film still wrongly called 'digital painting'); do NOT "
+        "let the style name replace accurate, specific descriptors with generic "
+        "movement vocabulary. Every descriptor must be a concrete multi-word phrase "
+        "(e.g. 'clean black ink linework', not 'bold'); NEVER output bare single-word "
+        "mood clichés like 'surreal, dreamlike, ethereal, vibrant'. Describe ONLY "
+        "visual style — no subject, no proper nouns. Output ONLY the descriptors."
     )
     user_msg = (f"Image read: {img_desc or '(none)'}\n"
                 f"Intended style name: {style_source}\nDescriptors:")
@@ -79,8 +82,14 @@ def build_flux_style_descriptors(image_path, style_source: str = '',
         )
     except Exception as e:
         print(f"  [style] descriptor reconcile failed: {e}")
-        out = img_desc
-    return _clean_descriptors(out, style_source)
+        out = ''
+    # Anchor on the image read: lead with it so its concrete medium/technique/
+    # palette survive the descriptor cap, then append the named-style
+    # reconciliation. A weak text model tends to collapse the reconcile to generic
+    # style-name clichés and drop the real read entirely; merging (deduped by
+    # _clean_descriptors) guarantees the accurate image signal can't be erased.
+    merged = f"{img_desc}, {out}" if (img_desc and out) else (out or img_desc)
+    return _clean_descriptors(merged, style_source)
 
 
 def _clean_descriptors(text: str, style_source: str = '',

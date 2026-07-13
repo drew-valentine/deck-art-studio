@@ -6,7 +6,12 @@ phrase dozens of times. That runaway string used to flow straight into a deck's
 must collapse such loops to their unique descriptor set.
 """
 
-from vision_analyzer import _clean_descriptors
+import sys
+import types
+
+import pytest
+
+from vision_analyzer import _clean_descriptors, build_flux_style_descriptors
 
 
 # The actual degenerate value that shipped in the queen-marchesa-b3-v2 deck.
@@ -70,3 +75,40 @@ class TestCleanupPreserved:
     def test_cap_enforced(self):
         many = ", ".join(f"descriptor {i}" for i in range(40))
         assert len(_descriptors(_clean_descriptors(many, max_descriptors=16))) == 16
+
+
+class TestReconcilePreservesImageRead:
+    """When a style_source is set, the named-style reconcile must NOT erase an
+    accurate image read (medium/technique/palette) with generic style clichés."""
+
+    def _fake_mlx(self, monkeypatch, image_read, reconciled):
+        fake = types.ModuleType('mlx_llm')
+        fake.vision = lambda *a, **k: image_read
+        fake.chat = lambda *a, **k: reconciled
+        monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
+
+    def test_image_read_survives_generic_reconcile(self, monkeypatch, tmp_path):
+        # LLM collapses to generic single-word clichés; the concrete image read
+        # (clean-line, flat cel, palette) must still lead the descriptors.
+        self._fake_mlx(
+            monkeypatch,
+            image_read=("clean black ink linework, flat cel shading, dense "
+                        "detailed illustration, pastel gradient palette"),
+            reconciled="surreal, dreamlike, ethereal, abstract")
+        img = tmp_path / "insp.png"
+        img.write_bytes(b"not-a-real-png")
+        out = build_flux_style_descriptors(str(img), style_source='surrealism',
+                                           backend='local').lower()
+        assert 'clean black ink linework' in out
+        assert 'flat cel shading' in out
+        assert 'pastel gradient palette' in out
+
+    def test_image_only_path_unchanged(self, monkeypatch, tmp_path):
+        self._fake_mlx(monkeypatch,
+                       image_read="ink illustration, flat color, bold outlines",
+                       reconciled="(unused)")
+        img = tmp_path / "insp.png"
+        img.write_bytes(b"x")
+        out = build_flux_style_descriptors(str(img), style_source='',
+                                           backend='local')
+        assert out == "ink illustration, flat color, bold outlines"
