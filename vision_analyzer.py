@@ -83,12 +83,26 @@ def build_flux_style_descriptors(image_path, style_source: str = '',
     return _clean_descriptors(out, style_source)
 
 
-def _clean_descriptors(text: str, style_source: str = '') -> str:
-    """Tidy a descriptor line: first line only, strip source-name leakage + labels."""
+def _clean_descriptors(text: str, style_source: str = '',
+                       max_descriptors: int = 16) -> str:
+    """Tidy a descriptor line: first line only, strip source-name leakage + labels,
+    then de-duplicate repeated descriptors and cap the count.
+
+    Small VLM/LLM models sometimes fall into a repetition loop and emit the same
+    phrase over and over (e.g. ``soft focus, muted pastel hues, subtle gradient
+    effects`` fifteen times). Left in ``flux_style_prompt`` this both poisons the
+    style signal — every card inherits a runaway descriptor — and drowns out the
+    subject. So after the label/source cleanup we split on commas, drop exact
+    repeats (case-insensitive, order-preserving) and keep at most
+    ``max_descriptors`` unique phrases. This is the single choke point every
+    descriptor line flows through, so the guard covers both the image-only and
+    reconciled paths.
+    """
     import re as _re
-    if not text:
+    lines = (text or '').strip().splitlines()
+    if not lines:
         return ''
-    out = text.strip().splitlines()[0].strip()
+    out = lines[0].strip()
     # Drop a leading "Descriptors:"/"Style:" label if the model echoed it.
     out = _re.sub(r'^\s*(descriptors|style|visual style)\s*:\s*', '', out, flags=_re.IGNORECASE)
     # Strip the source name if it leaked into the values.
@@ -96,9 +110,22 @@ def _clean_descriptors(text: str, style_source: str = '') -> str:
         for word in style_source.split():
             if len(word) > 3:
                 out = _re.sub(r'\b' + _re.escape(word) + r'\b', '', out, flags=_re.IGNORECASE)
-    out = _re.sub(r'\s{2,}', ' ', out)
-    out = _re.sub(r'\s*,\s*,+', ', ', out)
-    return out.strip(' ,.')
+    # Split into descriptors, de-duplicate (case-insensitive, first-seen order),
+    # and cap the count — collapses any model repetition loop to its unique set.
+    seen = set()
+    unique = []
+    for part in out.split(','):
+        phrase = _re.sub(r'\s{2,}', ' ', part).strip(' .')
+        if not phrase:
+            continue
+        key = phrase.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(phrase)
+        if len(unique) >= max_descriptors:
+            break
+    return ', '.join(unique)
 
 
 def analyze_inspiration_style(image_path: str | Path, openai_client=None,
