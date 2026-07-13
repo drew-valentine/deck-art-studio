@@ -1747,15 +1747,38 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     # FLUX weights early tokens most, so leading with the style (rather than
     # burying it after a long scene) stops a rich scene from drowning it. Validated
     # empirically — the same style words buried at the tail gave ZERO style transfer;
-    # front-loaded they come through. (Kept well under the 256-token T5 budget.)
-    pieces = []
-    if style_bits:
-        pieces.append(", ".join(style_bits))
-    pieces.append(subject.rstrip(' .'))
-    if feedback_text:
-        pieces.append(feedback_text.rstrip(' .'))
-    flux_prompt = '. '.join(p for p in pieces if p) + '.'
-    flux_prompt += ' No text, no words, no watermark, no card frame, no borders.'
+    # front-loaded they come through.
+    #
+    # HARD 256-TOKEN BUDGET (schnell's T5 max_sequence_length — mflux silently
+    # truncates the overflow). Measured with the real tokenizer: style + a rich
+    # subject + the no-text tail regularly hit 270-300 tokens, so the tail AND
+    # the subject's final sentences were being cut MID-CLAUSE — the model
+    # received ragged scene grammar, which degrades subject coherence (broken
+    # anatomy, inconsistent forms). Fix: trim the SUBJECT at sentence
+    # boundaries until everything fits, so FLUX always sees complete sentences,
+    # the full style block, and the full no-text tail.
+    _TAIL = ' No text, no words, no watermark, no card frame, no borders.'
+    _BUDGET_TOKENS = 250          # safety margin under the hard 256
+    # ~3.5 chars/token for T5 on these prompts (calibrated against the real
+    # tokenizer: 790 chars -> 225 tokens). Overestimating slightly is safe —
+    # it trims one sentence early rather than truncating mid-clause.
+    _est = lambda s: int(len(s) / 3.5) + 4
+
+    style_head = ", ".join(style_bits)
+    fb = feedback_text.rstrip(' .') if feedback_text else ''
+    subj = subject.rstrip(' .')
+    subj_sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', subj) if s.strip()]
+
+    def _compose(sentences):
+        pieces = ([style_head] if style_head else []) + \
+                 ['. '.join(s.rstrip('.') for s in sentences)] + \
+                 ([fb] if fb else [])
+        return '. '.join(p for p in pieces if p) + '.' + _TAIL
+
+    flux_prompt = _compose(subj_sentences)
+    while len(subj_sentences) > 1 and _est(flux_prompt) > _BUDGET_TOKENS:
+        subj_sentences.pop()          # drop trailing scene sentences whole
+        flux_prompt = _compose(subj_sentences)
 
     # --- Progress callback — updates status per inference step ---
     def on_step(step, total):
@@ -1766,7 +1789,8 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
                 s['total_steps'] = total
                 s['message'] = f'Step {step}/{total}...'
 
-    print(f"[local_img] FLUX prompt ({len(flux_prompt.split())} words): {flux_prompt}")
+    print(f"[local_img] FLUX prompt ({len(flux_prompt.split())} words, "
+          f"~{_est(flux_prompt)} tokens): {flux_prompt}")
     with generation_lock:
         _status[card_name]['message'] = 'Generating from text prompt...'
     return gen.generate(
@@ -2932,15 +2956,21 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
     if first_img is not None:
         if progress_callback:
             progress_callback('Building style descriptors from inspiration...')
-        from vision_analyzer import (build_flux_style_descriptors,
-                                     build_flux_style_paragraph)
-        # Rich art-director paragraph first — empirically the difference between
-        # a distant stylistic echo and a near-uncanny transfer. Tag-descriptor
-        # path only as fallback when the paragraph pass comes back too thin.
-        flux_style_prompt = build_flux_style_paragraph(
+        from vision_analyzer import (build_flux_style_block,
+                                     build_flux_style_descriptors)
+        # Compact high-signal style block: medium anchors + specific hues +
+        # signature motifs, ≤~38 words. Empirically the winning geometry — a
+        # short pure-signal block in front of a FULL subject keeps schnell's
+        # 256-token budget intact (heavy style paragraphs truncated the scene
+        # and degraded subject coherence). Tag path as fallback when thin.
+        first_desc = next((img.get('style_description', '') for img in insp_imgs
+                           if (deck_dir / img.get('filename', '')) == first_img), '')
+        flux_style_prompt = build_flux_style_block(
             first_img, style_source=style_source,
-            vision_model=bcfg.get('ollama_vision_model', 'llava:7b'))
-        if len(flux_style_prompt.split()) < 20:
+            vision_model=bcfg.get('ollama_vision_model', 'llava:7b'),
+            text_model=bcfg.get('ollama_model', 'llama3.2:3b'),
+            stored_description=first_desc)
+        if len(flux_style_prompt.split()) < 10:
             flux_style_prompt = build_flux_style_descriptors(
                 first_img, style_source=style_source, backend=llm_backend,
                 vision_model=bcfg.get('ollama_vision_model', 'llava:7b'),
