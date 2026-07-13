@@ -123,6 +123,24 @@ def build_flux_style_block(image_path, style_source: str = '',
     # Franchise names never reach the render prompt (character leakage — a
     # literal Rick once appeared as card art). Expand into anonymous design-
     # language cues instead, plus an explicit original-designs guard.
+    # Line-weight-aware ink anchors: "bold ink outlines" on fine-line
+    # references (rapidograph/technical-pen work) renders COMIC BOOK instead
+    # of fine-line illustration. Weight comes from the evidence, not a fixed
+    # anchor.
+    evidence = (' '.join(proses) + ' ' + (stored_description or '')).lower()
+    if anchors and anchors[0] == 'ink illustration':
+        fine = sum(evidence.count(w) for w in
+                   ('fine', 'delicate', 'thin', 'technical pen', 'rapidograph',
+                    'intricate line', 'hairline'))
+        bold = sum(evidence.count(w) for w in
+                   ('bold line', 'thick line', 'heavy line', 'bold outline',
+                    'chunky'))
+        if fine > bold:
+            anchors = ['fine-line ink illustration',
+                       'uniform fine technical-pen linework',
+                       'flat color fills over black line art',
+                       'dense intricate detail filling every surface']
+
     if franchise is None:
         franchise = bool(style_source) and is_character_franchise(style_source,
                                                                   text_model)
@@ -533,11 +551,25 @@ _FRANCHISE_KEYWORDS = frozenset({
 })
 
 
+# Artists and art movements are NEVER franchises — their names are pure style
+# signal with no cast to leak, and the 3B yes/no fallback misclassifies them
+# (it once flagged 'Moebius' as a franchise, silently dropping the strongest
+# style prior from the render prompt).
+_ARTIST_KEYWORDS = frozenset({
+    'moebius', 'giraud', 'ngai', 'mucha', 'ligne', 'claire', 'ukiyo',
+    'hokusai', 'otomo', 'mignola', 'frazetta', 'rembrandt', 'monet',
+    'illustration', 'illustrator', 'artist', 'painting', 'watercolor',
+    'surrealism', 'nouveau', 'deco', 'impressionism', 'woodblock',
+})
+
+
 def is_character_franchise(style_source: str, text_model: str = '') -> bool:
     """True when the style name refers to a fictional franchise/show whose
     characters could leak into generated art. Keyword map first; optional LLM
     yes/no for the long tail (skipped when text_model is '')."""
     tokens = set(style_source.lower().replace('&', ' ').replace('-', ' ').split())
+    if tokens & _ARTIST_KEYWORDS:
+        return False
     if tokens & _FRANCHISE_KEYWORDS:
         return True
     if not text_model:
