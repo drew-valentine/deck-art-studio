@@ -540,6 +540,13 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         "Enhance the imagery; do NOT change WHAT is depicted and do NOT introduce a "
         "different focal subject. Setting and atmosphere are BACKGROUND only — they "
         "must never replace, crowd out, or upstage the card's subject. "
+        "OPENING RULE (critical): the FIRST sentence must open with the subject "
+        "itself — name it, and for creatures state its CREATURE TYPE as an "
+        "appositive right after the name (e.g. 'Okaun, Eye of Chaos, a Cyclops "
+        "Berserker, storms...'), then place it in the scene. NEVER open with the "
+        "setting, weather, or atmosphere ('In the heart of the swirling mist...') "
+        "— the image model paints whatever comes first, and setting-first "
+        "openings produce subjectless art. "
         "Be inventive and VARY it each time: choose a fresh setting, camera angle, "
         "distance, time of day, weather, and composition so re-rolls feel distinct "
         "rather than repeating the same scene — but always keep the same focal subject. "
@@ -626,7 +633,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
 
     try:
         import mlx_llm
-        return mlx_llm.chat(
+        out = mlx_llm.chat(
             messages=[
                 {'role': 'system', 'content': system_msg},
                 {'role': 'user', 'content': user_msg},
@@ -637,9 +644,39 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                               # degenerate into word-salad tails ("waveform GS cave
                               # events super intend impact"), so keep it lower.
         )
+        return _ensure_creature_type_in_prompt(out, card)
     except Exception as e:
         print(f"  [prompt_gen] AI failed for {name}: {e}, using rule-based")
         return generate_subject_description(card)
+
+
+def _ensure_creature_type_in_prompt(text: str, card: dict) -> str:
+    """Deterministic guarantee: a creature's prompt names its creature type.
+
+    The system prompt asks for the type as an appositive after the name
+    ("Okaun, Eye of Chaos, a Cyclops Berserker, ..."), but an instruction to a
+    small model is a suggestion — the creative rewrite frequently drops it.
+    The type line is one of the strongest identity anchors the image model can
+    get (it disambiguates WHAT the creature is), so when the full type phrase
+    is missing we inject it right after the card name in the text."""
+    if not text or card.get('card_type') != 'creature':
+        return text
+    type_line = card.get('type_line', '')
+    if '—' not in type_line and '—' not in type_line:
+        return text
+    subtypes = re.split(r'[——]', type_line, 1)[1].strip()
+    if not subtypes or subtypes.lower() in text.lower():
+        return text
+    name = card.get('name', '')
+    article = 'an' if subtypes[:1].lower() in 'aeiou' else 'a'
+    appositive = f", {article} {subtypes},"
+    if name and name in text:
+        # "Okaun, Eye of Chaos sits..." -> "Okaun, Eye of Chaos, a Cyclops
+        # Berserker, sits..."
+        return text.replace(name, f"{name}{appositive}", 1)
+    if name:
+        return f"{name}, {article} {subtypes} — {text}"
+    return text
 
 
 def generate_prompts_with_ai(
