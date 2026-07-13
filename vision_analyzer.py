@@ -81,20 +81,27 @@ def build_flux_style_descriptors(image_path, style_source: str = '',
         print(f"  [style] descriptor reconcile failed: {e}")
         out = img_desc
 
-    # Palette preservation: the reconcile trusts the named style for medium and
-    # technique, but a style NAME can wrongly dictate color — e.g. 'ligne claire'
-    # washing a pastel reference to monochrome. The IMAGE is the source of truth
-    # for color, so we strip color/palette descriptors out of the reconciled
-    # (named-style) line and append the palette read straight from the image.
-    # This keeps a strong style's medium/technique intact (Rick & Morty) while
-    # guaranteeing the reference's actual colors survive (queen-marchesa).
-    reconciled = _clean_descriptors(out, style_source)
-    img_palette = _palette_descriptors(img_desc)
-    if not img_palette:
-        return reconciled
-    style_only = [d for d in reconciled.split(',')
-                  if d.strip() and not _is_color_descriptor(d)]
-    return _clean_descriptors(', '.join(style_only + img_palette), style_source)
+    # When a named style is present it governs two things the vision model gets
+    # wrong, so we fix both deterministically:
+    #
+    #  MEDIUM — the NAME dictates it (and "in the style of <name>" leads at render
+    #  time), so drop the VLM's medium mislabels — "3D computer-generated",
+    #  "photorealistic", etc. Left in, a cartoon reference read as "3D render"
+    #  drags the whole deck toward glossy 3D output, fighting the named style.
+    #
+    #  COLOR — the IMAGE dictates it. A style name can wrongly wash color out
+    #  (e.g. "ligne claire" -> monochrome), so strip color from the named-style
+    #  line and append the palette read straight from the image.
+    #
+    # (The token path already drops the VLM medium for named styles; the
+    # flux_style_prompt path just never did — this brings it in line.)
+    reconciled = [d.strip() for d in _clean_descriptors(out, style_source).split(',')
+                  if d.strip() and not _is_medium_mislabel(d)]
+    img_palette = [d for d in _palette_descriptors(img_desc)
+                   if not _is_medium_mislabel(d)]
+    if img_palette:
+        reconciled = [d for d in reconciled if not _is_color_descriptor(d)] + img_palette
+    return _clean_descriptors(', '.join(reconciled), style_source)
 
 
 # Color/palette detection for palette preservation (see build_flux_style_descriptors).
@@ -124,6 +131,32 @@ def _palette_descriptors(text: str) -> list:
     """Extract the color/palette descriptors from a comma-separated line."""
     return [d.strip() for d in (text or '').split(',')
             if d.strip() and _is_color_descriptor(d)]
+
+
+# Medium-mislabel detection: 3D/CGI/photographic terms the vision model wrongly
+# assigns to flat 2D references. When a named style is set it governs the medium,
+# so these are dropped (see build_flux_style_descriptors). Deliberately does NOT
+# strip legitimate stylized media (cel animation, cartoonish, ink illustration,
+# watercolor, oil painting) — only the realistic/rendered mislabels that fight a
+# named illustration/cartoon style.
+_MEDIUM_MISLABEL_SUBSTRINGS = (
+    'computer-generated', 'computer generated', 'photorealistic', 'photo-realistic',
+    'photograph', 'photographic', 'photography', 'live-action', 'live action',
+    'film still', 'octane', 'unreal engine', 'ray trace', 'ray-trace', 'cgi',
+)
+_MEDIUM_MISLABEL_TOKENS = frozenset({
+    '3d', 'render', 'rendered', 'rendering', 'photo', 'dslr',
+})
+
+
+def _is_medium_mislabel(phrase: str) -> bool:
+    """True if a descriptor asserts a realistic/3D/photographic medium (which a
+    named illustration/cartoon style should override)."""
+    import re as _re
+    p = phrase.lower()
+    if any(s in p for s in _MEDIUM_MISLABEL_SUBSTRINGS):
+        return True
+    return bool(set(_re.findall(r"[a-z0-9]+", p)) & _MEDIUM_MISLABEL_TOKENS)
 
 
 def _clean_descriptors(text: str, style_source: str = '',

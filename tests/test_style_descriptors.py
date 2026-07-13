@@ -10,7 +10,8 @@ import sys
 import types
 
 from vision_analyzer import (_clean_descriptors, _is_color_descriptor,
-                             _palette_descriptors, build_flux_style_descriptors)
+                             _is_medium_mislabel, _palette_descriptors,
+                             build_flux_style_descriptors)
 
 
 # The actual degenerate value that shipped in the queen-marchesa-b3-v2 deck.
@@ -142,3 +143,43 @@ class TestPalettePreservation:
         img = tmp_path / "insp.png"; img.write_bytes(b"x")
         out = build_flux_style_descriptors(str(img), style_source='Rick & Morty')
         assert out == "cartoonish, flat shading, bold outlines"
+
+
+class TestMediumMislabel:
+    def test_realistic_media_detected(self):
+        for m in ("3D computer-generated", "3D render", "photorealistic",
+                  "photograph", "cgi render", "live-action film still",
+                  "octane render", "digital rendering"):
+            assert _is_medium_mislabel(m), m
+
+    def test_legit_stylized_media_kept(self):
+        for m in ("cel animation", "cartoonish", "ink illustration", "watercolor",
+                  "oil painting", "flat cel shading", "bold outlines",
+                  "clean linework", "pastel hues"):
+            assert not _is_medium_mislabel(m), m
+
+    def _fake_mlx(self, monkeypatch, image_read, reconciled):
+        fake = types.ModuleType('mlx_llm')
+        fake.vision = lambda *a, **k: image_read
+        fake.chat = lambda *a, **k: reconciled
+        monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
+
+    def test_3d_mislabel_stripped_for_named_style(self, monkeypatch, tmp_path):
+        # The exact heads-i-win regression: reconcile keeps "3D computer-generated".
+        self._fake_mlx(
+            monkeypatch,
+            image_read="2D animation, cartoonish, cool tones, vibrant colors",
+            reconciled=("vibrant, stylized, 3D computer-generated, metallic, "
+                        "cartoonish, playful, neon"))
+        img = tmp_path / "insp.png"; img.write_bytes(b"x")
+        out = build_flux_style_descriptors(str(img), style_source='Rick & Morty').lower()
+        assert '3d' not in out and 'computer-generated' not in out
+        assert 'cartoonish' in out and 'stylized' in out   # real style kept
+
+    def test_image_only_keeps_medium(self, monkeypatch, tmp_path):
+        # No named style -> the VLM medium is the source of truth, keep it.
+        self._fake_mlx(monkeypatch,
+                       image_read="3D render, vibrant, dynamic", reconciled="(x)")
+        img = tmp_path / "insp.png"; img.write_bytes(b"x")
+        out = build_flux_style_descriptors(str(img), style_source='')
+        assert '3D render' in out
