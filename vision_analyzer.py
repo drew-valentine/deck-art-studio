@@ -45,7 +45,7 @@ def build_flux_style_descriptors(image_path, style_source: str = '',
     try:
         import mlx_llm
         img_desc = mlx_llm.vision(str(image_path), vlm_prompt, model=vision_model,
-                                  max_tokens=160, temperature=0.4)
+                                  max_tokens=160, temperature=0.2)
     except Exception as e:
         print(f"  [style] VLM style read failed: {e}")
         img_desc = ''
@@ -75,12 +75,13 @@ def build_flux_style_descriptors(image_path, style_source: str = '',
         out = mlx_llm.chat(
             messages=[{'role': 'system', 'content': system_msg},
                       {'role': 'user', 'content': user_msg}],
-            model=text_model, max_tokens=140, temperature=0.4,
+            model=text_model, max_tokens=140, temperature=0.2,
         )
     except Exception as e:
         print(f"  [style] descriptor reconcile failed: {e}")
         out = img_desc
-    return _clean_descriptors(out, style_source)
+    return _ensure_medium_floor(_clean_descriptors(out, style_source),
+                                style_source)
 
 
 def _clean_descriptors(text: str, style_source: str = '',
@@ -116,6 +117,9 @@ def _clean_descriptors(text: str, style_source: str = '',
     unique = []
     for part in out.split(','):
         phrase = _re.sub(r'\s{2,}', ' ', part).strip(' .')
+        # strip orphaned leading conjunctions left by label/source stripping
+        phrase = _re.sub(r'^(?:and|or|with|the)\s+', '', phrase,
+                         flags=_re.IGNORECASE).strip()
         if not phrase:
             continue
         key = phrase.lower()
@@ -125,7 +129,104 @@ def _clean_descriptors(text: str, style_source: str = '',
         unique.append(phrase)
         if len(unique) >= max_descriptors:
             break
-    return ', '.join(unique)
+    return ', '.join(_reorder_descriptors(unique))
+
+
+# ---------------------------------------------------------------------------
+# Canonical descriptor ordering — determinism where it matters most.
+#
+# FLUX weights early tokens heavily. Two distill rolls with nearly IDENTICAL
+# vocabulary render very differently depending on ORDER: a roll that buries
+# "3D render, cel animation" behind thirteen mood words renders visibly weaker
+# than one that leads with them (observed side-by-side on the same deck). The
+# model's output order is a dice roll; this sort is the house rule. Any roll's
+# vocabulary is emitted in a fixed category order — medium first, then
+# linework/shading, palette, mood/theme, composition framing last — with the
+# original order preserved WITHIN each category. Same words in, same order
+# out, every time.
+# ---------------------------------------------------------------------------
+_ORDER_MEDIUM = (
+    'render', 'animation', 'anime', 'cartoon', 'cel ', 'ink', 'illustration',
+    'watercolor', 'watercolour', 'gouache', 'painting', 'painterly',
+    'photograph', 'photo', 'pixel', 'comic', 'manga', 'woodblock', 'etching',
+    'engraving', 'sketch', 'drawing', 'cgi', 'claymation', 'stop-motion',
+    'digital art', 'concept art',
+)
+_ORDER_LINE_SURFACE = (
+    'line', 'outline', 'linework', 'shading', 'shaded', 'hatch', 'stipple',
+    'brush', 'stroke', 'texture', 'contrast', 'edge', 'flat color', 'flat fill',
+    'cel-shaded', 'gradient', 'matte', 'glossy', 'halftone', 'impasto',
+)
+_ORDER_COLOR = (
+    'palette', 'hue', 'tone', 'pastel', 'neon', 'saturat', 'muted', 'vibrant',
+    'vivid', 'colorful', 'colourful', 'monochrom', 'bright', 'tint', 'duotone',
+    'red', 'orange', 'yellow', 'green', 'blue', 'teal', 'purple', 'pink',
+    'magenta', 'coral', 'beige', 'cream', 'maroon', 'turquoise', 'lavender',
+)
+_ORDER_COMPOSITION = (
+    'close-up', 'closeup', 'wide shot', 'framing', 'composition', 'angle',
+    'view', 'panoram', 'perspective', 'symmetr', 'centered', 'isometric',
+    'shot', 'crop',
+)
+
+
+# Deterministic medium floor. An analysis roll sometimes emits pure theme/mood
+# vocabulary with NO medium term at all ("gritty, dark humor, retro-futuristic")
+# — ordering can't fix words that aren't there, and a medium-less style prompt
+# renders off-style. When the roll lacks any medium-rank descriptor and the
+# style name matches a known category, these canonical terms are PREPENDED.
+# Keyword-mapped only — no LLM in the loop, so the floor never varies.
+_MEDIUM_FLOOR = {
+    ('morty', 'cartoon', 'animated', 'animation', 'anime', 'ghibli',
+     'spongebob', 'simpsons', 'futurama', 'disney', 'looney'):
+        ['cel animation', 'cartoonish'],
+    ('ligne', 'claire', 'ink', 'moebius', 'ngai', 'woodblock', 'ukiyo',
+     'tintin', 'linework', 'illustration'):
+        ['ink illustration', 'clean linework'],
+    ('pixar', '3d', 'cgi', 'render'): ['3D render'],
+    ('photo', 'photograph', 'film', 'cinematic', 'noir'):
+        ['cinematic photograph'],
+    ('watercolor', 'watercolour', 'gouache'): ['watercolor painting'],
+    ('oil', 'impressionist', 'baroque', 'rembrandt', 'renaissance'):
+        ['oil painting'],
+    ('comic', 'manga'): ['comic book art'],
+    ('pixel', '8-bit', '16-bit'): ['pixel art'],
+}
+
+
+def _ensure_medium_floor(line: str, style_source: str) -> str:
+    """Prepend whichever canonical medium terms are missing when the style name
+    deterministically maps to a known medium. Every distill of a given deck
+    therefore shares an identical, known-good opening ("cel animation,
+    cartoonish, ...") regardless of what the analysis roll emitted."""
+    if not line or not style_source:
+        return line
+    tokens = set(style_source.lower().replace('&', ' ').replace('-', ' ').split())
+    for keys, floor in _MEDIUM_FLOOR.items():
+        if tokens & set(keys):
+            floor_lower = {t.lower() for t in floor}
+            rest = [p.strip() for p in line.split(',')
+                    if p.strip() and p.strip().lower() not in floor_lower]
+            return ', '.join(floor + rest)
+    return line
+
+
+def _descriptor_rank(phrase: str) -> int:
+    p = ' ' + phrase.lower() + ' '
+    if any(k in p for k in _ORDER_COMPOSITION):
+        return 4
+    if any(k in p for k in _ORDER_MEDIUM):
+        return 0
+    if any(k in p for k in _ORDER_LINE_SURFACE):
+        return 1
+    if any(k in p for k in _ORDER_COLOR):
+        return 2
+    return 3          # mood / energy / theme
+
+
+def _reorder_descriptors(phrases: list) -> list:
+    """Stable-sort descriptors into canonical category order (see above)."""
+    return sorted(phrases, key=lambda p: _descriptor_rank(p))
 
 
 def analyze_inspiration_style(image_path: str | Path, openai_client=None,
