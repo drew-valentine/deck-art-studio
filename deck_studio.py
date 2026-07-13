@@ -2932,13 +2932,21 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
     if first_img is not None:
         if progress_callback:
             progress_callback('Building style descriptors from inspiration...')
-        from vision_analyzer import build_flux_style_descriptors
-        flux_style_prompt = build_flux_style_descriptors(
-            first_img, style_source=style_source, backend=llm_backend,
-            vision_model=bcfg.get('ollama_vision_model', 'llava:7b'),
-            text_model=bcfg.get('ollama_model', 'llama3.2:3b'))
+        from vision_analyzer import (build_flux_style_descriptors,
+                                     build_flux_style_paragraph)
+        # Rich art-director paragraph first — empirically the difference between
+        # a distant stylistic echo and a near-uncanny transfer. Tag-descriptor
+        # path only as fallback when the paragraph pass comes back too thin.
+        flux_style_prompt = build_flux_style_paragraph(
+            first_img, style_source=style_source,
+            vision_model=bcfg.get('ollama_vision_model', 'llava:7b'))
+        if len(flux_style_prompt.split()) < 20:
+            flux_style_prompt = build_flux_style_descriptors(
+                first_img, style_source=style_source, backend=llm_backend,
+                vision_model=bcfg.get('ollama_vision_model', 'llava:7b'),
+                text_model=bcfg.get('ollama_model', 'llama3.2:3b'))
         if flux_style_prompt:
-            print(f"  [distill] FLUX style descriptors ({'named: '+style_source if style_source else 'image-only'}): {flux_style_prompt}")
+            print(f"  [distill] FLUX style prompt ({'named: '+style_source if style_source else 'image-only'}): {flux_style_prompt}")
     data['flux_style_prompt'] = flux_style_prompt
 
     with open(deck_json_path, 'w') as f:

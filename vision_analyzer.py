@@ -10,6 +10,204 @@ prompt generation.
 from pathlib import Path
 
 
+def build_flux_style_paragraph(image_path, style_source: str = '',
+                               vision_model: str = 'llava:7b',
+                               max_words: int = 65) -> str:
+    """Derive a rich art-director style paragraph from an inspiration image.
+
+    Empirically (queen-marchesa / heads-i-win validation decks), FLUX's style
+    fidelity is bounded by descriptor QUALITY, not by the model: a specific
+    ~60-word art-director paragraph ("fine flowing black ink linework, flat
+    muted pastel colors of dusty coral, sage green..., ukiyo-e swirling clouds")
+    renders near-uncanny transfer where 10-16 word tag soup gives only a distant
+    echo. The local VLM writes genuinely good LONG prose about technique when
+    asked like an art director — but every model-based compression pass
+    (LLM or VLM) shreds it back into tag soup, and fill-in templates get
+    parroted. So: one long-form vision pass, then DETERMINISTIC compression in
+    code (_prose_to_style_prompt) — strip scaffolding, drop subject leakage,
+    cap words. Returns '' on failure (caller falls back to the tag path).
+    """
+    image_path = Path(image_path)
+    if not image_path.exists():
+        return ''
+    prompt = (
+        "You are a senior art director writing a STYLE TRANSFER instruction for "
+        "a text-to-image model. Study this image's rendering technique — NOT its "
+        "subject. Describe, in order: medium and overall look; linework character "
+        "(weight, flow, density); how surfaces and shading are handled; the color "
+        "palette with 4-6 SPECIFIC hue names (say 'dusty coral', never just "
+        "'red'); recurring decorative motifs or texture patterns; art-historical "
+        "influences if visible. Be concrete and technical — never vague words "
+        "like 'beautiful' alone. Never mention the subject. Output ONLY the "
+        "description."
+    )
+    # Best-of-2 sampling: the VLM's roll-to-roll variance is the failure mode
+    # (one roll writes "vermilion, chartreuse, saffron... ukiyo-e clouds", the
+    # next writes markdown headers and "a mix of primary and secondary colors").
+    # Two samples scored by deterministic style density picks the strong roll.
+    candidates = []
+    for _ in range(2):
+        try:
+            import mlx_llm
+            prose = mlx_llm.vision(str(image_path), prompt, model=vision_model,
+                                   max_tokens=260, temperature=0.3)
+        except Exception as e:
+            print(f"  [style] VLM paragraph read failed: {e}")
+            continue
+        line = _prose_to_style_prompt(prose or '', max_words=max_words)
+        if line:
+            candidates.append(line)
+    if not candidates:
+        return ''
+    return max(candidates, key=_style_density_score)
+
+
+# Technique vocabulary for scoring a style prompt's information density.
+_TECHNIQUE_WORDS = frozenset({
+    'linework', 'outlines', 'outline', 'ink', 'cel', 'flat', 'shading',
+    'hatching', 'stipple', 'brushstrokes', 'washes', 'gradient', 'matte',
+    'woodblock', 'etching', 'halftone', 'impasto', 'glazing', 'vector',
+    'swirl', 'swirling', 'motif', 'motifs', 'pattern', 'patterns', 'ornate',
+    'ornamental', 'ukiyo-e', 'nouveau', 'deco', 'illustration', 'animation',
+    'cartoonish', 'painterly', 'watercolor', 'gouache',
+})
+
+
+def _style_density_score(line: str) -> int:
+    """Deterministic quality score for a style prompt: specific hue words count
+    double (they are the rarest, most transfer-critical information), then
+    technique/motif vocabulary. Used to pick the best VLM sample."""
+    import re as _re
+    words = _re.findall(r"[a-z0-9-]+", line.lower())
+    hue = sum(1 for w in words if w in _COLOR_WORDS)
+    tech = sum(1 for w in words if w in _TECHNIQUE_WORDS)
+    return hue * 2 + tech
+
+
+# Sentence-scaffold prefixes the VLM reliably emits ("The linework is ...") —
+# stripped so the clause reads as a direct style instruction. Applied
+# repeatedly, so "The overall look is reminiscent of" also collapses.
+_SCAFFOLD_RE = None
+
+# Subject words whose presence marks a leaked content sentence ("the intricate
+# design of the alien device on the boy's head") — those sentences are dropped
+# whole; technique sentences never contain them.
+_SUBJECT_LEAK_WORDS = frozenset({
+    'person', 'people', 'man', 'men', 'woman', 'women', 'boy', 'girl', 'child',
+    'character', 'characters', 'figure', 'figures', 'creature', 'creatures',
+    'alien', 'animal', 'animals', 'face', 'faces', 'body', 'device', 'weapon',
+    'held', 'worn', 'wearing', 'holding', 'depicted', 'subject', 'scene',
+})
+
+
+def _prose_to_style_prompt(prose: str, max_words: int = 65) -> str:
+    """Deterministically compress VLM art-director prose into a style prompt.
+
+    Removes section-header labels ("Medium and overall look:"), splits into
+    sentences, drops subject-leak sentences, strips "The <aspect> is/are"
+    scaffolding and filler participial tails ("..., creating a sense of ..."),
+    then joins clause bodies with commas, capping at max_words on a clause
+    boundary — always keeping at least one color-palette clause.
+    """
+    import re as _re
+    global _SCAFFOLD_RE
+    aspects = (r"image(?:'s)?|medium|overall look|look|style|aesthetic|"
+               r"line\s?work|lines?|surfaces?|shading|colou?r palette|"
+               r"palette|dominant colou?rs?|colou?rs?|specific hues?|hues?|"
+               r"texture patterns?|textures?|recurring decorative motifs?|"
+               r"decorative motifs?|motifs?|art[- ]historical influences?|"
+               r"influences?|composition|framing|weight|density|flow")
+    if _SCAFFOLD_RE is None:
+        verbs = (r"is|are|has|have|includes?|include|shows?|show|features?|"
+                 r"feature|exhibits?|exhibit|appears?|appear|handled with|"
+                 r"handled|reminiscent of|suggests?|suggest")
+        _SCAFFOLD_RE = _re.compile(
+            rf"^(?:(?:the|this|its|overall|and)\s+)*(?:{aspects})"
+            rf"(?:\s+(?:and|&)\s+(?:{aspects}))*\s*:?\s*(?:{verbs})?\s*",
+            _re.IGNORECASE)
+
+    raw = prose or ''
+    # Markdown normalization — some rolls emit "### Medium and Overall Look",
+    # "**Color palette:**", "- **Flow**" instead of prose. Header lines are
+    # pure labels: drop them; bold markers and bullets are noise: strip them.
+    raw = _re.sub(r'(?m)^\s*#{1,6}[^\n]*$', '', raw)
+    raw = _re.sub(r'\*\*([^*]*)\*\*', r'\1', raw).replace('**', '')
+    raw = _re.sub(r'(?m)^\s*(?:[-*+]|\d+[.)])\s+', '', raw)
+    text = _re.sub(r'\s+', ' ', raw).strip()
+    if not text:
+        return ''
+    # Kill inline section-header labels wherever they appear, including
+    # compound ones ("Medium and overall look:", "and shading:").
+    text = _re.sub(rf"(?:^|(?<=[.;!?] ))(?:and\s+)?(?:{aspects})"
+                   rf"(?:\s+(?:and|&)\s+[A-Za-z ]{{3,24}})?\s*:\s*",
+                   '', text, flags=_re.IGNORECASE)
+    text = _re.sub(r'\s*:\s+(?=[A-Z])', ' ', text)   # stray label colons
+
+    clauses = []
+    for sent in _re.split(r'(?<=[.;!?])\s+', text):
+        sent = sent.strip().rstrip('.;!?').strip()
+        if not sent:
+            continue
+        words_l = set(w.lower() for w in _re.findall(r"[a-z]+", sent.lower()))
+        if words_l & _SUBJECT_LEAK_WORDS:
+            continue
+        prev = None
+        while prev != sent:            # strip stacked scaffolds
+            prev = sent
+            sent = _SCAFFOLD_RE.sub('', sent).strip()
+        # chop filler participial tails — they carry no style information
+        sent = _re.split(r',\s*(?:suggesting|creating|contributing|maintaining'
+                         r'|adding|evoking|giving|conveying|resulting|which'
+                         r'|that)\b', sent)[0]
+        # chop an end-anchored prepositional subject tail ("... on the hot air
+        # balloon") — content nouns sneak into motif clauses this way
+        sent = _re.sub(r'\s+(?:on|of|in)\s+the\s+[a-z][a-z\s-]{2,32}$', '', sent,
+                       flags=_re.IGNORECASE)
+        sent = sent.strip(' ,')
+        if len(sent.split()) < 2:
+            continue
+        # lowercase a leading scaffold-capital so clauses flow as one prompt
+        if sent[0].isupper() and not sent.split()[0].isupper():
+            sent = sent[0].lower() + sent[1:]
+        clauses.append(sent)
+
+    # Priority selection under the word cap. The style-DNA carriers — palette
+    # hues, decorative motifs/patterns, art-historical influences — are what
+    # make a transfer read as THE reference artist rather than a generic
+    # category, so they outrank generic medium/linework filler.
+    def _prio(idx, clause):
+        c = clause.lower()
+        if idx == 0:
+            return 0                       # medium/overall look leads
+        if _is_color_descriptor(clause):
+            return 1
+        if any(k in c for k in ('motif', 'pattern', 'swirl', 'cloud', 'ornament',
+                                'ornate', 'texture', 'hatching', 'stipple')):
+            return 1
+        if any(k in c for k in ('influence', 'inspired', 'ukiyo', 'nouveau',
+                                'deco', 'pop art', 'asian', 'victorian',
+                                'baroque', '-esque')):
+            return 1
+        return 2
+    # Drop trailing truncation debris — max_tokens can cut the prose mid-phrase,
+    # leaving fragments like "for example, the".
+    _dangling = {'the', 'a', 'an', 'of', 'and', 'or', 'with', 'for', 'to',
+                 'in', 'on', 'like', 'example', 'such', 'as'}
+    while clauses and (clauses[-1].split()[-1].lower() in _dangling
+                       or len(clauses[-1].split()) < 3):
+        clauses.pop()
+
+    ranked = sorted(range(len(clauses)), key=lambda i: (_prio(i, clauses[i]), i))
+    chosen, count = set(), 0
+    for i in ranked:
+        n = len(clauses[i].split())
+        if chosen and count + n > max_words:
+            continue
+        chosen.add(i)
+        count += n
+    return ', '.join(clauses[i] for i in sorted(chosen))
+
+
 def build_flux_style_descriptors(image_path, style_source: str = '',
                                  backend: str = 'local',
                                  vision_model: str = 'llava:7b',

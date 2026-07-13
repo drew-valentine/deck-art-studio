@@ -173,6 +173,72 @@ class TestMediumAnchors:
         assert '3D render' in out
 
 
+# Real Qwen2.5-VL prose captured from the queen-marchesa koi reference — the
+# paragraph pipeline's deterministic compressor must handle exactly this shape.
+QM_PROSE = (
+    "The medium is a vibrant, detailed illustration with a whimsical, "
+    "fantastical aesthetic. The overall look is reminiscent of a hand-drawn "
+    "comic or a digital painting with a retro, comic book feel. The linework "
+    "is fine, flowing, and black, with varying weights that add depth and "
+    "dimension. Surfaces are handled with a combination of flat colors and "
+    "subtle shading, creating a sense of volume and texture. The color "
+    "palette includes bright reds, greens, blues, yellows, and oranges. "
+    "Specific hues like vermilion, chartreuse, turquoise, and saffron stand "
+    "out. Recurring decorative motifs include stylized clouds, swirling "
+    "patterns, and intricate patterns on the hot air balloon. The image shows "
+    "influences from East Asian art, particularly in the depiction of clouds. "
+    "Recurring decorative motifs include the intricate design of the alien "
+    "device on the boy's head and the futuristic weapon held by the man."
+)
+
+
+class TestProseToStylePrompt:
+    def test_style_dna_survives(self):
+        from vision_analyzer import _prose_to_style_prompt
+        out = _prose_to_style_prompt(QM_PROSE)
+        # specific hues + motifs are the uncanny carriers — must survive the cap
+        assert 'vermilion' in out and 'chartreuse' in out
+        assert 'stylized clouds' in out and 'swirling patterns' in out
+
+    def test_scaffolding_and_headers_stripped(self):
+        from vision_analyzer import _prose_to_style_prompt
+        out = _prose_to_style_prompt(QM_PROSE)
+        assert 'The medium is' not in out
+        assert 'The color palette includes' not in out
+
+    def test_subject_leaks_dropped(self):
+        from vision_analyzer import _prose_to_style_prompt
+        out = _prose_to_style_prompt(QM_PROSE).lower()
+        assert 'balloon' not in out            # end-anchored tail chopped
+        assert 'alien' not in out and 'weapon' not in out   # sentence dropped
+        assert 'boy' not in out
+
+    def test_word_cap_respected(self):
+        from vision_analyzer import _prose_to_style_prompt
+        out = _prose_to_style_prompt(QM_PROSE, max_words=65)
+        assert len(out.split()) <= 70          # small tolerance over cap
+
+    def test_empty_prose(self):
+        from vision_analyzer import _prose_to_style_prompt
+        assert _prose_to_style_prompt('') == ''
+        assert _prose_to_style_prompt('   ') == ''
+
+
+class TestParagraphBuilder:
+    def test_paragraph_from_vision_prose(self, monkeypatch, tmp_path):
+        from vision_analyzer import build_flux_style_paragraph
+        fake = types.ModuleType('mlx_llm')
+        fake.vision = lambda *a, **k: QM_PROSE
+        monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
+        img = tmp_path / "insp.png"; img.write_bytes(b"x")
+        out = build_flux_style_paragraph(str(img))
+        assert 'vermilion' in out and len(out.split()) >= 20
+
+    def test_missing_image_returns_empty(self):
+        from vision_analyzer import build_flux_style_paragraph
+        assert build_flux_style_paragraph('/nope/missing.png') == ''
+
+
 class TestMediumClassification:
     def test_label_parsed_from_reply(self, monkeypatch):
         _fake_mlx(monkeypatch, image_read='', reconciled='',
