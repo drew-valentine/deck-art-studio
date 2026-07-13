@@ -80,7 +80,50 @@ def build_flux_style_descriptors(image_path, style_source: str = '',
     except Exception as e:
         print(f"  [style] descriptor reconcile failed: {e}")
         out = img_desc
-    return _clean_descriptors(out, style_source)
+
+    # Palette preservation: the reconcile trusts the named style for medium and
+    # technique, but a style NAME can wrongly dictate color — e.g. 'ligne claire'
+    # washing a pastel reference to monochrome. The IMAGE is the source of truth
+    # for color, so we strip color/palette descriptors out of the reconciled
+    # (named-style) line and append the palette read straight from the image.
+    # This keeps a strong style's medium/technique intact (Rick & Morty) while
+    # guaranteeing the reference's actual colors survive (queen-marchesa).
+    reconciled = _clean_descriptors(out, style_source)
+    img_palette = _palette_descriptors(img_desc)
+    if not img_palette:
+        return reconciled
+    style_only = [d for d in reconciled.split(',')
+                  if d.strip() and not _is_color_descriptor(d)]
+    return _clean_descriptors(', '.join(style_only + img_palette), style_source)
+
+
+# Color/palette detection for palette preservation (see build_flux_style_descriptors).
+_COLOR_WORDS = frozenset({
+    'red', 'orange', 'yellow', 'green', 'blue', 'teal', 'cyan', 'purple',
+    'violet', 'magenta', 'pink', 'brown', 'black', 'white', 'gray', 'grey',
+    'gold', 'silver', 'beige', 'cream', 'coral', 'salmon', 'mustard', 'olive',
+    'lavender', 'turquoise', 'crimson', 'scarlet', 'amber', 'ochre', 'indigo',
+    'maroon', 'tan', 'peach', 'mint', 'navy', 'burgundy', 'sepia', 'bronze',
+    'copper', 'earthy', 'earth',
+})
+_PALETTE_KEYWORDS = ('palette', 'hue', 'tone', 'pastel', 'monochrom', 'neon',
+                     'saturat', 'tint', 'duotone', 'colored', 'coloured')
+
+
+def _is_color_descriptor(phrase: str) -> bool:
+    """True if a descriptor is about color/palette (a color name, or a palette
+    keyword like 'pastel hues', 'warm tones', 'monochromatic')."""
+    import re as _re
+    p = phrase.lower()
+    if any(k in p for k in _PALETTE_KEYWORDS):
+        return True
+    return any(w in _COLOR_WORDS for w in _re.findall(r"[a-z]+", p))
+
+
+def _palette_descriptors(text: str) -> list:
+    """Extract the color/palette descriptors from a comma-separated line."""
+    return [d.strip() for d in (text or '').split(',')
+            if d.strip() and _is_color_descriptor(d)]
 
 
 def _clean_descriptors(text: str, style_source: str = '',
