@@ -303,3 +303,39 @@ class TestScryfallToCardEntry:
         assert entry['card_type'] == 'battle'
         assert entry['card_faces'][0]['defense'] == '3'
         assert entry['card_faces'][1]['defense'] is None
+
+
+class TestCreatureTypeInPrompt:
+    """A creature's generated prompt must name its creature type — the LLM is
+    instructed to include it but often drops it; injection is the guarantee."""
+
+    CARD = {'name': 'Okaun, Eye of Chaos', 'card_type': 'creature',
+            'type_line': 'Legendary Creature — Cyclops Berserker'}
+
+    def test_missing_type_injected_after_name(self):
+        from prompt_generator import _ensure_creature_type_in_prompt
+        text = "Okaun, Eye of Chaos sits majestically, his eye blazing."
+        out = _ensure_creature_type_in_prompt(text, self.CARD)
+        assert out.startswith("Okaun, Eye of Chaos, a Cyclops Berserker, sits")
+
+    def test_present_type_untouched(self):
+        from prompt_generator import _ensure_creature_type_in_prompt
+        text = "Okaun, Eye of Chaos, a towering Cyclops Berserker, charges."
+        assert _ensure_creature_type_in_prompt(text, self.CARD) == text
+
+    def test_name_absent_prepends(self):
+        from prompt_generator import _ensure_creature_type_in_prompt
+        out = _ensure_creature_type_in_prompt("A one-eyed brute rampages.", self.CARD)
+        assert out.startswith("Okaun, Eye of Chaos, a Cyclops Berserker — A one-eyed")
+
+    def test_vowel_article(self):
+        from prompt_generator import _ensure_creature_type_in_prompt
+        card = {'name': 'Ghalta', 'card_type': 'creature',
+                'type_line': 'Legendary Creature — Elder Dinosaur'}
+        out = _ensure_creature_type_in_prompt("Ghalta stomps.", card)
+        assert "Ghalta, an Elder Dinosaur, stomps." == out
+
+    def test_non_creature_untouched(self):
+        from prompt_generator import _ensure_creature_type_in_prompt
+        card = {'name': 'Sol Ring', 'card_type': 'artifact', 'type_line': 'Artifact'}
+        assert _ensure_creature_type_in_prompt("A ring.", card) == "A ring."
