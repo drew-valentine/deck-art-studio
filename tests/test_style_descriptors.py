@@ -10,8 +10,7 @@ import sys
 import types
 
 from vision_analyzer import (_clean_descriptors, _is_color_descriptor,
-                             _is_medium_mislabel, _palette_descriptors,
-                             build_flux_style_descriptors)
+                             _palette_descriptors, build_flux_style_descriptors)
 
 
 # The actual degenerate value that shipped in the queen-marchesa-b3-v2 deck.
@@ -93,93 +92,102 @@ class TestColorDetection:
         assert _palette_descriptors(line) == ["pastel hues", "warm earth tones"]
 
 
-class TestPalettePreservation:
-    """The named-style reconcile must not let a style NAME wash out the image's
-    real colors (e.g. 'ligne claire' -> monochrome)."""
+def _fake_mlx(monkeypatch, image_read, reconciled, medium_label=''):
+    """Fake mlx_llm whose chat() answers the constrained medium-classification
+    question with `medium_label` and every other chat with `reconciled`."""
+    fake = types.ModuleType('mlx_llm')
+    fake.vision = lambda *a, **k: image_read
 
-    def _fake_mlx(self, monkeypatch, image_read, reconciled):
-        fake = types.ModuleType('mlx_llm')
-        fake.vision = lambda *a, **k: image_read
-        fake.chat = lambda *a, **k: reconciled
-        monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
+    def chat(messages=None, **k):
+        last = (messages or [{}])[-1].get('content', '')
+        if last.startswith('Style: '):
+            return medium_label
+        return reconciled
+    fake.chat = chat
+    monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
 
-    def test_pastel_survives_monochrome_reconcile(self, monkeypatch, tmp_path):
-        # The exact queen-marchesa failure: named style washes color to monochrome.
-        self._fake_mlx(
-            monkeypatch,
-            image_read=("ink illustration, delicate lines, warm earth tones, "
-                        "pastel hues, intricate details"),
-            reconciled=("clean, linear, minimalist, white, black, gray, "
-                        "monochromatic, sharp"))
+
+class TestMediumAnchors:
+    """A named style gets canonical medium anchors (classified via constrained
+    multiple choice) PREPENDED as an additive floor — never stripped."""
+
+    def test_cartoon_anchors_lead(self, monkeypatch, tmp_path):
+        _fake_mlx(monkeypatch,
+                  image_read="2D animation, cool tones, high contrast",
+                  reconciled="wacky, sci-fi, dark humor, neon",
+                  medium_label="cel animation")
         img = tmp_path / "insp.png"; img.write_bytes(b"x")
-        out = build_flux_style_descriptors(str(img), style_source='ligne claire',
-                                           backend='local').lower()
-        # image palette preserved
-        assert 'warm earth tones' in out and 'pastel hues' in out
-        # monochrome color terms from the named-style reconcile stripped out
-        for mono in ('monochromatic', 'white', 'black', 'gray'):
-            assert mono not in out
-        # non-color style descriptors from the reconcile kept
-        assert 'clean' in out and 'linear' in out
+        out = build_flux_style_descriptors(str(img), style_source='Wubba Cartoon')
+        parts = [p.strip() for p in out.split(',')]
+        # anchors first (stable prefix), LLM tail kept
+        assert parts[0] == 'cel animation'
+        assert 'bold clean outlines' in parts and 'flat cel shading' in parts
+        for kept in ('wacky', 'sci-fi', 'dark humor', 'neon'):
+            assert kept in parts, kept
 
-    def test_strong_style_keeps_its_descriptors(self, monkeypatch, tmp_path):
-        # Rick & Morty: rich named-style knowledge must survive; palette added.
-        self._fake_mlx(
-            monkeypatch,
-            image_read=("2D animation, cartoonish, cool tones, pastel hues, "
-                        "high contrast"),
-            reconciled=("cartoonish, 2D animation, dark humor, sci-fi, "
-                        "bold outlines, wacky characters"))
+    def test_good_descriptors_never_stripped(self, monkeypatch, tmp_path):
+        # "3D render" was part of the empirically BEST line — additive design
+        # must keep it when the LLM emits it alongside cartoon anchors.
+        _fake_mlx(monkeypatch,
+                  image_read="2D animation, vibrant colors",
+                  reconciled="3D render, cel animation, cartoonish, vibrant, neon",
+                  medium_label="cel animation")
         img = tmp_path / "insp.png"; img.write_bytes(b"x")
-        out = build_flux_style_descriptors(str(img), style_source='Rick & Morty').lower()
-        for kept in ('dark humor', 'sci-fi', 'bold outlines', 'wacky characters'):
-            assert kept in out, kept
-        assert 'cool tones' in out or 'pastel hues' in out
+        out = build_flux_style_descriptors(str(img), style_source='Wubba Cartoon')
+        assert '3D render' in out
+        assert out.split(',')[0].strip() == 'cel animation'
 
-    def test_no_palette_in_image_leaves_reconcile_untouched(self, monkeypatch, tmp_path):
-        self._fake_mlx(monkeypatch,
-                       image_read="ink illustration, bold outlines, clean linework",
-                       reconciled="cartoonish, flat shading, bold outlines")
+    def test_unknown_medium_no_anchors(self, monkeypatch, tmp_path):
+        _fake_mlx(monkeypatch,
+                  image_read="ink illustration, bold outlines",
+                  reconciled="cartoonish, flat shading, bold outlines",
+                  medium_label="i have no idea")
         img = tmp_path / "insp.png"; img.write_bytes(b"x")
-        out = build_flux_style_descriptors(str(img), style_source='Rick & Morty')
+        out = build_flux_style_descriptors(str(img), style_source='Mystery Show')
         assert out == "cartoonish, flat shading, bold outlines"
 
-
-class TestMediumMislabel:
-    def test_realistic_media_detected(self):
-        for m in ("3D computer-generated", "3D render", "photorealistic",
-                  "photograph", "cgi render", "live-action film still",
-                  "octane render", "digital rendering"):
-            assert _is_medium_mislabel(m), m
-
-    def test_legit_stylized_media_kept(self):
-        for m in ("cel animation", "cartoonish", "ink illustration", "watercolor",
-                  "oil painting", "flat cel shading", "bold outlines",
-                  "clean linework", "pastel hues"):
-            assert not _is_medium_mislabel(m), m
-
-    def _fake_mlx(self, monkeypatch, image_read, reconciled):
-        fake = types.ModuleType('mlx_llm')
-        fake.vision = lambda *a, **k: image_read
-        fake.chat = lambda *a, **k: reconciled
-        monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
-
-    def test_3d_mislabel_stripped_for_named_style(self, monkeypatch, tmp_path):
-        # The exact heads-i-win regression: reconcile keeps "3D computer-generated".
-        self._fake_mlx(
-            monkeypatch,
-            image_read="2D animation, cartoonish, cool tones, vibrant colors",
-            reconciled=("vibrant, stylized, 3D computer-generated, metallic, "
-                        "cartoonish, playful, neon"))
+    def test_palette_appended_when_line_has_no_color(self, monkeypatch, tmp_path):
+        _fake_mlx(monkeypatch,
+                  image_read="2D animation, warm earth tones, pastel hues",
+                  reconciled="wacky, dynamic, exaggerated",
+                  medium_label="cel animation")
         img = tmp_path / "insp.png"; img.write_bytes(b"x")
-        out = build_flux_style_descriptors(str(img), style_source='Rick & Morty').lower()
-        assert '3d' not in out and 'computer-generated' not in out
-        assert 'cartoonish' in out and 'stylized' in out   # real style kept
+        out = build_flux_style_descriptors(str(img), style_source='Wubba Cartoon')
+        assert 'warm earth tones' in out and 'pastel hues' in out
+
+    def test_palette_not_duplicated_when_line_has_color(self, monkeypatch, tmp_path):
+        _fake_mlx(monkeypatch,
+                  image_read="2D animation, warm earth tones",
+                  reconciled="wacky, neon, vibrant",   # 'neon' counts as color
+                  medium_label="cel animation")
+        img = tmp_path / "insp.png"; img.write_bytes(b"x")
+        out = build_flux_style_descriptors(str(img), style_source='Wubba Cartoon')
+        assert 'warm earth tones' not in out
 
     def test_image_only_keeps_medium(self, monkeypatch, tmp_path):
         # No named style -> the VLM medium is the source of truth, keep it.
-        self._fake_mlx(monkeypatch,
-                       image_read="3D render, vibrant, dynamic", reconciled="(x)")
+        _fake_mlx(monkeypatch,
+                  image_read="3D render, vibrant, dynamic", reconciled="(x)")
         img = tmp_path / "insp.png"; img.write_bytes(b"x")
         out = build_flux_style_descriptors(str(img), style_source='')
         assert '3D render' in out
+
+
+class TestMediumClassification:
+    def test_label_parsed_from_reply(self, monkeypatch):
+        _fake_mlx(monkeypatch, image_read='', reconciled='',
+                  medium_label='The label is: cel animation.')
+        from vision_analyzer import _classify_style_medium
+        assert _classify_style_medium('Rick & Morty', 'm') == 'cel animation'
+
+    def test_longest_label_wins(self, monkeypatch):
+        # 'ink illustration' must not lose to any shorter substring label.
+        _fake_mlx(monkeypatch, image_read='', reconciled='',
+                  medium_label='ink illustration')
+        from vision_analyzer import _classify_style_medium
+        assert _classify_style_medium('ligne claire', 'm') == 'ink illustration'
+
+    def test_garbage_reply_returns_empty(self, monkeypatch):
+        _fake_mlx(monkeypatch, image_read='', reconciled='', medium_label='dunno')
+        from vision_analyzer import _classify_style_medium
+        assert _classify_style_medium('whatever', 'm') == ''

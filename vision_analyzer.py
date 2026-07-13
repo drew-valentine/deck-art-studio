@@ -56,52 +56,151 @@ def build_flux_style_descriptors(image_path, style_source: str = '',
         return _clean_descriptors(img_desc, style_source)
 
     # Reconcile the image read with knowledge of the named style.
+    #
+    # Design (validated empirically on real decks): FLUX quality lives in the
+    # SHAPE of this descriptor line. The best-performing line for a cartoon deck
+    # was "3D render, cel animation, cartoonish, exaggerated, vibrant, pastel,
+    # neon, high-contrast, dynamic, playful, ..." — strong medium anchors first,
+    # then rich palette + energy words. Weak lines (generic mood clichés, or a
+    # lone "3D computer-generated" with no cartoon anchor) render off-style. A
+    # 3B model's open-ended output has huge variance, so we stabilize 3 ways:
+    #   1. FEW-SHOT the reconcile so the model mimics the good shape.
+    #   2. Classify the named style's medium via a CONSTRAINED multiple-choice
+    #      question (far more reliable than open generation for small models).
+    #   3. ADD canonical medium anchors + the image's palette when missing —
+    #      an additive floor, never subtractive stripping (stripping provably
+    #      deletes good descriptors: "3D render" was part of the best line).
     system_msg = (
         "You produce style descriptors for the FLUX text-to-image model. You are "
         "given (a) a visual-style read of reference images and (b) the NAME of the "
         "intended style. Output ONE line of 10-16 comma-separated descriptors that "
-        "best reproduce the intended style.\n"
-        "Trust the NAMED style's true medium and signature techniques — use your "
-        "knowledge to CORRECT any medium error in the image read (e.g. a live-action "
-        "film still wrongly called 'digital painting'). Keep the specific color "
-        "palette and mood from the image read. Use concrete multi-word phrases. "
-        "Describe ONLY visual style — no subject, no proper nouns, no character or "
-        "place names. Output ONLY the comma-separated descriptors."
+        "best reproduce the intended style: medium anchors first, then rendering "
+        "technique, then color palette words, then energy/mood words. Describe "
+        "ONLY visual style — no subject, no proper nouns, no character or place "
+        "names. Output ONLY the comma-separated descriptors."
     )
+    fewshot = [
+        {'role': 'user', 'content':
+            "Image read: 2D animation, cartoonish, medium close-up, vibrant colors, "
+            "pastel hues, high contrast, exaggerated expressions, bold outlines\n"
+            "Intended style name: Saturday-morning sci-fi cartoon\nDescriptors:"},
+        {'role': 'assistant', 'content':
+            "3D render, cel animation, cartoonish, exaggerated expressions, bold "
+            "clean outlines, vibrant, pastel, neon, high-contrast, dynamic, "
+            "playful, bright, colorful"},
+        {'role': 'user', 'content':
+            "Image read: ink illustration, delicate lines, warm earth tones, "
+            "pastel hues, dense botanical detail\n"
+            "Intended style name: ligne claire\nDescriptors:"},
+        {'role': 'assistant', 'content':
+            "ink illustration, clean linework, bold ink outlines, flat cel color, "
+            "dense intricate detail, pastel gradient palette, warm earth tones, "
+            "whimsical, serene"},
+    ]
     user_msg = (f"Image read: {img_desc or '(none)'}\n"
                 f"Intended style name: {style_source}\nDescriptors:")
     try:
         import mlx_llm
         out = mlx_llm.chat(
-            messages=[{'role': 'system', 'content': system_msg},
+            messages=[{'role': 'system', 'content': system_msg}, *fewshot,
                       {'role': 'user', 'content': user_msg}],
-            model=text_model, max_tokens=140, temperature=0.4,
+            model=text_model, max_tokens=140, temperature=0.2,
         )
     except Exception as e:
         print(f"  [style] descriptor reconcile failed: {e}")
         out = img_desc
 
-    # When a named style is present it governs two things the vision model gets
-    # wrong, so we fix both deterministically:
-    #
-    #  MEDIUM — the NAME dictates it (and "in the style of <name>" leads at render
-    #  time), so drop the VLM's medium mislabels — "3D computer-generated",
-    #  "photorealistic", etc. Left in, a cartoon reference read as "3D render"
-    #  drags the whole deck toward glossy 3D output, fighting the named style.
-    #
-    #  COLOR — the IMAGE dictates it. A style name can wrongly wash color out
-    #  (e.g. "ligne claire" -> monochrome), so strip color from the named-style
-    #  line and append the palette read straight from the image.
-    #
-    # (The token path already drops the VLM medium for named styles; the
-    # flux_style_prompt path just never did — this brings it in line.)
-    reconciled = [d.strip() for d in _clean_descriptors(out, style_source).split(',')
-                  if d.strip() and not _is_medium_mislabel(d)]
-    img_palette = [d for d in _palette_descriptors(img_desc)
-                   if not _is_medium_mislabel(d)]
-    if img_palette:
-        reconciled = [d for d in reconciled if not _is_color_descriptor(d)] + img_palette
-    return _clean_descriptors(', '.join(reconciled), style_source)
+    # Additive floor: canonical anchors for the named style's medium, plus the
+    # image's palette words when the line carries no color. Anchors lead so the
+    # strongest tokens sit earliest and every re-distill shares a stable,
+    # known-good prefix (dedup keeps the first occurrence of any repeat).
+    anchors = _medium_anchors(_classify_style_medium(style_source, text_model,
+                                                     img_desc=img_desc))
+    parts = [d.strip() for d in _clean_descriptors(out, style_source).split(',')
+             if d.strip()]
+    if not any(_is_color_descriptor(d) for d in parts):
+        parts += _palette_descriptors(img_desc)
+    return _clean_descriptors(', '.join(anchors + parts), style_source,
+                              max_descriptors=18)
+
+
+# Canonical anchor descriptors per medium class. These are the FLOOR for a named
+# style's flux_style_prompt — they lead the line so re-distills share a stable,
+# proven prefix regardless of how the LLM's open-ended tail rolls.
+_MEDIUM_ANCHORS = {
+    'cel animation': ['cel animation', 'cartoonish', 'bold clean outlines',
+                      'flat cel shading', 'exaggerated expressions'],
+    'ink illustration': ['ink illustration', 'clean linework', 'bold ink outlines',
+                         'flat color', 'dense intricate detail'],
+    'watercolor': ['watercolor painting', 'soft washes', 'visible pigment texture'],
+    'oil painting': ['oil painting', 'visible brushstrokes', 'painterly texture'],
+    '3d render': ['3D render', 'volumetric lighting', 'detailed surface texture'],
+    'photograph': ['cinematic photograph', 'photographic lighting',
+                   'shallow depth of field'],
+    'comic book': ['comic book art', 'bold ink outlines', 'dynamic panel energy'],
+    'pixel art': ['pixel art', 'crisp pixel edges', 'limited color palette'],
+}
+
+
+def _classify_style_medium(style_source: str, text_model: str,
+                           img_desc: str = '') -> str:
+    """Classify a named style's primary medium via constrained multiple choice.
+
+    Small models answer a pick-one-label question far more reliably than they
+    describe a medium in open generation — but only with few-shot examples
+    (otherwise a 3B model shows hard recency bias and echoes the LAST label) and
+    with the VLM's image read as evidence (name recognition alone is fragile:
+    'Rick & Morty' classified as pixel art until the read supplied '2D
+    animation, cartoonish...'). Returns one of the _MEDIUM_ANCHORS keys, or ''
+    when unknown/unparseable (no anchors applied — same behavior as before).
+    """
+    labels = list(_MEDIUM_ANCHORS.keys())
+    # '&' derails the small model's name recognition; normalize it.
+    src = style_source.replace('&', 'and')
+    try:
+        import mlx_llm
+        reply = mlx_llm.chat(
+            messages=[
+                {'role': 'system', 'content':
+                    "You classify the primary visual medium of an art style, "
+                    "given its name and a visual read of reference images. "
+                    f"Reply with EXACTLY one label from: {', '.join(labels)}. "
+                    "Nothing else."},
+                {'role': 'user', 'content':
+                    "Style: Studio Ghibli\nImage read: 2D animation, painted "
+                    "backgrounds, soft colors"},
+                {'role': 'assistant', 'content': "cel animation"},
+                {'role': 'user', 'content':
+                    "Style: film noir cinematography\nImage read: black and "
+                    "white photograph, dramatic shadows"},
+                {'role': 'assistant', 'content': "photograph"},
+                {'role': 'user', 'content':
+                    "Style: Moebius ligne claire\nImage read: ink illustration, "
+                    "clean lines, flat color"},
+                {'role': 'assistant', 'content': "ink illustration"},
+                {'role': 'user', 'content':
+                    "Style: Pixar\nImage read: 3D render, smooth surfaces, soft "
+                    "lighting"},
+                {'role': 'assistant', 'content': "3d render"},
+                {'role': 'user', 'content':
+                    f"Style: {src}\nImage read: {img_desc or '(none)'}"},
+            ],
+            model=text_model, max_tokens=10, temperature=0.0,
+        )
+    except Exception as e:
+        print(f"  [style] medium classification failed: {e}")
+        return ''
+    reply = (reply or '').lower()
+    # Longest label first so 'ink illustration' can't lose to a bare substring.
+    for label in sorted(labels, key=len, reverse=True):
+        if label in reply:
+            return label
+    return ''
+
+
+def _medium_anchors(medium: str) -> list:
+    """Canonical anchor descriptors for a classified medium ([] if unknown)."""
+    return list(_MEDIUM_ANCHORS.get(medium, []))
 
 
 # Color/palette detection for palette preservation (see build_flux_style_descriptors).
@@ -131,32 +230,6 @@ def _palette_descriptors(text: str) -> list:
     """Extract the color/palette descriptors from a comma-separated line."""
     return [d.strip() for d in (text or '').split(',')
             if d.strip() and _is_color_descriptor(d)]
-
-
-# Medium-mislabel detection: 3D/CGI/photographic terms the vision model wrongly
-# assigns to flat 2D references. When a named style is set it governs the medium,
-# so these are dropped (see build_flux_style_descriptors). Deliberately does NOT
-# strip legitimate stylized media (cel animation, cartoonish, ink illustration,
-# watercolor, oil painting) — only the realistic/rendered mislabels that fight a
-# named illustration/cartoon style.
-_MEDIUM_MISLABEL_SUBSTRINGS = (
-    'computer-generated', 'computer generated', 'photorealistic', 'photo-realistic',
-    'photograph', 'photographic', 'photography', 'live-action', 'live action',
-    'film still', 'octane', 'unreal engine', 'ray trace', 'ray-trace', 'cgi',
-)
-_MEDIUM_MISLABEL_TOKENS = frozenset({
-    '3d', 'render', 'rendered', 'rendering', 'photo', 'dslr',
-})
-
-
-def _is_medium_mislabel(phrase: str) -> bool:
-    """True if a descriptor asserts a realistic/3D/photographic medium (which a
-    named illustration/cartoon style should override)."""
-    import re as _re
-    p = phrase.lower()
-    if any(s in p for s in _MEDIUM_MISLABEL_SUBSTRINGS):
-        return True
-    return bool(set(_re.findall(r"[a-z0-9]+", p)) & _MEDIUM_MISLABEL_TOKENS)
 
 
 def _clean_descriptors(text: str, style_source: str = '',
