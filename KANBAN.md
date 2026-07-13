@@ -86,6 +86,13 @@
 
 ## Done
 
+- [x] BUG: Degenerate FLUX style prompt (VLM/LLM repetition loop) poisons deck style | Priority: P1 | Completed: 2026-07-12 | Owner: drew-valentine
+  - Squash-merged to main via PR #24 (commit 8b15d0d); tagged v1.44.3 (patch, released 2026-07-12).
+  - A deck's `flux_style_prompt` could become a runaway repetition (e.g. "soft focus, muted pastel hues, subtle gradient effects" x15 — 34 descriptors, 11 unique) when a small vision/LLM model looped during distillation; every generated card inherited it.
+  - Root-cause fix (vision_analyzer._clean_descriptors, the single choke point for both the image-only and named-style-reconcile paths): de-duplicate repeated descriptors (case-insensitive, first-seen order) + cap the count; also fixed a latent IndexError on whitespace-only input.
+  - Validated end-to-end on queen-marchesa-b3-v2: re-distillation went 34→14 descriptors, zero repetition. 8 regression tests; full suite 331 green.
+  - FOLLOW-UP (separate, open): that deck's style still mislabeled — `style_source: surrealism` biases the reconcile pass toward generic surrealist words that don't match the crisp clean-line references. Tracked as its own item (style-source / reconcile accuracy).
+
 - [x] BUG: Deck import silently drops cards on Scryfall rate limits | Priority: P1 | Completed: 2026-07-12 | Owner: drew-valentine
   - Squash-merged to main via PR #22 (commit 91c684e); tagged v1.44.2 (patch, released 2026-07-12).
   - Importing a ~90-card decklist only pulled in ~72 cards. The import fetched card data with 4 parallel threads at a combined rate over Scryfall's ~10 req/s limit; Scryfall returned HTTP 429 and `_scryfall_get` had no retry, so throttled cards were dropped.
