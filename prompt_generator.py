@@ -540,6 +540,13 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         "Enhance the imagery; do NOT change WHAT is depicted and do NOT introduce a "
         "different focal subject. Setting and atmosphere are BACKGROUND only — they "
         "must never replace, crowd out, or upstage the card's subject. "
+        "OPENING RULE (critical): the FIRST sentence must open with the subject "
+        "itself — name it, and for creatures state its CREATURE TYPE as an "
+        "appositive right after the name (e.g. 'Okaun, Eye of Chaos, a Cyclops "
+        "Berserker, storms...'), then place it in the scene. NEVER open with the "
+        "setting, weather, or atmosphere ('In the heart of the swirling mist...') "
+        "— the image model paints whatever comes first, and setting-first "
+        "openings produce subjectless art. "
         "Be inventive and VARY it each time: choose a fresh setting, camera angle, "
         "distance, time of day, weather, and composition so re-rolls feel distinct "
         "rather than repeating the same scene — but always keep the same focal subject. "
@@ -614,9 +621,17 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             f"generic version — don't fall back to the usual scene."
         )
 
+    # FRANCHISE FIREWALL: flavor text is written in the deck style's voice and
+    # can literally quote its characters ("All roads may lead to Rick's
+    # garage..."). Anchoring the SCENE on such flavor smuggles the franchise's
+    # cast into the art — combined with the style name at render time, actual
+    # show characters appear in card art. Sentences naming style-source tokens
+    # are stripped from the anchor before the scene writer ever sees them.
+    safe_flavor = _strip_franchise_sentences(flavor, style_hint)
+
     user_msg = (
         f"Card: {name}\nType: {type_line}\nRules: {oracle}\n"
-        + (f"Flavor text (use this as the THEMATIC ANCHOR for the scene): {flavor}\n" if flavor else "")
+        + (f"Flavor text (use this as the THEMATIC ANCHOR for the scene): {safe_flavor}\n" if safe_flavor else "")
         + f"Direction: {guidance}\n"
         + (f"User steer (honor this above all): {steer.strip()}\n" if steer and steer.strip() else "")
         + f"Reference description: {base_desc}\n"
@@ -626,7 +641,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
 
     try:
         import mlx_llm
-        return mlx_llm.chat(
+        out = mlx_llm.chat(
             messages=[
                 {'role': 'system', 'content': system_msg},
                 {'role': 'user', 'content': user_msg},
@@ -637,9 +652,78 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                               # degenerate into word-salad tails ("waveform GS cave
                               # events super intend impact"), so keep it lower.
         )
+        out = _strip_franchise_sentences(out, style_hint)   # output backstop
+        return _ensure_creature_type_in_prompt(out, card)
     except Exception as e:
         print(f"  [prompt_gen] AI failed for {name}: {e}, using rule-based")
         return generate_subject_description(card)
+
+
+_FRANCHISE_STOPWORDS = frozenset({
+    'style', 'studio', 'film', 'series', 'show', 'animated', 'animation',
+    'movie', 'comic', 'book', 'game',
+})
+
+
+def _franchise_tokens(style_hint: str) -> set:
+    """Character-name tokens from the style hint's NAME segment ("Rick & Morty
+    — 3D render, ..." -> {'rick', 'morty'}). Generic media words are excluded
+    so 'Studio Ghibli' doesn't flag the word 'studio' in ordinary flavor."""
+    if not style_hint:
+        return set()
+    name_part = re.split(r'\s+[—–-]{1,2}\s+', style_hint, 1)[0]
+    return {w for w in re.findall(r"[a-z]+", name_part.lower())
+            if len(w) > 3 and w not in _FRANCHISE_STOPWORDS}
+
+
+def _strip_franchise_sentences(text: str, style_hint: str) -> str:
+    """Drop sentences that name the style source's characters/tokens.
+
+    Flavor text written in a franchise's voice can quote its cast ("...lead to
+    Rick's garage"); anchoring scenes on it — or letting the scene writer echo
+    it — puts the actual cast into card art once the style name is applied at
+    render time. Deterministic: sentence out, no model in the loop."""
+    if not text:
+        return text
+    tokens = _franchise_tokens(style_hint)
+    if not tokens:
+        return text
+    kept = []
+    for sent in re.split(r'(?<=[.!?])\s+', text.strip()):
+        words = set(re.findall(r"[a-z]+", sent.lower()))
+        if words & tokens:
+            continue
+        kept.append(sent)
+    return ' '.join(kept).strip()
+
+
+def _ensure_creature_type_in_prompt(text: str, card: dict) -> str:
+    """Deterministic guarantee: a creature's prompt names its creature type.
+
+    The system prompt asks for the type as an appositive after the name
+    ("Okaun, Eye of Chaos, a Cyclops Berserker, ..."), but an instruction to a
+    small model is a suggestion — the creative rewrite frequently drops it.
+    The type line is one of the strongest identity anchors the image model can
+    get (it disambiguates WHAT the creature is), so when the full type phrase
+    is missing we inject it right after the card name in the text."""
+    if not text or card.get('card_type') != 'creature':
+        return text
+    type_line = card.get('type_line', '')
+    if '—' not in type_line and '—' not in type_line:
+        return text
+    subtypes = re.split(r'[——]', type_line, 1)[1].strip()
+    if not subtypes or subtypes.lower() in text.lower():
+        return text
+    name = card.get('name', '')
+    article = 'an' if subtypes[:1].lower() in 'aeiou' else 'a'
+    appositive = f", {article} {subtypes},"
+    if name and name in text:
+        # "Okaun, Eye of Chaos sits..." -> "Okaun, Eye of Chaos, a Cyclops
+        # Berserker, sits..."
+        return text.replace(name, f"{name}{appositive}", 1)
+    if name:
+        return f"{name}, {article} {subtypes} — {text}"
+    return text
 
 
 def generate_prompts_with_ai(

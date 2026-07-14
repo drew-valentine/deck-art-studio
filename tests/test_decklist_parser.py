@@ -303,3 +303,78 @@ class TestScryfallToCardEntry:
         assert entry['card_type'] == 'battle'
         assert entry['card_faces'][0]['defense'] == '3'
         assert entry['card_faces'][1]['defense'] is None
+
+
+class TestCreatureTypeInPrompt:
+    """A creature's generated prompt must name its creature type — the LLM is
+    instructed to include it but often drops it; injection is the guarantee."""
+
+    CARD = {'name': 'Okaun, Eye of Chaos', 'card_type': 'creature',
+            'type_line': 'Legendary Creature — Cyclops Berserker'}
+
+    def test_missing_type_injected_after_name(self):
+        from prompt_generator import _ensure_creature_type_in_prompt
+        text = "Okaun, Eye of Chaos sits majestically, his eye blazing."
+        out = _ensure_creature_type_in_prompt(text, self.CARD)
+        assert out.startswith("Okaun, Eye of Chaos, a Cyclops Berserker, sits")
+
+    def test_present_type_untouched(self):
+        from prompt_generator import _ensure_creature_type_in_prompt
+        text = "Okaun, Eye of Chaos, a towering Cyclops Berserker, charges."
+        assert _ensure_creature_type_in_prompt(text, self.CARD) == text
+
+    def test_name_absent_prepends(self):
+        from prompt_generator import _ensure_creature_type_in_prompt
+        out = _ensure_creature_type_in_prompt("A one-eyed brute rampages.", self.CARD)
+        assert out.startswith("Okaun, Eye of Chaos, a Cyclops Berserker — A one-eyed")
+
+    def test_vowel_article(self):
+        from prompt_generator import _ensure_creature_type_in_prompt
+        card = {'name': 'Ghalta', 'card_type': 'creature',
+                'type_line': 'Legendary Creature — Elder Dinosaur'}
+        out = _ensure_creature_type_in_prompt("Ghalta stomps.", card)
+        assert "Ghalta, an Elder Dinosaur, stomps." == out
+
+    def test_non_creature_untouched(self):
+        from prompt_generator import _ensure_creature_type_in_prompt
+        card = {'name': 'Sol Ring', 'card_type': 'artifact', 'type_line': 'Artifact'}
+        assert _ensure_creature_type_in_prompt("A ring.", card) == "A ring."
+
+
+class TestFranchiseFirewall:
+    """Flavor text written in a franchise's voice quotes its cast; those
+    sentences must never anchor an art scene (observed: 'Rick's garage' flavor
+    -> literal Rick in card art)."""
+
+    HINT = "Rick & Morty — 3D render, cel animation, vibrant"
+
+    def test_tokens_from_name_segment_only(self):
+        from prompt_generator import _franchise_tokens
+        toks = _franchise_tokens(self.HINT)
+        assert toks == {'rick', 'morty'}          # not 'render'/'animation'
+
+    def test_offending_sentence_dropped(self):
+        from prompt_generator import _strip_franchise_sentences
+        flavor = ("All roads may lead to Rick's garage, but some end there. "
+                  "Fortune favors the bold.")
+        out = _strip_franchise_sentences(flavor, self.HINT)
+        assert out == "Fortune favors the bold."
+
+    def test_fully_offending_flavor_becomes_empty(self):
+        from prompt_generator import _strip_franchise_sentences
+        assert _strip_franchise_sentences(
+            "Pick your battles, but always ride into the fray, Morty.",
+            self.HINT) == ""
+
+    def test_clean_flavor_untouched(self):
+        from prompt_generator import _strip_franchise_sentences
+        flavor = "Wubba lubba dub dub, time to spark chaos."
+        assert _strip_franchise_sentences(flavor, self.HINT) == flavor
+
+    def test_no_hint_no_change(self):
+        from prompt_generator import _strip_franchise_sentences
+        assert _strip_franchise_sentences("Rick rides.", "") == "Rick rides."
+
+    def test_media_stopwords_not_tokens(self):
+        from prompt_generator import _franchise_tokens
+        assert _franchise_tokens("Studio Ghibli — watercolor") == {'ghibli'}
