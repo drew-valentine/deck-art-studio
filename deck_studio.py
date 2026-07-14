@@ -1722,7 +1722,11 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
 
     style_bits = []
     if style_source:
-        style_bits.append(f"in the style of {style_source}")
+        # Franchise names summon their cast into the art (a literal Rick
+        # rendered as card art); render_style_lead swaps them for a de-named
+        # genre phrase + original-characters guard. Artist names pass through.
+        from prompt_generator import render_style_lead
+        style_bits.append(render_style_lead(style_source))
     if flux_style_prompt:
         # Image-first descriptors (the vision model read the actual inspiration,
         # reconciled with the named style if one was given). Works for ANY style,
@@ -3872,7 +3876,12 @@ def _execute_prompt_job(job, ctx):
         unit = _face_unit_for(card, job.card_name)
         bcfg = backend_config.load_config()
         data = ctx['meta']
-        style_hint = (data.get('style_source') or '').strip()
+        style_name = (data.get('style_source') or '').strip()
+        # The scene writer must not be TOLD the franchise name either — it
+        # biases scenes toward the show's trademark settings (labs, portals,
+        # garages), which are character attractors at render time.
+        from prompt_generator import franchise_style_phrase
+        style_hint = franchise_style_phrase(style_name) or style_name
         flux_style = (data.get('flux_style_prompt') or '').strip()
         if flux_style:
             style_hint = f"{style_hint} — {flux_style}" if style_hint else flux_style
@@ -3888,7 +3897,8 @@ def _execute_prompt_job(job, ctx):
                     prompt = generate_subject_with_ai(
                         unit, openai_client, backend=bcfg['llm_backend'],
                         local_model=bcfg['ollama_model'], style_hint=style_hint,
-                        steer=(job.feedback or ''))
+                        steer=(job.feedback or ''),
+                        style_source_name=style_name)
                     break
                 except Exception as e:
                     err_str = str(e)
