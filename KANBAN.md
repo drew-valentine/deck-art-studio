@@ -86,6 +86,15 @@
 
 ## Done
 
+- [x] BUG: Franchise characters leak into card art via flavor text | Priority: P1 | Completed: 2026-07-13 | Owner: drew-valentine
+  - Squash-merged to main via PR #29 (commit 4b50518); tagged v1.45.0 (minor, released 2026-07-13).
+  - Regenerated flavor text quoted the deck style's cast ("Rick's garage", "...ride into the fray, Morty" — 6 of 14 cards); the scene writer anchored art themes on flavor, putting literal show characters into card art.
+  - Fix (prompt_generator.py): deterministic sentence-level franchise firewall — cast tokens from the style name, offending sentences stripped from the flavor anchor and the writer's output. Card-frame flavor untouched.
+  - Feature: creature type guaranteed in the prompt opening ("Okaun, Eye of Chaos, a Cyclops Berserker, ...") — instruction + deterministic injection.
+  - Validation: zero franchise tokens across the regenerated prompt file; Reliquary Tower (the "Rick's garage" card) renders clean. 342 tests green.
+  - NOTE: style/prompt pipeline PRs #27 and #28 were closed unmerged the same day (no material improvement per user); this PR shipped because it was an evidence-first bug fix, user-directed.
+
+
 - [x] BUG: Degenerate FLUX style prompt (VLM/LLM repetition loop) poisons deck style | Priority: P1 | Completed: 2026-07-12 | Owner: drew-valentine
   - Squash-merged to main via PR #24 (commit 8b15d0d); tagged v1.44.3 (patch, released 2026-07-12).
   - A deck's `flux_style_prompt` could become a runaway repetition (e.g. "soft focus, muted pastel hues, subtle gradient effects" x15 — 34 descriptors, 11 unique) when a small vision/LLM model looped during distillation; every generated card inherited it.
