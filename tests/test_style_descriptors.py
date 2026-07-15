@@ -6,6 +6,9 @@ phrase dozens of times. That runaway string used to flow straight into a deck's
 must collapse such loops to their unique descriptor set.
 """
 
+import sys
+import types
+
 from vision_analyzer import _clean_descriptors
 
 
@@ -170,3 +173,79 @@ class TestMediumFloor:
 
     def test_conjunction_prefix_stripped(self):
         assert _clean_descriptors("and bold lines, neon-lit").split(',')[0].strip() == 'bold lines'
+
+
+def _fake_vlm(monkeypatch, prose, medium_label='ink illustration'):
+    fake = types.ModuleType('mlx_llm')
+    fake.vision = lambda *a, **k: prose
+
+    def chat(messages=None, **k):
+        return medium_label
+    fake.chat = chat
+    monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
+
+
+QM_STORED = ("Source: Original\nArt Style: Digital illustration\n"
+             "Colors: Creamy beige, sickly yellow-green, muted teal, deep pink, "
+             "bright orange, dark brown\nTechnique: fine delicate linework, "
+             "intricate line detail, thin technical pen strokes")
+
+
+class TestProceduralStyleBlock:
+    """Fresh Re-analyze must be repeatable: deterministic foundation (keyword
+    medium + stored Colors palette), VLM only enriches — never subtracts."""
+
+    def test_garbage_vlm_still_yields_foundation(self, monkeypatch, tmp_path):
+        from vision_analyzer import build_flux_style_block
+        _fake_vlm(monkeypatch, prose="dreamy, whimsical, soft focus, ethereal")
+        img = tmp_path / "i.png"; img.write_bytes(b"x")
+        out = build_flux_style_block(str(img), style_source='Moebius',
+                                     stored_descriptions=QM_STORED)
+        # medium anchors from the keyword map + line-weight evidence
+        assert out.startswith('fine-line ink illustration')
+        assert 'technical-pen linework' in out
+        # palette from STORED Colors line, not the garbage roll
+        assert 'creamy beige' in out and 'muted teal' in out
+
+    def test_repeated_runs_identical_foundation(self, monkeypatch, tmp_path):
+        from vision_analyzer import build_flux_style_block
+        img = tmp_path / "i.png"; img.write_bytes(b"x")
+        outs = set()
+        for roll in ("dreamy, ethereal", "gritty, dark, moody",
+                     "vibrant, chaotic, wild"):
+            _fake_vlm(monkeypatch, prose=roll)
+            out = build_flux_style_block(str(img), style_source='Moebius',
+                                         stored_descriptions=QM_STORED)
+            # foundation opening is byte-identical regardless of the roll
+            outs.add(out.split(', palette of')[0])
+        assert len(outs) == 1, outs
+
+    def test_vlm_total_failure_foundation_survives(self, monkeypatch):
+        from vision_analyzer import build_flux_style_block
+        _fake_vlm(monkeypatch, prose="")
+        # nonexistent image -> zero VLM reads; stored data alone carries it
+        out = build_flux_style_block('/nope/missing.png', style_source='Moebius',
+                                     stored_descriptions=QM_STORED)
+        assert out.startswith('fine-line ink illustration')
+        assert 'creamy beige' in out
+
+    def test_bold_evidence_keeps_bold_anchor(self, monkeypatch, tmp_path):
+        from vision_analyzer import build_flux_style_block
+        _fake_vlm(monkeypatch,
+                  prose="bold outline work, thick line art, chunky shapes")
+        img = tmp_path / "i.png"; img.write_bytes(b"x")
+        out = build_flux_style_block(str(img), style_source='ligne claire ink',
+                                     stored_descriptions='Colors: crimson, navy')
+        assert out.startswith('ink illustration')          # generic ink anchors
+        assert 'fine-line' not in out
+
+    def test_modified_hues_outrank_bare(self, monkeypatch, tmp_path):
+        from vision_analyzer import build_flux_style_block
+        _fake_vlm(monkeypatch, prose="")
+        out = build_flux_style_block(
+            '/nope/x.png', style_source='Moebius',
+            stored_descriptions=("Colors: dusty coral, sage green, deep teal, "
+                                 "muted purple, red, blue, yellow, pink"))
+        pal = out.split('palette of ')[-1]
+        assert 'dusty coral' in pal and 'sage green' in pal
+        assert 'yellow' not in pal      # bare hues dropped (>=3 modified)
