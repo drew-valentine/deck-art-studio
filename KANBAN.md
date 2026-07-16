@@ -86,6 +86,14 @@
 
 ## Done
 
+- [x] Reliable style pipeline: franchise de-naming + deterministic distillation + procedural style block | Priority: P1 | Completed: 2026-07-15 | Owner: drew-valentine
+  - Squash-merged to main via PR #31 (commit 47b51de); tagged v1.46.0 (minor, released 2026-07-15).
+  - Franchise names never reach model-facing prompts — de-named genre phrases at use time (pure function, no deck migration; artist names pass through). Fixes literal show characters in card art.
+  - Deterministic distillation: canonical descriptor ordering (token-prefix ranked) + keyword-mapped medium floor — every Re-analyze leads with the medium.
+  - Procedural style block: deterministic foundation (classified medium anchors incl. fine-vs-bold line detection + palette from stored per-image Colors analyses); pooled VLM enrichment can add, never subtract. Two independent live re-analyzes produced byte-identical blocks.
+  - Validation: both validation decks (Rick & Morty franchise, Moebius fine-line) render on-style from cold re-analyzes; 363 tests green.
+
+
 - [x] BUG: Franchise characters leak into card art via flavor text | Priority: P1 | Completed: 2026-07-13 | Owner: drew-valentine
   - Squash-merged to main via PR #29 (commit 4b50518); tagged v1.45.0 (minor, released 2026-07-13).
   - Regenerated flavor text quoted the deck style's cast ("Rick's garage", "...ride into the fray, Morty" — 6 of 14 cards); the scene writer anchored art themes on flavor, putting literal show characters into card art.
