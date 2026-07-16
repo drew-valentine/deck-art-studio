@@ -25,7 +25,8 @@ from typing import Callable, Optional
 ART = 'art'
 PROMPT = 'prompt'
 FLAVOR = 'flavor'
-_VALID_TYPES = {ART, PROMPT, FLAVOR}
+ANALYZE = 'analyze'                # inspiration/style analysis + distillation
+_VALID_TYPES = {ART, PROMPT, FLAVOR, ANALYZE}
 
 # Status constants
 QUEUED = 'queued'
@@ -48,6 +49,7 @@ class Job:
     use_ai: bool = True                   # prompt: AI-enhanced subject
     model_key: Optional[str] = None       # art: snapshotted model at enqueue
     label: str = ''                       # display label (card display name)
+    params: dict = field(default_factory=dict)  # type-specific args (analyze: mode/filename/...)
     # runtime
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     status: str = QUEUED
