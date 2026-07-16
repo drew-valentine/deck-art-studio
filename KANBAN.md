@@ -86,6 +86,14 @@
 
 ## Done
 
+- [x] Inspiration/style analysis as first-class queue jobs | Priority: P1 | Completed: 2026-07-16 | Owner: drew-valentine
+  - Squash-merged to main via PR #33 (commit d55d4bb); tagged v1.47.0 (minor, released 2026-07-16).
+  - New ANALYZE job type (modes: image/reanalyze/distill/subjects); all five ad-hoc analysis thread sites replaced with queue enqueues.
+  - Deck-switch-proof (executor loads from job.deck_id; deck delete cancels its jobs) and pollution-proof: thread-local progress context mirrors to the global UI dict only while the job's deck is active.
+  - Re-analyze Style never locks — repeat clicks stack additional queue jobs; drawer shows purple Style badge, row-click opens the deck's Inspiration tab.
+  - Validation: live cross-deck run with zero UI pollution + mid-run deck-switch mirror; 3 rapid re-analyzes stacked (1 running + 2 queued); Playwright browser checks; 368 tests green.
+
+
 - [x] Reliable style pipeline: franchise de-naming + deterministic distillation + procedural style block | Priority: P1 | Completed: 2026-07-15 | Owner: drew-valentine
   - Squash-merged to main via PR #31 (commit 47b51de); tagged v1.46.0 (minor, released 2026-07-15).
   - Franchise names never reach model-facing prompts — de-named genre phrases at use time (pure function, no deck migration; artist names pass through). Fixes literal show characters in card art.
