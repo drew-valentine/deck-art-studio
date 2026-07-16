@@ -3353,8 +3353,10 @@ def reanalyze_inspiration(deck_id):
     job = _enqueue_analysis(deck_id, 'reanalyze', label='Re-analyze style')
     return jsonify({
         'success': True,
+        'queued': 1,
+        'job_ids': [job.id],
         'count': len(valid_images),
-        'message': f'Re-analyzing {len(valid_images)} inspiration image(s)...',
+        'message': f'Queued re-analysis of {len(valid_images)} inspiration image(s)',
     })
 
 
@@ -9362,7 +9364,6 @@ function startPolling() {
     // Style analysis progress bar
     const sp = data.style_progress;
     const styleWrap = document.getElementById('styleProgressWrap');
-    const styleBtn = document.getElementById('btnReanalyzeStyle');
     if (sp && sp.phase) {
       styleWrap.style.display = '';
       const styleFill = document.getElementById('styleProgressFill');
@@ -9382,7 +9383,6 @@ function startPolling() {
         stepLabel.textContent = `${sp.current}/${sp.total}`;
       }
       document.getElementById('styleProgressText').textContent = sp.message || '';
-      if (styleBtn) styleBtn.disabled = true;
       document.getElementById('batchMessage').textContent = '';
     } else {
       if (styleWrap.style.display !== 'none') {
@@ -9392,7 +9392,6 @@ function startPolling() {
         styleFill.style.width = '0%';
         document.getElementById('styleProgressText').textContent = '';
         document.getElementById('styleProgressStep').textContent = '';
-        if (styleBtn) styleBtn.disabled = false;
         loadDeckSettings();
         showToast('Style updated! Re-generate prompts to apply the new style.', 'success', {duration: 8000});
       }
@@ -12277,24 +12276,20 @@ async function reanalyzeStyle() {
   const deckId = document.getElementById('deckSelect').value;
   if (!deckId) return;
   const preview = document.getElementById('styleDescPreview');
-  const btn = document.getElementById('btnReanalyzeStyle');
   preview.textContent = '';  // Progress bar provides feedback
-  if (btn) btn.disabled = true;
+  // Analysis is a queued job now: enqueue is instant, repeat clicks queue
+  // additional runs (the queue serializes them), so the button never locks.
   try {
     const resp = await fetch(`/api/decks/${deckId}/reanalyze-inspiration`, { method: 'POST' });
     const result = await resp.json();
     if (!result.success) {
       preview.textContent = result.error || 'Re-analysis failed';
-      if (btn) btn.disabled = false;
       showToast(result.error || 'Re-analysis failed — no AI backend available', 'warning');
       return;
     }
-    // Progress bar is driven by the /api/status polling loop.
-    // When style_progress clears, the poll handler refreshes deck settings
-    // and re-enables the button automatically.
+    startPolling();   // queue badge/drawer reflect the enqueued job
   } catch (e) {
     preview.textContent = 'Error: ' + e.message;
-    if (btn) btn.disabled = false;
   }
 }
 
