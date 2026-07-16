@@ -161,7 +161,9 @@ def _is_cancel_flagged(deck_id, card_name):
 # Global, cross-deck generation queue. A single worker drains it FIFO; each job
 # carries its own deck id and runs against that deck regardless of the UI's
 # active deck (started in __main__).
-gen_queue = generation_queue.GenerationQueue()
+gen_queue = generation_queue.GenerationQueue(
+    persist_path=SCRIPT_DIR / "queue_state.json",
+    deck_exists=lambda did: bool(did) and (DECKS_DIR / did).exists())
 style_analysis_progress = {}  # empty = not running; active: {phase, current, total, message}
 model_load_progress = {}      # empty = idle; active: {phase, message, pct, model_key, error}
 ollama_pull_progress = {}     # empty = idle; active: {model, status, completed_gb, total_gb, pct}

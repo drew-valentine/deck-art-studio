@@ -189,3 +189,79 @@ class TestSnapshot:
         b.status = DONE
         assert [j.card_name for j in q.jobs_for_deck('d1')] == ['A']
         assert len(q.jobs_for_deck('d1', active_only=False)) == 2
+
+
+class TestPersistence:
+    """The queue survives restarts — a routine server restart once silently
+    destroyed every queued job (in-memory-only design)."""
+
+    def _mk(self, tmp_path, **kw):
+        from generation_queue import GenerationQueue
+        return GenerationQueue(persist_path=tmp_path / 'state.json', **kw)
+
+    def test_queued_jobs_survive_restart(self, tmp_path):
+        from generation_queue import Job, GenerationQueue
+        q1 = self._mk(tmp_path)
+        a = q1.enqueue(Job(type='analyze', deck_id='d1', card_name='',
+                           label='Style', params={'mode': 'distill'}))
+        b = q1.enqueue(Job(type='art', deck_id='d1', card_name='Sol Ring'))
+        # simulate restart: fresh instance, same path, no worker needed
+        q2 = self._mk(tmp_path)
+        with q2._lock:
+            q2._restore_locked()
+        jobs = {j.id: j for j in q2._snapshot_jobs()}
+        assert set(jobs) == {a.id, b.id}
+        assert all(j.status == 'queued' for j in jobs.values())
+        assert jobs[b.id].card_name == 'Sol Ring'
+        assert jobs[a.id].params == {'mode': 'distill'}
+
+    def test_running_job_restored_first(self, tmp_path):
+        from generation_queue import Job
+        q1 = self._mk(tmp_path)
+        first = q1.enqueue(Job(type='art', deck_id='d1', card_name='A'))
+        second = q1.enqueue(Job(type='art', deck_id='d1', card_name='B'))
+        with q1._lock:
+            first.status = 'running'
+            q1._running_id = first.id
+            q1._persist_locked()
+        q2 = self._mk(tmp_path)
+        with q2._lock:
+            q2._restore_locked()
+            nxt = q2._next_locked()
+        assert nxt.id == first.id            # mid-flight job runs first
+        assert q2.get(first.id).status == 'queued'
+
+    def test_terminal_jobs_not_restored(self, tmp_path):
+        from generation_queue import Job
+        q1 = self._mk(tmp_path)
+        j = q1.enqueue(Job(type='art', deck_id='d1', card_name='A'))
+        q1.cancel(j.id)
+        q2 = self._mk(tmp_path)
+        with q2._lock:
+            q2._restore_locked()
+        assert q2._snapshot_jobs() == []
+
+    def test_missing_deck_jobs_skipped(self, tmp_path):
+        from generation_queue import Job
+        q1 = self._mk(tmp_path)
+        q1.enqueue(Job(type='art', deck_id='ghost-deck', card_name='A'))
+        q1.enqueue(Job(type='art', deck_id='real-deck', card_name='B'))
+        q2 = self._mk(tmp_path, deck_exists=lambda d: d == 'real-deck')
+        with q2._lock:
+            q2._restore_locked()
+        assert [j.deck_id for j in q2._snapshot_jobs()] == ['real-deck']
+
+    def test_corrupt_state_file_tolerated(self, tmp_path):
+        (tmp_path / 'state.json').write_text('{corrupt!')
+        q = self._mk(tmp_path)
+        with q._lock:
+            q._restore_locked()
+        assert q._snapshot_jobs() == []
+
+    def test_paused_flag_persists(self, tmp_path):
+        q1 = self._mk(tmp_path)
+        q1.set_paused(True)
+        q2 = self._mk(tmp_path)
+        with q2._lock:
+            q2._restore_locked()
+        assert q2.paused is True

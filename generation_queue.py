@@ -66,7 +66,9 @@ class Job:
 
 
 class GenerationQueue:
-    def __init__(self):
+    def __init__(self, persist_path=None, deck_exists=None):
+        self._persist_path = persist_path
+        self._deck_exists = deck_exists   # optional validator for restores
         self._lock = threading.RLock()
         self._cond = threading.Condition(self._lock)
         self._jobs: list[Job] = []        # order-agnostic; selection sorts
@@ -79,6 +81,57 @@ class GenerationQueue:
         # bounded history of finished jobs so the drawer's "Recent" doesn't grow
         self._history_cap = 40
 
+    # -- persistence ------------------------------------------------------------
+    # The queue survives server restarts: every mutation snapshots the live
+    # (queued + running) jobs to persist_path, and start() restores them before
+    # the worker launches — a running job at shutdown is re-queued at the front.
+    # Learned the hard way: an in-memory-only queue turned a routine server
+    # restart into silent loss of every queued job.
+    def _persist_locked(self):
+        if not self._persist_path:
+            return
+        import json, os, tempfile
+        live = [j.to_dict() for j in self._jobs if j.status in (QUEUED, RUNNING)]
+        try:
+            fd, tmp = tempfile.mkstemp(dir=str(self._persist_path.parent),
+                                       prefix='.queue_state_')
+            with os.fdopen(fd, 'w') as f:
+                json.dump({'paused': self._paused, 'jobs': live}, f, indent=2)
+            os.replace(tmp, self._persist_path)
+        except OSError as e:
+            print(f"[queue] persist failed: {e}")
+
+    def _restore_locked(self):
+        if not self._persist_path:
+            return
+        import json
+        try:
+            with open(self._persist_path) as f:
+                state = json.load(f)
+        except (OSError, ValueError):
+            return
+        restored = 0
+        for jd in state.get('jobs', []):
+            try:
+                if self._deck_exists and not self._deck_exists(jd.get('deck_id', '')):
+                    continue          # deck deleted while the server was down
+                was_running = jd.get('status') == RUNNING
+                jd = {k: v for k, v in jd.items()
+                      if k in Job.__dataclass_fields__}
+                job = Job(**{**jd, 'status': QUEUED, 'progress': {},
+                             'started_at': None, 'finished_at': None})
+                if was_running:
+                    # it was mid-flight at shutdown — run it first
+                    job.priority = max(job.priority, 1_000_000)
+                self._jobs.append(job)
+                self._seq = max(self._seq, job.seq)
+                restored += 1
+            except (TypeError, ValueError) as e:
+                print(f"[queue] skipped unrestorable job: {e}")
+        self._paused = bool(state.get('paused', False))
+        if restored:
+            print(f"[queue] restored {restored} pending job(s) from disk")
+
     # -- lifecycle ------------------------------------------------------------
     def start(self, execute_fn: Callable[[Job], None]):
         """Register the executor and launch the single worker thread (idempotent)."""
@@ -86,6 +139,7 @@ class GenerationQueue:
             self._execute_fn = execute_fn
             if self._worker and self._worker.is_alive():
                 return
+            self._restore_locked()
             self._stop = False
             self._worker = threading.Thread(target=self._run, name='gen-queue',
                                             daemon=True)
@@ -103,6 +157,7 @@ class GenerationQueue:
             job.seq = self._seq
             job.status = QUEUED
             self._jobs.append(job)
+            self._persist_locked()
             self._cond.notify_all()
         return job
 
@@ -130,6 +185,7 @@ class GenerationQueue:
                 job.status = RUNNING
                 job.started_at = time.time()
                 self._running_id = job.id
+                self._persist_locked()
                 execute_fn = self._execute_fn
             # Execute OUTSIDE the lock so enqueue/cancel/snapshot stay responsive.
             try:
@@ -151,6 +207,7 @@ class GenerationQueue:
                     if self._running_id == job.id:
                         self._running_id = None
                     self._trim_history_locked()
+                    self._persist_locked()
                     self._cond.notify_all()
 
     def _trim_history_locked(self):
@@ -176,10 +233,12 @@ class GenerationQueue:
             if job.status == QUEUED:
                 job.status = CANCELLED
                 job.finished_at = time.time()
+                self._persist_locked()
                 self._cond.notify_all()
                 return True
             # running
             job.status = CANCELLED
+            self._persist_locked()
             hook = running_cancel_hook
         if hook:
             hook(job)      # outside lock
@@ -223,6 +282,7 @@ class GenerationQueue:
             top = max((j.priority for j in self._jobs if j.status == QUEUED),
                       default=0)
             job.priority = top + 1
+            self._persist_locked()
             self._cond.notify_all()
             return True
 
@@ -235,6 +295,7 @@ class GenerationQueue:
     def set_paused(self, paused: bool):
         with self._cond:
             self._paused = bool(paused)
+            self._persist_locked()
             self._cond.notify_all()
 
     # -- introspection --------------------------------------------------------
