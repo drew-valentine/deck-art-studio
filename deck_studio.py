@@ -48,7 +48,7 @@ from card_frame_renderer import (
     FRAME_LAYER_ORDER,
 )
 import generation_queue
-from generation_queue import Job, ART, PROMPT, FLAVOR
+from generation_queue import Job, ART, PROMPT, FLAVOR, ANALYZE
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -214,23 +214,40 @@ def _ollama_work_done():
     print(f"[mlx_guard] LLM/VLM work done (active={count})")
 
 
+# When a style-analysis job runs on the queue worker, this thread-local holds
+# the live Job so every _style_progress_update flows into job.progress — and
+# into the GLOBAL style_analysis_progress ONLY when the job's deck is the
+# active one. A single global used to mean deck A's analysis painted progress
+# all over deck B's UI after a switch.
+_analysis_job_ctx = threading.local()
+
+
 def _style_progress_update(phase, current, total, message, sub_phase=None):
-    """Update the style analysis progress dict (thread-safe)."""
+    """Update style analysis progress (job-aware, deck-safe, thread-safe)."""
     global style_analysis_progress
+    prog = {
+        'phase': phase,
+        'current': current,
+        'total': total,
+        'message': message,
+    }
+    if sub_phase:
+        prog['sub_phase'] = sub_phase
+    job = getattr(_analysis_job_ctx, 'job', None)
+    if job is not None:
+        job.progress = prog
+        if job.deck_id != active_deck_id:
+            return                # never pollute another deck's UI
     with generation_lock:
-        style_analysis_progress = {
-            'phase': phase,
-            'current': current,
-            'total': total,
-            'message': message,
-        }
-        if sub_phase:
-            style_analysis_progress['sub_phase'] = sub_phase
+        style_analysis_progress = prog
 
 
 def _style_progress_clear():
-    """Clear style analysis progress (thread-safe)."""
+    """Clear style analysis progress (job-aware, deck-safe, thread-safe)."""
     global style_analysis_progress
+    job = getattr(_analysis_job_ctx, 'job', None)
+    if job is not None and job.deck_id != active_deck_id:
+        return
     with generation_lock:
         style_analysis_progress = {}
 
@@ -3276,66 +3293,8 @@ def upload_inspiration(deck_id):
             'warning': 'No AI backend available. Configure an OpenAI API key or install Ollama for style analysis.',
         })
 
-    def analyze_bg():
-        _ollama_work_start()
-
-        # Calculate card count for batch-level progress on card subjects
-        import math
-        with open(deck_json_path) as f:
-            _d = json.load(f)
-        card_count = len([c for c in _d.get('cards', []) if c.get('name') != 'Card Back'])
-        subject_batches = max(1, math.ceil(card_count / 10))
-
-        # 1 image + merge + tokens + CLIP directives + subject_batches + done
-        total_steps = 4 + subject_batches + 1
-        _style_progress_update('analyzing', 0, total_steps,
-                               'Analyzing image style...', sub_phase='api_call')
-        try:
-            bcfg = backend_config.load_config()
-            from vision_analyzer import analyze_inspiration_style
-            desc = analyze_inspiration_style(
-                dest, openai_client,
-                backend='local',
-                local_model=bcfg['ollama_vision_model'],
-            )
-            if desc:
-                _style_progress_update('analyzing', 1, total_steps, 'Image analyzed')
-                # Update the per-image description in the array
-                with open(deck_json_path) as f:
-                    d = json.load(f)
-                imgs = d.get('inspiration_images', [])
-                if new_index < len(imgs):
-                    imgs[new_index]['style_description'] = desc
-                    d['inspiration_images'] = imgs
-                    with open(deck_json_path, 'w') as f:
-                        json.dump(d, f, indent=2)
-                # Rebuild merged description from all images
-                _style_progress_update('merging', 2, total_steps,
-                                       'Merging style descriptions...')
-                _rebuild_merged_description(deck_id)
-
-                _distill_step = [2]
-
-                def _distill_progress(message):
-                    _distill_step[0] += 1
-                    _style_progress_update('distilling', _distill_step[0], total_steps, message)
-
-                def _subject_batch_progress(batch_num, total_batches, cards_done, total_cards):
-                    step = 4 + batch_num  # after image + merge + tokens + CLIP
-                    _style_progress_update('distilling', step, total_steps,
-                                           f'Optimizing card subjects ({cards_done}/{total_cards})...')
-
-                _run_style_distillation(deck_id, progress_callback=_distill_progress,
-                                        subject_progress_callback=_subject_batch_progress)
-                _style_progress_update('complete', total_steps, total_steps,
-                                       'Style analysis complete')
-                print(f"[inspiration] Style analysis saved for image {new_index + 1} in {deck_id}")
-                time.sleep(1.5)
-        finally:
-            _style_progress_clear()
-            _ollama_work_done()
-
-    threading.Thread(target=analyze_bg, daemon=True).start()
+    job = _enqueue_analysis(deck_id, 'image', label=f'Analyze {filename}',
+                            filename=filename, index=new_index)
 
     return jsonify({
         'success': True,
@@ -3391,78 +3350,13 @@ def reanalyze_inspiration(deck_id):
             'error': 'No AI backend available. Configure an OpenAI API key or install Ollama for style analysis.',
         }), 503
 
-    def analyze_bg():
-        _ollama_work_start()
-        n_images = len(valid_images)
-
-        # Calculate card count for batch-level progress on card subjects
-        import math
-        with open(deck_json) as f:
-            _d = json.load(f)
-        card_count = len([c for c in _d.get('cards', []) if c.get('name') != 'Card Back'])
-        subject_batches = max(1, math.ceil(card_count / 10))
-
-        # N images + merge + tokens + CLIP directives + subject_batches + done
-        total_steps = n_images + 3 + subject_batches + 1
-        _style_progress_update('analyzing', 0, total_steps, 'Starting style analysis...')
-        try:
-            bcfg = backend_config.load_config()
-            from vision_analyzer import analyze_inspiration_style
-
-            with open(deck_json) as f:
-                d = json.load(f)
-            imgs = d.get('inspiration_images', images)
-
-            for step_num, (idx, img_entry) in enumerate(valid_images, start=1):
-                insp_path = deck_dir / img_entry['filename']
-                _style_progress_update('analyzing', step_num - 1, total_steps,
-                                       f'Analyzing image {step_num}/{n_images}...', sub_phase='api_call')
-                print(f"[inspiration] Re-analyzing image {idx + 1}/{n_images}: {img_entry['filename']}")
-                desc = analyze_inspiration_style(
-                    insp_path, openai_client,
-                    backend='local',
-                    local_model=bcfg['ollama_vision_model'],
-                )
-                _style_progress_update('analyzing', step_num, total_steps,
-                                       f'Image {step_num}/{n_images} analyzed')
-                if desc and idx < len(imgs):
-                    imgs[idx]['style_description'] = desc
-
-            d['inspiration_images'] = imgs
-            with open(deck_json, 'w') as f:
-                json.dump(d, f, indent=2)
-
-            _style_progress_update('merging', n_images + 1, total_steps,
-                                   'Merging style descriptions...')
-            _rebuild_merged_description(deck_id)
-
-            # Distillation pipeline reports sub-steps via callback
-            _distill_step = [n_images + 1]  # mutable counter for closure
-
-            def _distill_progress(message):
-                _distill_step[0] += 1
-                _style_progress_update('distilling', _distill_step[0], total_steps, message)
-
-            def _subject_batch_progress(batch_num, total_batches, cards_done, total_cards):
-                step = n_images + 3 + batch_num  # after images + merge + tokens + CLIP
-                _style_progress_update('distilling', step, total_steps,
-                                       f'Optimizing card subjects ({cards_done}/{total_cards})...')
-
-            _run_style_distillation(deck_id, progress_callback=_distill_progress,
-                                    subject_progress_callback=_subject_batch_progress)
-            _style_progress_update('complete', total_steps, total_steps,
-                                   'Style analysis complete')
-            print(f"[inspiration] Re-analysis complete for {n_images} image(s) in {deck_id}")
-            time.sleep(1.5)
-        finally:
-            _style_progress_clear()
-            _ollama_work_done()
-
-    threading.Thread(target=analyze_bg, daemon=True).start()
+    job = _enqueue_analysis(deck_id, 'reanalyze', label='Re-analyze style')
     return jsonify({
         'success': True,
+        'queued': 1,
+        'job_ids': [job.id],
         'count': len(valid_images),
-        'message': f'Re-analyzing {len(valid_images)} inspiration image(s)...',
+        'message': f'Queued re-analysis of {len(valid_images)} inspiration image(s)',
     })
 
 
@@ -3563,7 +3457,7 @@ def delete_inspiration_image(deck_id, index):
     # Rebuild merged description and re-distill style tokens
     if images:
         _rebuild_merged_description(deck_id)
-        threading.Thread(target=_guarded_style_distillation, args=(deck_id,), daemon=True).start()
+        _enqueue_analysis(deck_id, 'distill', label='Re-distill style')
     elif deck_id == active_deck_id:
         active_deck_meta['inspiration_style_description'] = ''
         active_deck_meta['inspiration_images'] = []
@@ -3633,7 +3527,7 @@ def set_style_source(deck_id):
     # Update the Source: line in the merged description to match the override
     _rebuild_merged_description(deck_id)
     # Re-distill style tokens with new source context
-    threading.Thread(target=_guarded_style_distillation, args=(deck_id,), daemon=True).start()
+    _enqueue_analysis(deck_id, 'distill', label='Re-distill style')
     return jsonify({'success': True, 'style_source': style_source})
 
 
@@ -3662,7 +3556,7 @@ def distill_style(deck_id):
     if not descriptions:
         return jsonify({'error': 'No style descriptions available. Upload inspiration images first.'}), 400
 
-    threading.Thread(target=_guarded_style_distillation, args=(deck_id,), daemon=True).start()
+    _enqueue_analysis(deck_id, 'distill', label='Re-distill style')
     return jsonify({
         'success': True,
         'message': f'Distilling style tokens from {len(descriptions)} description(s)...',
@@ -3687,7 +3581,7 @@ def distill_subjects(deck_id):
     if not prompts_path.exists():
         return jsonify({'error': 'No art prompts found. Generate prompts first.'}), 400
 
-    threading.Thread(target=_guarded_subject_distillation, args=(deck_id,), daemon=True).start()
+    _enqueue_analysis(deck_id, 'subjects', label='Distill card subjects')
     return jsonify({
         'success': True,
         'message': f'Distilling card subjects for {deck_id}...',
@@ -3979,6 +3873,178 @@ def _execute_flavor_job(job, ctx):
         _ollama_work_done()
 
 
+def _enqueue_analysis(deck_id, mode, label='Style analysis', **params):
+    """Enqueue an inspiration/style analysis job. Analysis is a first-class
+    queue citizen: it survives deck switches (the job carries its deck_id and
+    the executor loads that deck's files), runs serialized with art/prompt/
+    flavor work, is visible/cancellable in the drawer, and its progress is
+    mirrored to the active deck's UI ONLY when its deck is the active one."""
+    job = Job(type=ANALYZE, deck_id=deck_id,
+              deck_name=_deck_display_name(deck_id), card_name='',
+              label=label, params={'mode': mode, **params})
+    return gen_queue.enqueue(job)
+
+
+def _analyze_new_image(deck_id, filename, new_index):
+    """Vision-analyze ONE newly uploaded inspiration image, then rebuild the
+    merged description and re-distill. Deck-scoped by deck_id; safe to run
+    long after the UI has switched decks."""
+    deck_dir = DECKS_DIR / deck_id
+    deck_json_path = deck_dir / "deck.json"
+    dest = deck_dir / filename
+    _ollama_work_start()
+
+    import math
+    with open(deck_json_path) as f:
+        _d = json.load(f)
+    card_count = len([c for c in _d.get('cards', []) if c.get('name') != 'Card Back'])
+    subject_batches = max(1, math.ceil(card_count / 10))
+
+    # 1 image + merge + tokens + CLIP directives + subject_batches + done
+    total_steps = 4 + subject_batches + 1
+    _style_progress_update('analyzing', 0, total_steps,
+                           'Analyzing image style...', sub_phase='api_call')
+    try:
+        bcfg = backend_config.load_config()
+        from vision_analyzer import analyze_inspiration_style
+        desc = analyze_inspiration_style(
+            dest, openai_client,
+            backend='local',
+            local_model=bcfg['ollama_vision_model'],
+        )
+        if desc:
+            _style_progress_update('analyzing', 1, total_steps, 'Image analyzed')
+            with open(deck_json_path) as f:
+                d = json.load(f)
+            imgs = d.get('inspiration_images', [])
+            if new_index < len(imgs):
+                imgs[new_index]['style_description'] = desc
+                d['inspiration_images'] = imgs
+                with open(deck_json_path, 'w') as f:
+                    json.dump(d, f, indent=2)
+            _style_progress_update('merging', 2, total_steps,
+                                   'Merging style descriptions...')
+            _rebuild_merged_description(deck_id)
+
+            _distill_step = [2]
+
+            def _distill_progress(message):
+                _distill_step[0] += 1
+                _style_progress_update('distilling', _distill_step[0], total_steps, message)
+
+            def _subject_batch_progress(batch_num, total_batches, cards_done, total_cards):
+                step = 4 + batch_num  # after image + merge + tokens + CLIP
+                _style_progress_update('distilling', step, total_steps,
+                                       f'Optimizing card subjects ({cards_done}/{total_cards})...')
+
+            _run_style_distillation(deck_id, progress_callback=_distill_progress,
+                                    subject_progress_callback=_subject_batch_progress)
+            _style_progress_update('complete', total_steps, total_steps,
+                                   'Style analysis complete')
+            print(f"[inspiration] Style analysis saved for image {new_index + 1} in {deck_id}")
+            time.sleep(1.5)
+    finally:
+        _style_progress_clear()
+        _ollama_work_done()
+
+
+def _reanalyze_all_images(deck_id):
+    """Re-run vision analysis on ALL of a deck's inspiration images, rebuild
+    the merged description and re-distill. Recomputes everything fresh from
+    disk (queued execution can start long after enqueue)."""
+    deck_dir = DECKS_DIR / deck_id
+    deck_json = deck_dir / "deck.json"
+    _ollama_work_start()
+
+    import math
+    with open(deck_json) as f:
+        d = json.load(f)
+    images = d.get('inspiration_images', [])
+    valid_images = [(i, img) for i, img in enumerate(images)
+                    if (deck_dir / img.get('filename', '')).exists()]
+    if not valid_images:
+        _ollama_work_done()
+        raise RuntimeError('No inspiration image files found on disk')
+    n_images = len(valid_images)
+    card_count = len([c for c in d.get('cards', []) if c.get('name') != 'Card Back'])
+    subject_batches = max(1, math.ceil(card_count / 10))
+
+    # N images + merge + tokens + CLIP directives + subject_batches + done
+    total_steps = n_images + 3 + subject_batches + 1
+    _style_progress_update('analyzing', 0, total_steps, 'Starting style analysis...')
+    try:
+        bcfg = backend_config.load_config()
+        from vision_analyzer import analyze_inspiration_style
+
+        imgs = d.get('inspiration_images', images)
+        for step_num, (idx, img_entry) in enumerate(valid_images, start=1):
+            insp_path = deck_dir / img_entry['filename']
+            _style_progress_update('analyzing', step_num - 1, total_steps,
+                                   f'Analyzing image {step_num}/{n_images}...', sub_phase='api_call')
+            print(f"[inspiration] Re-analyzing image {idx + 1}/{n_images}: {img_entry['filename']}")
+            desc = analyze_inspiration_style(
+                insp_path, openai_client,
+                backend='local',
+                local_model=bcfg['ollama_vision_model'],
+            )
+            _style_progress_update('analyzing', step_num, total_steps,
+                                   f'Image {step_num}/{n_images} analyzed')
+            if desc and idx < len(imgs):
+                imgs[idx]['style_description'] = desc
+
+        d['inspiration_images'] = imgs
+        with open(deck_json, 'w') as f:
+            json.dump(d, f, indent=2)
+
+        _style_progress_update('merging', n_images + 1, total_steps,
+                               'Merging style descriptions...')
+        _rebuild_merged_description(deck_id)
+
+        _distill_step = [n_images + 1]
+
+        def _distill_progress(message):
+            _distill_step[0] += 1
+            _style_progress_update('distilling', _distill_step[0], total_steps, message)
+
+        def _subject_batch_progress(batch_num, total_batches, cards_done, total_cards):
+            step = n_images + 3 + batch_num
+            _style_progress_update('distilling', step, total_steps,
+                                   f'Optimizing card subjects ({cards_done}/{total_cards})...')
+
+        _run_style_distillation(deck_id, progress_callback=_distill_progress,
+                                subject_progress_callback=_subject_batch_progress)
+        _style_progress_update('complete', total_steps, total_steps,
+                               'Style analysis complete')
+        print(f"[inspiration] Re-analysis complete for {n_images} image(s) in {deck_id}")
+        time.sleep(1.5)
+    finally:
+        _style_progress_clear()
+        _ollama_work_done()
+
+
+def _execute_analyze_job(job, ctx):
+    """Queue executor for inspiration/style analysis jobs. The thread-local
+    job context routes every _style_progress_update into job.progress, and
+    into the global style progress ONLY while this job's deck is active — a
+    running analysis can no longer paint progress over an unrelated deck."""
+    _analysis_job_ctx.job = job
+    job.progress = {'message': 'Analyzing style...', 'pct': 0}
+    try:
+        mode = (job.params or {}).get('mode', 'distill')
+        if mode == 'image':
+            _analyze_new_image(job.deck_id, job.params['filename'],
+                               job.params['index'])
+        elif mode == 'reanalyze':
+            _reanalyze_all_images(job.deck_id)
+        elif mode == 'subjects':
+            _guarded_subject_distillation(job.deck_id)
+        else:                      # 'distill'
+            _guarded_style_distillation(job.deck_id)
+        job.progress = {'message': 'Style analysis complete', 'pct': 100}
+    finally:
+        _analysis_job_ctx.job = None
+
+
 def _execute_job(job):
     """Queue worker entrypoint — dispatch by job type. Raises on failure."""
     ctx = _load_deck_ctx(job.deck_id)
@@ -3992,6 +4058,8 @@ def _execute_job(job):
             _execute_prompt_job(job, ctx)
         elif job.type == FLAVOR:
             _execute_flavor_job(job, ctx)
+        elif job.type == ANALYZE:
+            _execute_analyze_job(job, ctx)
         else:
             raise RuntimeError(f'Unknown job type: {job.type}')
     finally:
@@ -4860,6 +4928,8 @@ def get_status():
     # card shows 'queued' and a running one shows 'generating' with progress —
     # regardless of which deck owns them.
     for job in gen_queue.jobs_for_deck(active_deck_id, active_only=True):
+        if job.type == ANALYZE:
+            continue               # style analysis has no per-card badge
         name = job.card_name
         base = statuses.get(name, {})
         prog = job.progress or {}
@@ -7727,6 +7797,7 @@ header .separator {
 .queue-type.art { background: rgba(240,192,64,0.18); color: var(--gold); }
 .queue-type.prompt { background: rgba(33,150,243,0.18); color: var(--queued); }
 .queue-type.flavor { background: rgba(76,175,80,0.18); color: var(--success); }
+.queue-type.analyze { background: rgba(156,39,176,0.20); color: #ce93d8; }
 .queue-row-main { flex: 1; min-width: 0; }
 .queue-row-card {
   font-size: 0.88em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -8631,6 +8702,7 @@ async function openQueueJob(deckId, cardName) {
       return;
     }
   }
+  if (!base) { switchPanelTab('inspiration'); return; }   // style-analysis job
   const card = allCards.find(c => c.name === base);
   if (!card) { showToast('Card not found in this deck', 'warning'); return; }
   selectCard(base);
@@ -9078,7 +9150,7 @@ function toggleQueueDrawer(force) {
   document.getElementById('queueScrim').classList.toggle('open', _queueOpen);
 }
 
-function _queueTypeLabel(t) { return t === 'art' ? 'Art' : t === 'prompt' ? 'Prompt' : 'Flavor'; }
+function _queueTypeLabel(t) { return t === 'art' ? 'Art' : t === 'prompt' ? 'Prompt' : t === 'analyze' ? 'Style' : 'Flavor'; }
 
 function _queueRowHtml(job, kind) {
   // kind: 'running' | 'queued' | 'recent'
@@ -9292,7 +9364,6 @@ function startPolling() {
     // Style analysis progress bar
     const sp = data.style_progress;
     const styleWrap = document.getElementById('styleProgressWrap');
-    const styleBtn = document.getElementById('btnReanalyzeStyle');
     if (sp && sp.phase) {
       styleWrap.style.display = '';
       const styleFill = document.getElementById('styleProgressFill');
@@ -9312,7 +9383,6 @@ function startPolling() {
         stepLabel.textContent = `${sp.current}/${sp.total}`;
       }
       document.getElementById('styleProgressText').textContent = sp.message || '';
-      if (styleBtn) styleBtn.disabled = true;
       document.getElementById('batchMessage').textContent = '';
     } else {
       if (styleWrap.style.display !== 'none') {
@@ -9322,7 +9392,6 @@ function startPolling() {
         styleFill.style.width = '0%';
         document.getElementById('styleProgressText').textContent = '';
         document.getElementById('styleProgressStep').textContent = '';
-        if (styleBtn) styleBtn.disabled = false;
         loadDeckSettings();
         showToast('Style updated! Re-generate prompts to apply the new style.', 'success', {duration: 8000});
       }
@@ -12207,24 +12276,20 @@ async function reanalyzeStyle() {
   const deckId = document.getElementById('deckSelect').value;
   if (!deckId) return;
   const preview = document.getElementById('styleDescPreview');
-  const btn = document.getElementById('btnReanalyzeStyle');
   preview.textContent = '';  // Progress bar provides feedback
-  if (btn) btn.disabled = true;
+  // Analysis is a queued job now: enqueue is instant, repeat clicks queue
+  // additional runs (the queue serializes them), so the button never locks.
   try {
     const resp = await fetch(`/api/decks/${deckId}/reanalyze-inspiration`, { method: 'POST' });
     const result = await resp.json();
     if (!result.success) {
       preview.textContent = result.error || 'Re-analysis failed';
-      if (btn) btn.disabled = false;
       showToast(result.error || 'Re-analysis failed — no AI backend available', 'warning');
       return;
     }
-    // Progress bar is driven by the /api/status polling loop.
-    // When style_progress clears, the poll handler refreshes deck settings
-    // and re-enables the button automatically.
+    startPolling();   // queue badge/drawer reflect the enqueued job
   } catch (e) {
     preview.textContent = 'Error: ' + e.message;
-    if (btn) btn.disabled = false;
   }
 }
 

@@ -137,3 +137,67 @@ class TestExecutorDeckScoping:
         a = json.loads((decks / 'deckA' / 'art_prompts.json').read_text())
         assert any(e['name'] == 'Mox Ruby' and e['prompt'] for e in b)
         assert a == []
+
+
+class TestAnalysisJobs:
+    """Inspiration/style analysis is a first-class queue job: deck-scoped,
+    deck-switch-proof, and never polluting unrelated decks' UI progress."""
+
+    def test_distill_style_enqueues(self, client, tmp_path, monkeypatch):
+        decks = tmp_path / 'decks'
+        d = decks / 'deckX'; d.mkdir(parents=True)
+        (d / 'deck.json').write_text(json.dumps({
+            'name': 'X', 'cards': [],
+            'inspiration_images': [{'filename': 'i.png',
+                                    'style_description': 'Colors: teal'}]}))
+        (d / 'i.png').write_bytes(b'x')
+        monkeypatch.setattr(ds, 'DECKS_DIR', decks)
+        resp = client.post('/api/decks/deckX/distill-style')
+        assert resp.status_code == 200
+        jobs = [j for j in ds.gen_queue._snapshot_jobs() if j.type == ds.ANALYZE]
+        assert jobs and jobs[-1].deck_id == 'deckX'
+        assert jobs[-1].params['mode'] == 'distill'
+
+    def test_status_overlay_skips_analysis_jobs(self, client, populated_state):
+        job = ds.gen_queue.enqueue(ds.Job(
+            type=ds.ANALYZE, deck_id=ds.active_deck_id, card_name='',
+            label='Style analysis', params={'mode': 'distill'}))
+        data = client.get('/api/status').get_json()
+        assert '' not in data['statuses']          # no phantom card badge
+        assert data['queue']['counts']['queued'] >= 1
+        ds.gen_queue.cancel(job.id)
+
+    def test_progress_never_pollutes_other_decks(self, populated_state):
+        # A running analysis for an INACTIVE deck must not write the global
+        # style progress (which drives the active deck's UI).
+        ds.style_analysis_progress = {}
+        job = ds.Job(type=ds.ANALYZE, deck_id='some-other-deck', card_name='',
+                     params={'mode': 'distill'})
+        ds._analysis_job_ctx.job = job
+        try:
+            ds._style_progress_update('analyzing', 1, 5, 'working...')
+            assert ds.style_analysis_progress == {}          # global untouched
+            assert job.progress['message'] == 'working...'   # job carries it
+            ds._style_progress_clear()
+            assert ds.style_analysis_progress == {}
+        finally:
+            ds._analysis_job_ctx.job = None
+
+    def test_progress_mirrors_for_active_deck(self, populated_state):
+        ds.style_analysis_progress = {}
+        job = ds.Job(type=ds.ANALYZE, deck_id=ds.active_deck_id, card_name='',
+                     params={'mode': 'distill'})
+        ds._analysis_job_ctx.job = job
+        try:
+            ds._style_progress_update('analyzing', 2, 5, 'active work')
+            assert ds.style_analysis_progress.get('message') == 'active work'
+        finally:
+            ds._analysis_job_ctx.job = None
+            ds.style_analysis_progress = {}
+
+    def test_deck_delete_cancels_analysis_jobs(self, client, populated_state):
+        job = ds.gen_queue.enqueue(ds.Job(
+            type=ds.ANALYZE, deck_id='doomed-deck', card_name='',
+            params={'mode': 'reanalyze'}))
+        ds.gen_queue.cancel_deck('doomed-deck')
+        assert ds.gen_queue.get(job.id).status == 'cancelled'
