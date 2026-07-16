@@ -86,6 +86,13 @@
 
 ## Done
 
+- [x] Durable queue: pending jobs survive server restarts | Priority: P1 | Completed: 2026-07-16 | Owner: drew-valentine
+  - Squash-merged to main via PR #35 (commit 1aa6f2c); tagged v1.48.0 (minor, released 2026-07-16).
+  - Incident: a routine server restart destroyed 4 queued jobs (2 style analyses + prompt + art) — the queue was in-memory only by original design.
+  - Fix: every mutation snapshots pending jobs to queue_state.json (atomic); startup restores before the worker launches. Running-at-shutdown job re-queues first; deleted-deck jobs skipped; corrupt state tolerated; paused flag persists; tests isolated from the real state file.
+  - Acceptance: reproduced the incident live (queue 4 jobs, kill -9, restart) — all 4 restored in order. 374 tests green.
+
+
 - [x] Inspiration/style analysis as first-class queue jobs | Priority: P1 | Completed: 2026-07-16 | Owner: drew-valentine
   - Squash-merged to main via PR #33 (commit d55d4bb); tagged v1.47.0 (minor, released 2026-07-16).
   - New ANALYZE job type (modes: image/reanalyze/distill/subjects); all five ad-hoc analysis thread sites replaced with queue enqueues.
