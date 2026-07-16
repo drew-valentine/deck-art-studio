@@ -23,6 +23,15 @@ _GLOBALS_TO_SAVE = [
 
 
 @pytest.fixture(autouse=True)
+def _no_queue_persistence():
+    """Tests must never write the real queue_state.json."""
+    saved = deck_studio.gen_queue._persist_path
+    deck_studio.gen_queue._persist_path = None
+    yield
+    deck_studio.gen_queue._persist_path = saved
+
+
+@pytest.fixture(autouse=True)
 def _reset_global_state():
     """Snapshot and restore all mutable globals between tests."""
     saved = {}
