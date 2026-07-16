@@ -1722,7 +1722,11 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
 
     style_bits = []
     if style_source:
-        style_bits.append(f"in the style of {style_source}")
+        # Franchise names summon their cast into the art (a literal Rick
+        # rendered as card art); render_style_lead swaps them for a de-named
+        # genre phrase + original-characters guard. Artist names pass through.
+        from prompt_generator import render_style_lead
+        style_bits.append(render_style_lead(style_source))
     if flux_style_prompt:
         # Image-first descriptors (the vision model read the actual inspiration,
         # reconciled with the named style if one was given). Works for ANY style,
@@ -2932,11 +2936,25 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
     if first_img is not None:
         if progress_callback:
             progress_callback('Building style descriptors from inspiration...')
-        from vision_analyzer import build_flux_style_descriptors
-        flux_style_prompt = build_flux_style_descriptors(
-            first_img, style_source=style_source, backend=llm_backend,
+        from vision_analyzer import (build_flux_style_block,
+                                     build_flux_style_descriptors)
+        # Procedural block first: deterministic foundation (keyword-classified
+        # medium anchors + palette from the stored per-image Colors analyses)
+        # enriched by pooled VLM reads — repeatable across re-analyzes. The
+        # legacy tag distiller remains as fallback when the block is thin.
+        all_descs = '\n'.join(img.get('style_description', '')
+                              for img in insp_imgs
+                              if img.get('style_description'))
+        flux_style_prompt = build_flux_style_block(
+            first_img, style_source=style_source,
             vision_model=bcfg.get('ollama_vision_model', 'llava:7b'),
-            text_model=bcfg.get('ollama_model', 'llama3.2:3b'))
+            text_model=bcfg.get('ollama_model', 'llama3.2:3b'),
+            stored_descriptions=all_descs)
+        if len(flux_style_prompt.split()) < 10:
+            flux_style_prompt = build_flux_style_descriptors(
+                first_img, style_source=style_source, backend=llm_backend,
+                vision_model=bcfg.get('ollama_vision_model', 'llava:7b'),
+                text_model=bcfg.get('ollama_model', 'llama3.2:3b'))
         if flux_style_prompt:
             print(f"  [distill] FLUX style descriptors ({'named: '+style_source if style_source else 'image-only'}): {flux_style_prompt}")
     data['flux_style_prompt'] = flux_style_prompt
@@ -3872,7 +3890,12 @@ def _execute_prompt_job(job, ctx):
         unit = _face_unit_for(card, job.card_name)
         bcfg = backend_config.load_config()
         data = ctx['meta']
-        style_hint = (data.get('style_source') or '').strip()
+        style_name = (data.get('style_source') or '').strip()
+        # The scene writer must not be TOLD the franchise name either — it
+        # biases scenes toward the show's trademark settings (labs, portals,
+        # garages), which are character attractors at render time.
+        from prompt_generator import franchise_style_phrase
+        style_hint = franchise_style_phrase(style_name) or style_name
         flux_style = (data.get('flux_style_prompt') or '').strip()
         if flux_style:
             style_hint = f"{style_hint} — {flux_style}" if style_hint else flux_style
@@ -3888,7 +3911,8 @@ def _execute_prompt_job(job, ctx):
                     prompt = generate_subject_with_ai(
                         unit, openai_client, backend=bcfg['llm_backend'],
                         local_model=bcfg['ollama_model'], style_hint=style_hint,
-                        steer=(job.feedback or ''))
+                        steer=(job.feedback or ''),
+                        style_source_name=style_name)
                     break
                 except Exception as e:
                     err_str = str(e)

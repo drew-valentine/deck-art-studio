@@ -45,7 +45,7 @@ def build_flux_style_descriptors(image_path, style_source: str = '',
     try:
         import mlx_llm
         img_desc = mlx_llm.vision(str(image_path), vlm_prompt, model=vision_model,
-                                  max_tokens=160, temperature=0.4)
+                                  max_tokens=160, temperature=0.2)
     except Exception as e:
         print(f"  [style] VLM style read failed: {e}")
         img_desc = ''
@@ -75,16 +75,17 @@ def build_flux_style_descriptors(image_path, style_source: str = '',
         out = mlx_llm.chat(
             messages=[{'role': 'system', 'content': system_msg},
                       {'role': 'user', 'content': user_msg}],
-            model=text_model, max_tokens=140, temperature=0.4,
+            model=text_model, max_tokens=140, temperature=0.2,
         )
     except Exception as e:
         print(f"  [style] descriptor reconcile failed: {e}")
         out = img_desc
-    return _clean_descriptors(out, style_source)
+    return _ensure_medium_floor(_clean_descriptors(out, style_source),
+                                style_source)
 
 
 def _clean_descriptors(text: str, style_source: str = '',
-                       max_descriptors: int = 16) -> str:
+                       max_descriptors: int = 16, reorder: bool = True) -> str:
     """Tidy a descriptor line: first line only, strip source-name leakage + labels,
     then de-duplicate repeated descriptors and cap the count.
 
@@ -116,6 +117,9 @@ def _clean_descriptors(text: str, style_source: str = '',
     unique = []
     for part in out.split(','):
         phrase = _re.sub(r'\s{2,}', ' ', part).strip(' .')
+        # strip orphaned leading conjunctions left by label/source stripping
+        phrase = _re.sub(r'^(?:and|or|with|the)\s+', '', phrase,
+                         flags=_re.IGNORECASE).strip()
         if not phrase:
             continue
         key = phrase.lower()
@@ -125,7 +129,127 @@ def _clean_descriptors(text: str, style_source: str = '',
         unique.append(phrase)
         if len(unique) >= max_descriptors:
             break
-    return ', '.join(unique)
+    return ', '.join(_reorder_descriptors(unique) if reorder else unique)
+
+
+# ---------------------------------------------------------------------------
+# Canonical descriptor ordering — determinism where it matters most.
+#
+# FLUX weights early tokens heavily. Two distill rolls with nearly IDENTICAL
+# vocabulary render very differently depending on ORDER: a roll that buries
+# "3D render, cel animation" behind thirteen mood words renders visibly weaker
+# than one that leads with them (observed side-by-side on the same deck). The
+# model's output order is a dice roll; this sort is the house rule. Any roll's
+# vocabulary is emitted in a fixed category order — medium first, then
+# linework/shading, palette, mood/theme, composition framing last — with the
+# original order preserved WITHIN each category. Same words in, same order
+# out, every time.
+# ---------------------------------------------------------------------------
+_ORDER_MEDIUM = (
+    'render', 'animation', 'anime', 'cartoon', 'cel', 'ink', 'illustration',
+    'watercolor', 'watercolour', 'gouache', 'painting', 'painterly',
+    'photograph', 'photo', 'pixel', 'comic', 'manga', 'woodblock', 'etching',
+    'engraving', 'sketch', 'drawing', 'cgi', 'claymation', 'stop-motion',
+    'digital art', 'concept art',
+)
+_ORDER_LINE_SURFACE = (
+    'line', 'outline', 'linework', 'shading', 'shaded', 'hatch', 'stipple',
+    'brush', 'stroke', 'texture', 'contrast', 'edge', 'flat color', 'flat fill',
+    'cel-shaded', 'gradient', 'matte', 'glossy', 'halftone', 'impasto',
+)
+_ORDER_COLOR = (
+    'palette', 'hue', 'tone', 'pastel', 'neon', 'saturated', 'saturation', 'muted', 'vibrant',
+    'vivid', 'colorful', 'colourful', 'monochrome', 'monochromatic', 'bright', 'tint', 'duotone',
+    'red', 'orange', 'yellow', 'green', 'blue', 'teal', 'purple', 'pink',
+    'magenta', 'coral', 'beige', 'cream', 'maroon', 'turquoise', 'lavender',
+)
+_ORDER_COMPOSITION = (
+    'close-up', 'closeup', 'wide shot', 'framing', 'composition', 'angle',
+    'view', 'panorama', 'panoramic', 'perspective', 'symmetrical', 'symmetry', 'centered', 'isometric',
+    'shot', 'crop',
+)
+
+
+# Deterministic medium floor. An analysis roll sometimes emits pure theme/mood
+# vocabulary with NO medium term at all ("gritty, dark humor, retro-futuristic")
+# — ordering can't fix words that aren't there, and a medium-less style prompt
+# renders off-style. When the roll lacks any medium-rank descriptor and the
+# style name matches a known category, these canonical terms are PREPENDED.
+# Keyword-mapped only — no LLM in the loop, so the floor never varies.
+_MEDIUM_FLOOR = {
+    ('morty', 'cartoon', 'animated', 'animation', 'anime', 'ghibli',
+     'spongebob', 'simpsons', 'futurama', 'disney', 'looney'):
+        ['cel animation', 'cartoonish'],
+    ('ligne', 'claire', 'ink', 'moebius', 'ngai', 'woodblock', 'ukiyo',
+     'tintin', 'linework', 'illustration'):
+        ['ink illustration', 'clean linework'],
+    ('pixar', '3d', 'cgi', 'render'): ['3D render'],
+    ('photo', 'photograph', 'film', 'cinematic', 'noir'):
+        ['cinematic photograph'],
+    ('watercolor', 'watercolour', 'gouache'): ['watercolor painting'],
+    ('oil', 'impressionist', 'baroque', 'rembrandt', 'renaissance'):
+        ['oil painting'],
+    ('comic', 'manga'): ['comic book art'],
+    ('pixel', '8-bit', '16-bit'): ['pixel art'],
+}
+
+
+def _ensure_medium_floor(line: str, style_source: str) -> str:
+    """Prepend whichever canonical medium terms are missing when the style name
+    deterministically maps to a known medium. Every distill of a given deck
+    therefore shares an identical, known-good opening ("cel animation,
+    cartoonish, ...") regardless of what the analysis roll emitted."""
+    if not line or not style_source:
+        return line
+    tokens = set(style_source.lower().replace('&', ' ').replace('-', ' ').split())
+    line_l = line.lower()
+    for keys, floor in _MEDIUM_FLOOR.items():
+        if tokens & set(keys):
+            if all(t.lower() in line_l for t in floor[:1]):
+                # the PRIMARY medium term is present (possibly inside a richer
+                # variant like 'fine-line ink illustration') — leave the line
+                # alone rather than double-prepending generics over it
+                return line
+            floor_lower = {t.lower() for t in floor}
+            rest = [p.strip() for p in line.split(',')
+                    if p.strip() and p.strip().lower() not in floor_lower]
+            return ', '.join(floor + rest)
+    return line
+
+
+def _rank_match(phrase_l: str, tokens: set, keys) -> bool:
+    """Single-word keys match whole tokens (substring matching once ranked
+    'deep pink' as MEDIUM via the 'ink' inside 'pink'); multi-word keys and
+    prefix-fragments match as substrings."""
+    for k in keys:
+        if ' ' in k or '-' in k:
+            if k in phrase_l:
+                return True
+        elif any(t.startswith(k) for t in tokens):
+            # token-PREFIX: 'hatch' matches 'hatching', 'line' matches
+            # 'linework' — but 'ink' can no longer hide inside 'pink'
+            return True
+    return False
+
+
+def _descriptor_rank(phrase: str) -> int:
+    import re as _re
+    p = phrase.lower()
+    tokens = set(_re.findall(r"[a-z0-9-]+", p))
+    if _rank_match(p, tokens, _ORDER_COMPOSITION):
+        return 4
+    if _rank_match(p, tokens, _ORDER_MEDIUM):
+        return 0
+    if _rank_match(p, tokens, _ORDER_LINE_SURFACE):
+        return 1
+    if _rank_match(p, tokens, _ORDER_COLOR):
+        return 2
+    return 3          # mood / energy / theme
+
+
+def _reorder_descriptors(phrases: list) -> list:
+    """Stable-sort descriptors into canonical category order (see above)."""
+    return sorted(phrases, key=lambda p: _descriptor_rank(p))
 
 
 def analyze_inspiration_style(image_path: str | Path, openai_client=None,
@@ -1065,3 +1189,369 @@ def build_collage_instruction(style_description: str, subject_prompt: str,
             f"No text, no words, no letters, no card frame, no borders — "
             f"pure art only."
         )
+
+
+# ═══════════════════════════════════════════════════════════════
+# Procedural style block — deterministic extraction (ported from the
+# validated block-builder; see build_flux_style_block below)
+# ═══════════════════════════════════════════════════════════════
+_COLOR_WORDS = frozenset({
+    'red', 'orange', 'yellow', 'green', 'blue', 'teal', 'cyan', 'purple',
+    'violet', 'magenta', 'pink', 'brown', 'black', 'white', 'gray', 'grey',
+    'gold', 'silver', 'beige', 'cream', 'coral', 'salmon', 'mustard', 'olive',
+    'lavender', 'turquoise', 'crimson', 'scarlet', 'amber', 'ochre', 'indigo',
+    'maroon', 'tan', 'peach', 'mint', 'navy', 'burgundy', 'sepia', 'bronze',
+    'copper', 'earthy', 'earth',
+    # artist's-vocabulary hues — these carry the most transfer signal
+    'vermilion', 'chartreuse', 'saffron', 'cerulean', 'viridian', 'umber',
+    'carmine', 'fuchsia', 'lime', 'aqua', 'slate', 'charcoal', 'ivory',
+    'khaki', 'plum', 'rose', 'ruby', 'emerald', 'sapphire', 'jade', 'mauve',
+    'taupe', 'terracotta', 'cobalt', 'ultramarine', 'ozone',
+})
+
+
+_PALETTE_KEYWORDS = ('palette', 'hue', 'tone', 'pastel', 'monochrom', 'neon',
+                     'saturat', 'tint', 'duotone', 'colored', 'coloured')
+
+
+def _is_color_descriptor(phrase: str) -> bool:
+    """True if a descriptor is about color/palette (a color name, or a palette
+    keyword like 'pastel hues', 'warm tones', 'monochromatic')."""
+    import re as _re
+    p = phrase.lower()
+    if any(k in p for k in _PALETTE_KEYWORDS):
+        return True
+    return any(w in _COLOR_WORDS for w in _re.findall(r"[a-z]+", p))
+
+
+def _palette_descriptors(text: str) -> list:
+    """Extract the color/palette descriptors from a comma-separated line."""
+    return [d.strip() for d in (text or '').split(',')
+            if d.strip() and _is_color_descriptor(d)]
+
+
+_HUE_MODIFIERS = frozenset({
+    'dusty', 'muted', 'pale', 'soft', 'deep', 'dark', 'light', 'bright',
+    'vivid', 'acid', 'neon', 'pastel', 'warm', 'cool', 'sickly', 'desaturated',
+    'rich', 'burnt', 'faded', 'dusky', 'creamy', 'sage', 'forest', 'sky',
+    'blood', 'rust', 'golden', 'earthy', 'smoky', 'washed-out', 'vibrant',
+})
+
+
+_MOTIF_KEYWORDS = ('motif', 'pattern', 'swirl', 'ornament', 'filigree',
+                   'arabesque', 'hatching', 'stipple', 'halftone', 'texture')
+
+
+_INFLUENCE_TERMS = ('ukiyo-e', 'art nouveau', 'art deco', 'east asian',
+                    'japanese woodblock', 'pop art', 'victorian', 'baroque',
+                    'retro-futurist', 'mid-century', 'gothic', 'psychedelic',
+                    'bauhaus', 'impressionist', 'pre-raphaelite')
+
+
+def _extract_hue_phrases(text: str, cap: int = 6) -> list:
+    """Pull specific hue phrases (modifier + color word) verbatim from prose.
+
+    'dusty coral' carries transfer signal that bare 'red' does not, so the
+    preceding modifier is kept when present."""
+    import re as _re
+    words = _re.findall(r"[A-Za-z][A-Za-z-]*", text)
+    hues, seen = [], set()
+    for i, raw in enumerate(words):
+        w = raw.rstrip('s') if raw.lower().rstrip('s') in _COLOR_WORDS else raw
+        if w.lower() in _COLOR_WORDS:
+            mod = words[i - 1].lower() if i > 0 else ''
+            phrase = (f"{mod} {w.lower()}"
+                      if (mod and mod not in _COLOR_WORDS
+                          and mod in _HUE_MODIFIERS) else w.lower())
+            if phrase not in seen and w.lower() not in seen:
+                seen.add(phrase)
+                seen.add(w.lower())
+                hues.append(phrase)
+            if len(hues) >= cap:
+                break
+    return hues
+
+
+def _extract_motif_phrases(text: str, cap: int = 2) -> list:
+    """Short decorative-motif noun phrases ('stylized swirling clouds')."""
+    import re as _re
+    out = []
+    for m in _re.finditer(
+            r"((?:[a-z][a-z-]*\s+){0,2}(?:swirl(?:ing|s)?|clouds?|waves?|"
+            r"filigree|arabesques?|florals?|hatching|halftone|stippl\w+)\s*"
+            r"(?:patterns?|motifs?|textures?)?)", text.lower()):
+        phrase = ' '.join(m.group(1).split())
+        words = phrase.split()
+        # trim leading verbs/stopwords the capture window can pick up
+        while words and words[0] in ('include', 'includes', 'including',
+                                     'with', 'and', 'the', 'of', 'are', 'is'):
+            words = words[1:]
+        phrase = ' '.join(words)
+        # keep only phrases that actually read as motifs, not lone nouns
+        if len(words) >= 2 and not any(w in _SUBJECT_LEAK_WORDS for w in words):
+            if phrase not in out:
+                out.append(phrase)
+        if len(out) >= cap:
+            break
+    return out
+
+
+def _extract_influence(text: str) -> str:
+    t = text.lower()
+    for term in _INFLUENCE_TERMS:
+        if term in t:
+            return f"{term} influence"
+    return ''
+
+
+# Technique vocabulary for scoring a style prompt's information density.
+
+
+_TECHNIQUE_WORDS = frozenset({
+    'linework', 'outlines', 'outline', 'ink', 'cel', 'flat', 'shading',
+    'hatching', 'stipple', 'brushstrokes', 'washes', 'gradient', 'matte',
+    'woodblock', 'etching', 'halftone', 'impasto', 'glazing', 'vector',
+    'swirl', 'swirling', 'motif', 'motifs', 'pattern', 'patterns', 'ornate',
+    'ornamental', 'ukiyo-e', 'nouveau', 'deco', 'illustration', 'animation',
+    'cartoonish', 'painterly', 'watercolor', 'gouache',
+})
+
+
+def _style_density_score(line: str) -> int:
+    """Deterministic quality score for a style prompt: specific hue words count
+    double (they are the rarest, most transfer-critical information), then
+    technique/motif vocabulary. Used to pick the best VLM sample."""
+    import re as _re
+    words = _re.findall(r"[a-z0-9-]+", line.lower())
+    hue = sum(1 for w in words if w in _COLOR_WORDS)
+    tech = sum(1 for w in words if w in _TECHNIQUE_WORDS)
+    return hue * 2 + tech
+
+
+# Sentence-scaffold prefixes the VLM reliably emits ("The linework is ...") —
+# stripped so the clause reads as a direct style instruction. Applied
+# repeatedly, so "The overall look is reminiscent of" also collapses.
+
+
+_MEDIUM_ANCHORS = {
+    'cel animation': ['cel animation', 'cartoonish', 'bold clean outlines',
+                      'flat cel shading', 'exaggerated expressions'],
+    'ink illustration': ['ink illustration', 'clean linework', 'bold ink outlines',
+                         'flat color', 'dense intricate detail'],
+    'watercolor': ['watercolor painting', 'soft washes', 'visible pigment texture'],
+    'oil painting': ['oil painting', 'visible brushstrokes', 'painterly texture'],
+    '3d render': ['3D render', 'volumetric lighting', 'detailed surface texture'],
+    'photograph': ['cinematic photograph', 'photographic lighting',
+                   'shallow depth of field'],
+    'comic book': ['comic book art', 'bold ink outlines', 'dynamic panel energy'],
+    'pixel art': ['pixel art', 'crisp pixel edges', 'limited color palette'],
+}
+
+
+# Franchises with iconic characters: putting their NAME in the render prompt
+# injects the cast (a literal Rick appeared as card art). For these, the name
+# is used only as a KNOWLEDGE KEY at distill time — expanded into anonymous
+# design-language cues — and never reaches the render prompt. Artist and
+# movement names (Victo Ngai, ligne claire) have no cast to leak and stay.
+
+
+_MEDIUM_KEYWORD_MAP = {
+    'cel animation': frozenset({'morty', 'cartoon', 'animated', 'animation',
+                                'anime', 'ghibli', 'spongebob', 'simpsons',
+                                'futurama', 'disney', 'looney'}),
+    'ink illustration': frozenset({'ligne', 'claire', 'ink', 'moebius', 'ngai',
+                                   'woodblock', 'ukiyo', 'ukiyo-e', 'linework',
+                                   'etching', 'tintin'}),
+    '3d render': frozenset({'pixar', 'dreamworks', '3d', 'cgi', 'render',
+                            'octane', 'unreal'}),
+    'photograph': frozenset({'photo', 'photograph', 'photography', 'cinematic',
+                             'noir', 'film'}),
+    'watercolor': frozenset({'watercolor', 'watercolour', 'gouache'}),
+    'oil painting': frozenset({'oil', 'impressionist', 'baroque', 'rembrandt',
+                               'renaissance'}),
+    'comic book': frozenset({'comic', 'manga', 'graphic-novel'}),
+    'pixel art': frozenset({'pixel', '8-bit', '16-bit'}),
+}
+
+
+def _classify_style_medium(style_source: str, text_model: str,
+                           img_desc: str = '') -> str:
+    """Classify a named style's primary medium via constrained multiple choice.
+
+    Small models answer a pick-one-label question far more reliably than they
+    describe a medium in open generation — but only with few-shot examples
+    (otherwise a 3B model shows hard recency bias and echoes the LAST label) and
+    with the VLM's image read as evidence (name recognition alone is fragile:
+    'Rick & Morty' classified as pixel art until the read supplied '2D
+    animation, cartoonish...'). Returns one of the _MEDIUM_ANCHORS keys, or ''
+    when unknown/unparseable (no anchors applied — same behavior as before).
+    """
+    # Deterministic keyword map first — the LLM classifier drifts run-to-run
+    # ('cel animation' one roll, 'comic book' the next) and stability of the
+    # anchor prefix is the whole point. LLM only for unrecognized names.
+    src_tokens = set(style_source.lower().replace('&', ' ').split())
+    src_lower = style_source.lower()
+    for medium, keys in _MEDIUM_KEYWORD_MAP.items():
+        if src_tokens & keys or any(' ' in k and k in src_lower for k in keys):
+            return medium
+
+    labels = list(_MEDIUM_ANCHORS.keys())
+    # '&' derails the small model's name recognition; normalize it.
+    src = style_source.replace('&', 'and')
+    try:
+        import mlx_llm
+        reply = mlx_llm.chat(
+            messages=[
+                {'role': 'system', 'content':
+                    "You classify the primary visual medium of an art style, "
+                    "given its name and a visual read of reference images. "
+                    f"Reply with EXACTLY one label from: {', '.join(labels)}. "
+                    "Nothing else."},
+                {'role': 'user', 'content':
+                    "Style: Studio Ghibli\nImage read: 2D animation, painted "
+                    "backgrounds, soft colors"},
+                {'role': 'assistant', 'content': "cel animation"},
+                {'role': 'user', 'content':
+                    "Style: film noir cinematography\nImage read: black and "
+                    "white photograph, dramatic shadows"},
+                {'role': 'assistant', 'content': "photograph"},
+                {'role': 'user', 'content':
+                    "Style: Moebius ligne claire\nImage read: ink illustration, "
+                    "clean lines, flat color"},
+                {'role': 'assistant', 'content': "ink illustration"},
+                {'role': 'user', 'content':
+                    "Style: Pixar\nImage read: 3D render, smooth surfaces, soft "
+                    "lighting"},
+                {'role': 'assistant', 'content': "3d render"},
+                {'role': 'user', 'content':
+                    f"Style: {src}\nImage read: {img_desc or '(none)'}"},
+            ],
+            model=text_model, max_tokens=10, temperature=0.0,
+        )
+    except Exception as e:
+        print(f"  [style] medium classification failed: {e}")
+        return ''
+    reply = (reply or '').lower()
+    # Longest label first so 'ink illustration' can't lose to a bare substring.
+    for label in sorted(labels, key=len, reverse=True):
+        if label in reply:
+            return label
+    return ''
+
+
+def _medium_anchors(medium: str) -> list:
+    """Canonical anchor descriptors for a classified medium ([] if unknown)."""
+    return list(_MEDIUM_ANCHORS.get(medium, []))
+
+
+# Color/palette detection for palette preservation (see build_flux_style_descriptors).
+
+
+
+def build_flux_style_block(image_path, style_source: str = '',
+                           vision_model: str = 'llava:7b',
+                           text_model: str = 'llama3.1:8b',
+                           max_words: int = 40,
+                           stored_descriptions: str = '') -> str:
+    """Procedural style block: deterministic foundation, VLM as enrichment.
+
+    The requirement is REPEATABLE style transfer from every fresh
+    Re-analyze — no hand-curated stored prompts. So the block is built in two
+    strata:
+
+    FOUNDATION (no model in the loop — identical every run):
+      * medium anchors from the keyword-classified style name, with the
+        line-weight variant (fine vs bold ink) decided by textual evidence
+      * palette extracted from the deck's stored per-image "Colors:" analyses
+        (modified hues outrank bare ones — bare colors are attractor bait)
+      * motifs/influence from the same stored analyses
+
+    ENRICHMENT (pooled across 2 VLM rolls — may add, can never subtract):
+      * extra hues/motifs/influence unioned in; classification grounding
+
+    Even if the VLM returns garbage or nothing, the foundation stands. Output
+    flows through _clean_descriptors (dedup + canonical ordering) and the
+    medium floor, so the opening is byte-stable across runs.
+    """
+    image_path = Path(image_path)
+
+    proses = []
+    if image_path.exists():
+        prompt = (
+            "You are a senior art director writing a STYLE TRANSFER instruction "
+            "for a text-to-image model. Study this image's rendering technique — "
+            "NOT its subject. Describe, in order: medium and overall look; "
+            "linework character (weight, flow, density); how surfaces and "
+            "shading are handled; the color palette with 4-6 SPECIFIC hue names "
+            "(say 'dusty coral', never just 'red'); recurring decorative motifs "
+            "or texture patterns; art-historical influences if visible. Be "
+            "concrete and technical. Never mention the subject. Output ONLY the "
+            "description."
+        )
+        for _ in range(2):
+            try:
+                import mlx_llm
+                prose = mlx_llm.vision(str(image_path), prompt,
+                                       model=vision_model,
+                                       max_tokens=260, temperature=0.2) or ''
+            except Exception as e:
+                print(f"  [style] VLM style read failed: {e}")
+                continue
+            if prose.strip():
+                proses.append(prose)
+
+    best_prose = max(proses, key=_style_density_score) if proses else ''
+    evidence = (stored_descriptions or '') + ' ' + ' '.join(proses)
+
+    # -- foundation: anchors (line-weight aware) --------------------------------
+    medium = _classify_style_medium(style_source, text_model,
+                                    img_desc=best_prose[:400]) \
+        if style_source else ''
+    anchors = _medium_anchors(medium)
+    if anchors and anchors[0] == 'ink illustration':
+        ev = evidence.lower()
+        fine = sum(ev.count(w) for w in ('fine', 'delicate', 'thin',
+                                         'technical pen', 'rapidograph',
+                                         'intricate line', 'hairline'))
+        bold = sum(ev.count(w) for w in ('bold line', 'thick line',
+                                         'heavy line', 'bold outline', 'chunky'))
+        if fine > bold:
+            anchors = ['fine-line ink illustration',
+                       'uniform fine technical-pen linework',
+                       'flat color fills over black line art',
+                       'dense intricate detail filling every surface']
+
+    # -- foundation + enrichment: hues/motifs/influence (stored data FIRST) -----
+    hues, motifs, influence = [], [], ''
+    for source in [stored_descriptions] + proses:
+        if not source:
+            continue
+        for h in _extract_hue_phrases(source, cap=6):
+            base = h.split()[-1]
+            if h not in hues and not any(base == x.split()[-1] for x in hues):
+                hues.append(h)
+        for m in _extract_motif_phrases(source, cap=2):
+            if m not in motifs:
+                motifs.append(m)
+        influence = influence or _extract_influence(source)
+    modified = [h for h in hues if ' ' in h]
+    bare = [h for h in hues if ' ' not in h]
+    hues = (modified + bare)[:6] if len(modified) < 3 else modified[:6]
+    motifs = motifs[:2]
+
+    parts = list(anchors)
+    if hues:
+        parts.append('palette of ' + ', '.join(hues))
+    parts.extend(motifs)
+    if influence:
+        parts.append(influence)
+    out, count = [], 0
+    for p in parts:
+        n = len(p.split())
+        if out and count + n > max_words:
+            continue
+        out.append(p)
+        count += n
+    line = _clean_descriptors(', '.join(out), style_source,
+                              max_descriptors=24, reorder=False)
+    return _ensure_medium_floor(line, style_source)

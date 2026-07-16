@@ -489,7 +489,8 @@ def generate_prompts_for_deck(cards: list[dict], style_preamble: str = None) -> 
 # ---------------------------------------------------------------------------
 def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'openai',
                               local_model: str = 'llama3.1:8b',
-                              style_hint: str = '', steer: str = '') -> str:
+                              style_hint: str = '', steer: str = '',
+                              style_source_name: str = '') -> str:
     """Use an LLM to generate a subject description tailored to the deck's style.
 
     Sends the LLM a rule-based description as a reference anchor plus
@@ -627,7 +628,8 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     # cast into the art — combined with the style name at render time, actual
     # show characters appear in card art. Sentences naming style-source tokens
     # are stripped from the anchor before the scene writer ever sees them.
-    safe_flavor = _strip_franchise_sentences(flavor, style_hint)
+    safe_flavor = _strip_franchise_sentences(flavor,
+                                             style_source_name or style_hint)
 
     user_msg = (
         f"Card: {name}\nType: {type_line}\nRules: {oracle}\n"
@@ -652,11 +654,58 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                               # degenerate into word-salad tails ("waveform GS cave
                               # events super intend impact"), so keep it lower.
         )
-        out = _strip_franchise_sentences(out, style_hint)   # output backstop
+        out = _strip_franchise_sentences(out, style_source_name or style_hint)   # output backstop
         return _ensure_creature_type_in_prompt(out, card)
     except Exception as e:
         print(f"  [prompt_gen] AI failed for {name}: {e}, using rule-based")
         return generate_subject_description(card)
+
+
+# Franchise -> de-named genre phrase. A franchise NAME in any model-facing
+# prompt summons its cast (a literal Rick in card art); the phrase carries the
+# genre's look without the character identity. Keyed on DISTINCTIVE tokens only
+# (never generic words), matched against the style-source name at USE time — a
+# pure function, so every existing deck benefits with no data migration.
+_FRANCHISE_PHRASES = {
+    'morty': 'an adult animated sci-fi cartoon series',
+    'simpsons': 'a classic adult animated sitcom',
+    'futurama': 'a retro-futuristic animated sci-fi sitcom',
+    'spongebob': 'a zany undersea cartoon series',
+    'ghibli': 'a hand-painted Japanese anime film',
+    'disney': 'a classic hand-drawn animated fairy-tale film',
+    'pixar': 'a polished 3D animated family film',
+    'pokemon': 'a colorful Japanese monster anime',
+    'pokémon': 'a colorful Japanese monster anime',
+    'batman': 'a noir animated superhero series',
+    'marvel': 'a dynamic superhero comic book',
+    'naruto': 'a high-energy shonen anime',
+    'looney': 'a slapstick golden-age cartoon',
+}
+
+
+def franchise_style_phrase(style_source: str):
+    """De-named genre phrase for a character franchise, or None for artist /
+    movement / unknown names (which are safe to use verbatim)."""
+    if not style_source:
+        return None
+    tokens = re.findall(r"[a-zé]+", style_source.lower().replace('&', ' '))
+    for t in tokens:
+        if t in _FRANCHISE_PHRASES:
+            return _FRANCHISE_PHRASES[t]
+    return None
+
+
+def render_style_lead(style_source: str) -> str:
+    """The style lead for the image-model prompt. Franchise names are replaced
+    with their de-named genre phrase plus an original-characters guard — the
+    name itself is the strongest character summons there is. Artist and
+    movement names pass through verbatim (no cast to leak)."""
+    if not style_source:
+        return ''
+    phrase = franchise_style_phrase(style_source)
+    if phrase:
+        return f"in the style of {phrase}, original character designs"
+    return f"in the style of {style_source}"
 
 
 _FRANCHISE_STOPWORDS = frozenset({

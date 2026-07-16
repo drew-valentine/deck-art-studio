@@ -378,3 +378,44 @@ class TestFranchiseFirewall:
     def test_media_stopwords_not_tokens(self):
         from prompt_generator import _franchise_tokens
         assert _franchise_tokens("Studio Ghibli — watercolor") == {'ghibli'}
+
+
+class TestFranchiseRenderLead:
+    """Franchise names never reach a model-facing prompt verbatim — they are
+    translated at USE time (pure function, no deck-data migration) into a
+    de-named genre phrase + original-characters guard. Root cause of literal
+    Ricks in card art: 'in the style of Rick & Morty' led every render."""
+
+    def test_franchise_denamed_in_render_lead(self):
+        from prompt_generator import render_style_lead
+        lead = render_style_lead('Rick & Morty')
+        assert 'rick' not in lead.lower() and 'morty' not in lead.lower()
+        assert lead == ("in the style of an adult animated sci-fi cartoon "
+                        "series, original character designs")
+
+    def test_artist_names_pass_through(self):
+        from prompt_generator import render_style_lead
+        assert render_style_lead('Moebius') == 'in the style of Moebius'
+        assert render_style_lead('Victo Ngai') == 'in the style of Victo Ngai'
+        assert render_style_lead('ligne claire clean-line illustration') == \
+            'in the style of ligne claire clean-line illustration'
+
+    def test_other_franchises_mapped(self):
+        from prompt_generator import franchise_style_phrase
+        assert franchise_style_phrase('SpongeBob SquarePants') is not None
+        assert franchise_style_phrase('Studio Ghibli') is not None
+        assert franchise_style_phrase('surrealism') is None
+        assert franchise_style_phrase('') is None
+
+    def test_firewall_uses_original_name_not_denamed_hint(self):
+        # The scene writer receives a DE-NAMED hint; the firewall must still
+        # derive {rick, morty} from the original style_source name.
+        from prompt_generator import _strip_franchise_sentences
+        out = _strip_franchise_sentences(
+            "All roads lead to Rick's garage. Fortune favors the bold.",
+            "Rick & Morty")
+        assert out == "Fortune favors the bold."
+
+    def test_empty_style_source_empty_lead(self):
+        from prompt_generator import render_style_lead
+        assert render_style_lead('') == ''
