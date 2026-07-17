@@ -6,32 +6,29 @@ A self-hosted web app for generating custom AI art for Magic: The Gathering prox
 
 > **Apple Silicon only.** Image generation, prompt writing, and style analysis all run locally via Apple's **MLX** framework. Deck Art Studio used to support an OpenAI cloud backend and a PyTorch/Ollama local backend; both have been replaced by a single MLX-native pipeline (FLUX.1-schnell + Llama + Qwen2.5-VL). It needs an M-series Mac with **18 GB+ unified memory** (16 GB may work; see [Requirements](#requirements)).
 
-<img width="3024" height="1726" alt="Deck Art Studio Sample" src="https://github.com/user-attachments/assets/d6a9710b-539c-40e5-bf10-07003f90772a" />
+<img alt="Deck Art Studio — full deck rendered in a fine-line illustration style" src="docs/images/app-hero.jpg" />
 
-## Samples
+**One decklist in, a fully illustrated deck out.** Every card below was generated locally — same app, same cards, just a different set of inspiration images:
 
-![Sample deck — coin flip theme](docs/images/sample-1.jpg)
+<p align="center"><img alt="Fine-line illustration style — four generated cards" src="docs/images/samples-fineline.jpg" /></p>
 
-![Sample deck — generated cards](docs/images/sample-2.jpg)
+<p align="center"><img alt="Adult-cartoon style — the same pipeline, different inspiration" src="docs/images/samples-cartoon.jpg" /></p>
 
-![Sample deck — card grid view](docs/images/sample-3.jpg)
-
-![Sample deck — style transfer](docs/images/sample-4.jpg)
+Upload a few reference images and the style carries across your entire deck — creatures, lands, artifacts, sagas, battles, and double-faced cards alike.
 
 ## Features
 
-- **100% local, MLX-native** — FLUX.1-schnell for images, Llama 3.x for prompts, Qwen2.5-VL for vision — all running on the Apple GPU. No API key, no Ollama, no cloud, free per image.
-- **Style transfer from any inspiration** — Upload 1–10 reference images; a vision model reads them and writes FLUX-ready style descriptors that drive every card. Works for any aesthetic, named (e.g. "Studio Ghibli") or not.
-- **Subject-faithful prompts** — Type-aware prompt generation keeps each card's actual subject as the focal point: artifacts depict the object (a card named "Krark's Thumb" is a *thumb*, not a generic amulet), lands depict a place, a Cyclops has *one* eye — with the deck's theme as background, not a hijacked subject.
-- **Flavor-grounded scenes** — Prompts are anchored in each card's flavor and rules text, so they depict real subject matter instead of defaulting to generic "swirling magical energy."
-- **Crash-safe memory model** — FLUX and the language/vision models each run in their own subprocess and are mutually evicted, so the heavy models never co-reside and exhaust the 18 GB budget (see [Architecture](#architecture--memory-model)).
-- **Multi-deck management** — Import, rename, delete, and switch between multiple decks.
-- **Scryfall integration** — Auto-fetches card data, art crops, oracle and flavor text during import.
-- **Card frame rendering** — SVG-based borderless frames with mana pips, type lines, rules text, P/T, loyalty badges, and hybrid mana support.
-- **Version history** — Every generation is versioned; revert to any previous version.
-- **Steerable re-generation** — Re-render a card on a fresh seed, or steer its prompt in a natural-language direction before rendering.
-- **Pinned cards** — Pin favorites to filter and protect them from batch regeneration.
-- **ZIP export** — Download all composite cards as print-ready PNGs, or share a deck as a single self-contained file.
+- **100% local, MLX-native** — FLUX.1-schnell for images, Llama 3.x for prompts, Qwen2.5-VL for vision — all running on the Apple GPU. No API key, no cloud, no per-image cost.
+- **Style transfer from any inspiration** — Upload 1–10 reference images. A procedural style pipeline classifies the medium, detects line weight (fine technical-pen vs bold outlines), and extracts the palette from your references — **deterministically**: re-analyzing a deck produces the same style block every time, so your look never drifts.
+- **Franchise-safe styling** — Name a show as your style ("Rick & Morty", "Studio Ghibli") and you get its *look*, never its cast: franchise names are translated into de-named style language before they ever reach the image model, so the actual characters don't leak into your card art.
+- **A real generation queue** — Art, prompts, flavor, and style analysis all flow through one global queue: enqueue instantly, keep browsing, switch decks freely — every job carries its own deck and keeps running. The queue drawer shows progress, supports cancel / bump-to-top / pause, and **pending jobs survive a server restart**.
+- **Subject-faithful prompts** — Type-aware generation keeps each card's real subject as the focal point, opens with the creature's type ("Okaun, Eye of Chaos, a Cyclops Berserker, …"), depicts literal objects literally (a card named "Krark's Thumb" is a *thumb*), and gives a Cyclops exactly one eye.
+- **Flavor-grounded scenes** — Prompts anchor in each card's flavor and rules text for concrete subject matter — with a firewall that keeps franchise quotes in flavor text from smuggling characters into the art.
+- **Full card frames, many layouts** — SVG-rendered borderless frames with mana pips, hybrid mana, rules and flavor text, P/T and loyalty — including sagas, battles (landscape + defense shield), split cards, and double-faced backs. A WYSIWYG frame designer customizes colors per card or per deck.
+- **Version history & steering** — Every generation is archived; revert any card to any version (prompt included). Re-roll on a fresh seed, or steer a prompt in plain language ("at night", "more menacing") and re-render.
+- **Crash-safe memory model** — FLUX and the language/vision models run in separate subprocesses and are mutually evicted, so the heavy models never co-reside and exhaust an 18 GB machine (see [Architecture](#architecture--memory-model)).
+- **Multi-deck management** — Import (Archidekt/MTGO/Arena formats, with Scryfall auto-fetch and rate-limit-safe retry), rename, delete, and switch decks freely.
+- **Export anywhere** — Print-ready PNG ZIPs, or a self-contained JSON manifest for the included **browser extension** that shows your art on [edhplay.com](https://edhplay.com).
 
 ## Requirements
 
@@ -81,6 +78,10 @@ This is what makes your deck unique. Upload 1–10 images that represent the vis
 
 > **Tip:** The more consistent your inspiration images are, the more cohesive your deck's art will be. 3–5 images from the same artist or aesthetic work best.
 
+The same pipeline, pointed at cartoon screenshots instead of fine-line illustration — the whole deck follows:
+
+![A second deck rendered in an adult-cartoon style](docs/images/app-cartoon-deck.jpg)
+
 ### Step 3: Generate Art Prompts
 
 A prompt describes the **scene** each card depicts. The deck's style is applied automatically on top — so a prompt only needs to describe *what* to show, not the art style.
@@ -96,11 +97,19 @@ A prompt describes the **scene** each card depicts. The deck's style is applied 
 1. Select the cards you want art for (or **"Select All"**).
 2. Click **"Art"** to start generation (~70 s/card on an M3 Pro). Progress updates appear on each card tile as it renders.
 
+Everything runs through the **global generation queue** — click **Queue** in the header to open the drawer. Jobs are cancellable, re-orderable (bump to top), and pausable; each one carries its own deck, so you can switch decks and keep working while renders continue. Pending jobs even survive a server restart.
+
+![Generation queue drawer — art, prompt, and style-analysis jobs](docs/images/app-queue.jpg)
+
 > **Tip:** Click **"Flavor"** in the action toolbar to generate themed flavor text for selected cards — it's rendered onto each card frame alongside the rules text. You can also edit flavor text per-card in the detail panel.
 
 ### Step 5: Review and Iterate
 
-Click any card tile to open its **detail panel**. Each card shows its art composited into a borderless frame. From here you can:
+Click any card tile to open its **detail panel**. Each card shows its art composited into a borderless frame.
+
+![Card detail panel — composited card with prompt controls](docs/images/app-detail.jpg)
+
+From here you can:
 
 - **Render Art** — re-render the current prompt on a fresh seed (same scene, different take).
 - **Steer & Render** — type a direction (e.g. "at night", "more menacing") and it rewrites the prompt that way, then renders.
@@ -109,6 +118,10 @@ Click any card tile to open its **detail panel**. Each card shows its art compos
 - **Pin** a card (action toolbar) to protect it from batch regeneration.
 - **Versions** — every generation is saved; scroll the thumbnails at the bottom of the detail panel and click any version to revert.
 - **Frames** — re-render the card frame overlay without regenerating the art.
+
+The **Frame** tab is a WYSIWYG designer: adjust border, frame, and title-bar colors with a live preview, then save per-card or apply to every checked card (or set the deck default used by new imports).
+
+![WYSIWYG frame designer](docs/images/app-frame.jpg)
 
 ### Step 6: Export
 
@@ -156,9 +169,9 @@ flowchart TD
     INSP["Inspiration images (1–10)"]
     CARD["Decklist — Scryfall auto-fetch\n(type, oracle, flavor, art crop)"]
 
-    subgraph VIS["Style analysis"]
-        VLM["Qwen2.5-VL reads each image →\nFLUX-ready style descriptors\n(medium · palette · lighting · mood)"]
-        RECON["Optional: Llama reconciles a\nnamed style source"]
+    subgraph VIS["Style analysis (procedural)"]
+        VLM["Qwen2.5-VL reads each image →\nstored per-image analysis\n(medium · palette · motifs)"]
+        RECON["Deterministic style block:\nclassified medium anchors +\nextracted palette (VLM enriches,\nnever subtracts)"]
     end
 
     subgraph PR["Prompt generation"]
@@ -210,7 +223,9 @@ flowchart LR
 | **Subprocess isolation of FLUX and MLX** | Killing a worker process is the only reliable way to return FLUX's ~13 GB of GPU memory to the OS before the language/vision models load. In-process `clear_cache` left fragments that still OOM-killed the server on 18 GB. |
 | **Single reentrant `GPU_LOCK`** | FLUX and MLX workers can't co-reside, so all heavy work is serialized under one outermost lock. One consistent lock order removes the AB-BA deadlock two independent module locks caused. |
 | **672×896 (3:4) render resolution** | Matches the card frame's art window so composites align, and peaks ~15.5 GB — comfortably under the 13.3 GB working-set + 18 GB budget. 768×1024 peaked ~17.5 GB and routinely OOM-killed the app. |
-| **Image-first style descriptors** | The vision model reads the actual inspiration image and writes FLUX-ready descriptors, so any uploaded style works (named or not) and the medium is identified correctly (e.g. "photograph" vs "digital painting"). |
+| **Procedural style blocks** | The deck's style prompt is assembled from deterministic sources — a keyword-classified medium (with fine-vs-bold line detection) plus the palette extracted from the stored per-image analyses. The vision model only *enriches*; it can never subtract. Re-analyzing a deck reproduces the same style block, so the look never drifts between runs. |
+| **Franchise de-naming** | A franchise name in a prompt summons its cast (a literal Rick once rendered as card art). Franchise names are translated at use time into de-named genre phrases + an "original character designs" guard; artist and movement names pass through verbatim. |
+| **Durable queue** | Every queue mutation snapshots pending jobs to disk; a restart restores them (a job running at shutdown re-queues first). A routine restart can never silently destroy queued work. |
 | **Front-loaded style** | FLUX's T5 encoder weights early tokens most heavily, so the style descriptors go first; a style buried after a long scene comes through weakly or not at all. |
 | **Subject-lock prompts** | The card's own subject must dominate the frame. Object/place cards get no stray character, literal names depict the literal thing (Krark's Thumb → a thumb), and a Cyclops / "Eye of …" creature gets exactly one eye — the deck theme stays in the background. |
 | **Flavor-grounded scenes** | Prompts anchor on the card's flavor and rules text, so they depict concrete subject matter instead of generic abstract "swirling magical energy." |
