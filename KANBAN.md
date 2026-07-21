@@ -86,6 +86,13 @@
 
 ## Done
 
+- [x] Ship README refresh: engaging README with fresh screenshots reflecting major features | Priority: P1 | Completed: 2026-07-21 | Owner: drew-valentine
+  - Squash-merged to main via PR #37 (commit 3f390e2); tagged v1.48.1 (patch, released 2026-07-21).
+  - Goal: turn the README into an engaging, accurate landing page that converts repo views into clones/stars — fresh screenshots that reflect the app's major features as they actually ship.
+  - Curation: full-collection curation pass (~700 composites across 8 decks) distilled into a five-style best-of gallery — fine-line, cartoon, psychedelic dragons, synthwave, and ink & watercolor — with 4 zero-defect cards each.
+  - New real-UI showcases for the three under-communicated features: the queue drawer captured mid-render with cross-deck jobs; version history (31-version archive strip + Steer & Render); and the frame designer (the same card in 5 of the 12 frame themes + designer controls).
+  - Usage guide restructured with "Iterate Until It's Right" and "Design the Frame" promoted to first-class steps.
+
 - [x] Durable queue: pending jobs survive server restarts | Priority: P1 | Completed: 2026-07-16 | Owner: drew-valentine
   - Squash-merged to main via PR #35 (commit 1aa6f2c); tagged v1.48.0 (minor, released 2026-07-16).
   - Incident: a routine server restart destroyed 4 queued jobs (2 style analyses + prompt + art) — the queue was in-memory only by original design.
