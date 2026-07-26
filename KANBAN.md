@@ -113,7 +113,7 @@
   - Franchise names never reach model-facing prompts — de-named genre phrases at use time (pure function, no deck migration; artist names pass through). Fixes literal show characters in card art.
   - Deterministic distillation: canonical descriptor ordering (token-prefix ranked) + keyword-mapped medium floor — every Re-analyze leads with the medium.
   - Procedural style block: deterministic foundation (classified medium anchors incl. fine-vs-bold line detection + palette from stored per-image Colors analyses); pooled VLM enrichment can add, never subtract. Two independent live re-analyzes produced byte-identical blocks.
-  - Validation: both validation decks (Rick & Morty franchise, Moebius fine-line) render on-style from cold re-analyzes; 363 tests green.
+  - Validation: both validation decks (cartoon franchise, fine-line ink) render on-style from cold re-analyzes; 363 tests green.
 
 
 - [x] BUG: Franchise characters leak into card art via flavor text | Priority: P1 | Completed: 2026-07-13 | Owner: drew-valentine
