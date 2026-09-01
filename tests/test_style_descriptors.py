@@ -249,3 +249,61 @@ class TestProceduralStyleBlock:
         pal = out.split('palette of ')[-1]
         assert 'dusty coral' in pal and 'sage green' in pal
         assert 'yellow' not in pal      # bare hues dropped (>=3 modified)
+
+
+class TestDeclaredStyleAuthority:
+    """The user's declared style source overrides the model's interpretation —
+    in every direction, with no medium taxonomy in the loop. Root case: a deck
+    declared 'Dr. Seuss hand drawn illustration' whose per-image analyses
+    called clean scans 'digital watercolor' / 'digital vector illustration'
+    because the analyst was never shown the declaration."""
+
+    def _capture_vision(self, monkeypatch):
+        import vision_analyzer as va
+        captured = {}
+        fake = types.ModuleType('mlx_llm')
+        def _vision(image_path=None, prompt=None, model=None, **kw):
+            captured['prompt'] = prompt
+            return 'Source: X\nArt Style: pen and ink drawing'
+        fake.vision = _vision
+        monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
+        return va, captured
+
+    def test_analysis_prompt_carries_declaration_as_authority(self, monkeypatch):
+        va, captured = self._capture_vision(monkeypatch)
+        out = va.analyze_inspiration_style(
+            __file__, backend='local', local_model='m',
+            style_source='Dr. Seuss hand drawn illustration')
+        assert 'Dr. Seuss hand drawn illustration' in captured['prompt']
+        assert 'overrides your interpretation' in captured['prompt']
+        assert out.startswith('Source:')
+
+    def test_declaration_is_generic_not_handmade_specific(self, monkeypatch):
+        # ANY declaration gets authority — not just hand-made ones.
+        va, captured = self._capture_vision(monkeypatch)
+        va.analyze_inspiration_style(
+            __file__, backend='local', local_model='m',
+            style_source='painterly Pixar-grade 3D render')
+        assert 'painterly Pixar-grade 3D render' in captured['prompt']
+        assert 'overrides your interpretation' in captured['prompt']
+
+    def test_analysis_prompt_unchanged_without_declaration(self, monkeypatch):
+        va, captured = self._capture_vision(monkeypatch)
+        va.analyze_inspiration_style(__file__, backend='local', local_model='m')
+        assert 'USER-DECLARED' not in captured['prompt']
+
+
+class TestMotifSubjectLeakGuard:
+    """_SUBJECT_LEAK_WORDS was referenced but never defined (PR #31): the first
+    deck whose analyses matched the motif regex NameError'd the distillation."""
+
+    def test_motif_extraction_does_not_raise(self):
+        from vision_analyzer import _extract_motif_phrases
+        out = _extract_motif_phrases(
+            'whimsical swirling clouds patterns over curling waves motifs')
+        assert isinstance(out, list) and out
+
+    def test_subject_phrases_filtered(self):
+        from vision_analyzer import _extract_motif_phrases
+        out = _extract_motif_phrases('character swirling clouds everywhere')
+        assert all('character' not in m for m in out)

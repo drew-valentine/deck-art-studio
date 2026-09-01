@@ -3913,6 +3913,7 @@ def _analyze_new_image(deck_id, filename, new_index):
             dest, openai_client,
             backend='local',
             local_model=bcfg['ollama_vision_model'],
+            style_source=_d.get('style_source', ''),
         )
         if desc:
             _style_progress_update('analyzing', 1, total_steps, 'Image analyzed')
@@ -3988,6 +3989,7 @@ def _reanalyze_all_images(deck_id):
                 insp_path, openai_client,
                 backend='local',
                 local_model=bcfg['ollama_vision_model'],
+                style_source=d.get('style_source', ''),
             )
             _style_progress_update('analyzing', step_num, total_steps,
                                    f'Image {step_num}/{n_images} analyzed')

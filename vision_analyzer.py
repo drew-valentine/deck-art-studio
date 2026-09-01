@@ -61,10 +61,11 @@ def build_flux_style_descriptors(image_path, style_source: str = '',
         "given (a) a visual-style read of reference images and (b) the NAME of the "
         "intended style. Output ONE line of 10-16 comma-separated descriptors that "
         "best reproduce the intended style.\n"
-        "Trust the NAMED style's true medium and signature techniques — use your "
-        "knowledge to CORRECT any medium error in the image read (e.g. a live-action "
-        "film still wrongly called 'digital painting'). Keep the specific color "
-        "palette and mood from the image read. Use concrete multi-word phrases. "
+        "The style name is USER-DECLARED and overrides the image read wherever "
+        "they conflict: trust the declared style's medium and signature "
+        "techniques, and CORRECT any medium error in the image read (e.g. a "
+        "live-action film still wrongly called 'digital painting'). Keep the "
+        "specific color palette and mood from the image read. Use concrete multi-word phrases. "
         "Describe ONLY visual style — no subject, no proper nouns, no character or "
         "place names. Output ONLY the comma-separated descriptors."
     )
@@ -254,7 +255,8 @@ def _reorder_descriptors(phrases: list) -> list:
 
 def analyze_inspiration_style(image_path: str | Path, openai_client=None,
                                backend: str = 'openai',
-                               local_model: str = 'llava:7b') -> str:
+                               local_model: str = 'llava:7b',
+                               style_source: str = '') -> str:
     """Analyze an inspiration image's art style.
 
     Supports both OpenAI GPT-4o vision (cloud) and Ollama vision models (local).
@@ -322,6 +324,22 @@ def analyze_inspiration_style(image_path: str | Path, openai_client=None,
         "- If it's a PHOTOGRAPH, say photograph — not painting.\n"
         "- Do NOT mention card frames, text, or game mechanics."
     )
+
+    # The user's declared style source overrides the model's interpretation.
+    # They know how their reference was made (a clean scan of hand-drawn art
+    # reads as "digital" to a vision model; a painterly 3D render reads as a
+    # painting) — whatever the declaration says wins, in every direction.
+    if style_source:
+        system_msg += (
+            f"\n\nUSER-DECLARED STYLE SOURCE: \"{style_source}\"\n"
+            "The user's declaration overrides your interpretation. Wherever "
+            "your visual read of the medium, technique, or origin conflicts "
+            "with the declaration, defer to the declaration and describe the "
+            "style in terms consistent with it. Do not hedge by blending your "
+            "conflicting guess into the declared terms — a conflict resolves "
+            "entirely in the declaration's favor, and words from your "
+            "conflicting guess must not appear at all."
+        )
 
     try:
         # Qwen2.5-VL (via mlx-vlm) reads medium/technique accurately in a single
@@ -1272,6 +1290,19 @@ def _extract_hue_phrases(text: str, cap: int = 6) -> list:
     return hues
 
 
+# Words that mark a motif candidate as the reference's SUBJECT rather than a
+# decorative pattern — a style block must never smuggle subject matter onto
+# every card. (Referenced since the PR #31 block builder but never defined:
+# the first deck whose analyses matched the motif regex hit a NameError that
+# failed the whole distillation.)
+_SUBJECT_LEAK_WORDS = frozenset({
+    'character', 'characters', 'figure', 'figures', 'creature', 'creatures',
+    'person', 'people', 'man', 'woman', 'child', 'children', 'animal',
+    'animals', 'face', 'faces', 'eye', 'eyes', 'hand', 'hands', 'body',
+    'bodies', 'hair', 'cat', 'dog', 'bird', 'fish',
+})
+
+
 def _extract_motif_phrases(text: str, cap: int = 2) -> list:
     """Short decorative-motif noun phrases ('stylized swirling clouds')."""
     import re as _re
@@ -1488,6 +1519,13 @@ def build_flux_style_block(image_path, style_source: str = '',
             "concrete and technical. Never mention the subject. Output ONLY the "
             "description."
         )
+        if style_source:
+            prompt += (
+                f" USER-DECLARED STYLE SOURCE: \"{style_source}\" — the user's "
+                "declaration overrides your interpretation; where your read of "
+                "the medium or technique conflicts with it, defer to the "
+                "declaration."
+            )
         for _ in range(2):
             try:
                 import mlx_llm
