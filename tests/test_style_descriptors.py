@@ -307,3 +307,54 @@ class TestMotifSubjectLeakGuard:
         from vision_analyzer import _extract_motif_phrases
         out = _extract_motif_phrases('character swirling clouds everywhere')
         assert all('character' not in m for m in out)
+
+
+class TestEvidenceDerivedInkAxes:
+    """Line weight, line character, and detail density are independent
+    evidence-derived axes. The old fine-line variant welded 'uniform
+    technical-pen' + 'dense detail filling every surface' onto ANY fine-line
+    evidence — a whimsical sparse style (Dr. Seuss) got dense technical
+    draftsmanship its references never showed, drowning the declared name."""
+
+    SEUSS_STORED = ("Source: hand drawn illustration\n"
+                    "Art Style: Whimsical hand-drawn illustration with "
+                    "whimsical doodling | Fine line ink drawing\n"
+                    "Colors: light blue, pastel purple, muted yellow, "
+                    "dusty coral\n"
+                    "Technique: loose playful pen line, minimal shading, "
+                    "flat graphic space, white background")
+
+    def test_loose_sparse_evidence_yields_loose_sparse_anchors(self, monkeypatch):
+        from vision_analyzer import build_flux_style_block
+        _fake_vlm(monkeypatch, prose="")
+        out = build_flux_style_block('/nope/x.png',
+                                     style_source='hand drawn illustration',
+                                     stored_descriptions=self.SEUSS_STORED)
+        assert 'loose expressive hand-drawn linework' in out
+        assert 'sparse airy composition' in out
+        assert 'technical-pen' not in out
+        assert 'dense intricate detail' not in out
+
+    def test_tight_dense_evidence_unchanged_from_old_behavior(self, monkeypatch):
+        # The Moebius-style deck keeps its exact historical anchors.
+        from vision_analyzer import build_flux_style_block
+        _fake_vlm(monkeypatch, prose="")
+        out = build_flux_style_block('/nope/x.png', style_source='Moebius',
+                                     stored_descriptions=QM_STORED)
+        assert out.startswith('fine-line ink illustration, '
+                              'uniform fine technical-pen linework, '
+                              'flat color fills over black line art, '
+                              'dense intricate detail filling every surface')
+
+    def test_axes_are_independent(self, monkeypatch):
+        # Fine line weight + sparse density: fine anchor WITHOUT dense anchor.
+        from vision_analyzer import build_flux_style_block
+        _fake_vlm(monkeypatch, prose="")
+        out = build_flux_style_block(
+            '/nope/x.png', style_source='ligne claire ink',
+            stored_descriptions=("Colors: red, blue\nTechnique: fine delicate "
+                                 "hairline strokes, minimal sparse detail, "
+                                 "white background"))
+        assert out.startswith('fine-line ink illustration')
+        assert 'sparse airy composition' in out
+        assert 'dense intricate detail' not in out

@@ -85,6 +85,17 @@ def build_flux_style_descriptors(image_path, style_source: str = '',
                                 style_source)
 
 
+# Generic medium/technique words that may appear in a style source ("hand
+# drawn illustration", "watercolor sketch") — these are style vocabulary, not
+# name leakage, and must survive the source-word stripper.
+_SOURCE_STRIP_KEEP = frozenset({
+    'illustration', 'illustrated', 'drawn', 'drawing', 'painted', 'painting',
+    'watercolor', 'watercolour', 'gouache', 'sketch', 'sketches', 'hand',
+    'animation', 'animated', 'cartoon', 'anime', 'render', 'photograph',
+    'photography', 'comic', 'pixel', 'style', 'inked',
+})
+
+
 def _clean_descriptors(text: str, style_source: str = '',
                        max_descriptors: int = 16, reorder: bool = True) -> str:
     """Tidy a descriptor line: first line only, strip source-name leakage + labels,
@@ -107,10 +118,14 @@ def _clean_descriptors(text: str, style_source: str = '',
     out = lines[0].strip()
     # Drop a leading "Descriptors:"/"Style:" label if the model echoed it.
     out = _re.sub(r'^\s*(descriptors|style|visual style)\s*:\s*', '', out, flags=_re.IGNORECASE)
-    # Strip the source name if it leaked into the values.
+    # Strip the source name if it leaked into the values — but never strip
+    # generic MEDIUM vocabulary: a source like "hand drawn illustration"
+    # contains words the anchors legitimately use ('illustration', 'drawn'),
+    # and stripping them mangled anchors into 'fine-line ink,' fragments.
+    # Only distinctive name-like words (artist/franchise names) are stripped.
     if style_source:
         for word in style_source.split():
-            if len(word) > 3:
+            if len(word) > 3 and word.lower() not in _SOURCE_STRIP_KEEP:
                 out = _re.sub(r'\b' + _re.escape(word) + r'\b', '', out, flags=_re.IGNORECASE)
     # Split into descriptors, de-duplicate (case-insensitive, first-seen order),
     # and cap the count — collapses any model repetition loop to its unique set.
@@ -1547,17 +1562,40 @@ def build_flux_style_block(image_path, style_source: str = '',
         if style_source else ''
     anchors = _medium_anchors(medium)
     if anchors and anchors[0] == 'ink illustration':
-        ev = evidence.lower()
-        fine = sum(ev.count(w) for w in ('fine', 'delicate', 'thin',
-                                         'technical pen', 'rapidograph',
-                                         'intricate line', 'hairline'))
-        bold = sum(ev.count(w) for w in ('bold line', 'thick line',
-                                         'heavy line', 'bold outline', 'chunky'))
-        if fine > bold:
-            anchors = ['fine-line ink illustration',
-                       'uniform fine technical-pen linework',
-                       'flat color fills over black line art',
-                       'dense intricate detail filling every surface']
+        # Ink variants are decided per-AXIS from textual evidence — line
+        # weight, line character, and detail density are independent. The old
+        # fine-line variant welded 'uniform technical-pen' and 'dense detail
+        # filling every surface' to ANY fine-line evidence, which steered
+        # loose/sparse styles (Seussian whimsy) toward dense technical
+        # draftsmanship the references never showed.
+        # Axes read the deck's STORED analyses when available — the persistent
+        # evidence — so an ephemeral VLM roll ("dreamy, whimsical...") can't
+        # flip line character or density between re-analyzes.
+        ev = ((stored_descriptions or '') or evidence).lower()
+        _n = lambda words: sum(ev.count(w) for w in words)
+        fine = _n(('fine', 'delicate', 'thin', 'technical pen', 'rapidograph',
+                   'intricate line', 'hairline'))
+        bold = _n(('bold line', 'thick line', 'heavy line', 'bold outline',
+                   'chunky'))
+        loose = _n(('loose', 'wobbly', 'scraggly', 'sketchy', 'doodl',
+                    'squiggl', 'whimsical', 'expressive line', 'organic line'))
+        tight = _n(('uniform', 'technical pen', 'precise', 'rapidograph'))
+        dense = _n(('dense', 'intricate', 'ornate', 'busy', 'filling every',
+                    'highly detailed'))
+        sparse = _n(('sparse', 'airy', 'minimal', 'white space', 'whitespace',
+                     'white background', 'negative space', 'open background'))
+        anchors = ['fine-line ink illustration' if fine > bold
+                   else 'ink illustration']
+        anchors.append('loose expressive hand-drawn linework' if loose > tight
+                       else ('uniform fine technical-pen linework' if fine > bold
+                             else 'clean linework'))
+        if bold > fine:
+            anchors.append('bold ink outlines')
+        anchors.append('flat color fills over black line art')
+        if dense > sparse:
+            anchors.append('dense intricate detail filling every surface')
+        elif sparse > dense:
+            anchors.append('sparse airy composition on open background')
 
     # -- foundation + enrichment: hues/motifs/influence (stored data FIRST) -----
     hues, motifs, influence = [], [], ''
