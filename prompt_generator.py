@@ -614,12 +614,21 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                 )
 
     if steer and steer.strip():
+        # The steer OVERRIDES the rules and the reference anchor wherever they
+        # conflict — including the subject's APPEARANCE. Scoping it to
+        # scene-level attributes ("setting, action, framing, mood") made the
+        # model silently discard appearance steers: "a beautiful traitorous
+        # zombie woman" produced yet another skeletal monster because the
+        # anchor's imagery and the preserve-anatomy rule outranked the user.
+        # Only the subject's IDENTITY is fixed.
         system_msg += (
             f"\n\nUSER DIRECTION (HIGHEST PRIORITY) — Re-imagine the scene to satisfy "
-            f"this request: \"{steer.strip()}\". Treat it as a strong steer: change the "
-            f"setting, action, framing, time, or mood as needed to honor it, while still "
-            f"depicting the card's subject. Make the result clearly DIFFERENT from a "
-            f"generic version — don't fall back to the usual scene."
+            f"this request: \"{steer.strip()}\". The user's direction OVERRIDES every "
+            f"rule above and the reference description wherever they conflict — "
+            f"including the subject's APPEARANCE, anatomy, mood, setting, action, and "
+            f"framing. Only the subject's IDENTITY is fixed: the focal point must "
+            f"still be this card's subject, re-imagined as the user directs. Words "
+            f"from the reference that contradict the direction must not appear."
         )
 
     # FRANCHISE FIREWALL: flavor text is written in the deck style's voice and
@@ -635,7 +644,8 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         f"Card: {name}\nType: {type_line}\nRules: {oracle}\n"
         + (f"Flavor text (use this as the THEMATIC ANCHOR for the scene): {safe_flavor}\n" if safe_flavor else "")
         + f"Direction: {guidance}\n"
-        + (f"User steer (honor this above all): {steer.strip()}\n" if steer and steer.strip() else "")
+        + (f"User steer (OVERRIDES the reference description wherever they "
+           f"conflict): {steer.strip()}\n" if steer and steer.strip() else "")
         + f"Reference description: {base_desc}\n"
         f"Ground the scene in this card's flavor and rules — concrete subjects, not "
         f"abstract energy. Rewrite into a detailed scene description (2-3 sentences):"
