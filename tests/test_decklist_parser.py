@@ -419,3 +419,50 @@ class TestFranchiseRenderLead:
     def test_empty_style_source_empty_lead(self):
         from prompt_generator import render_style_lead
         assert render_style_lead('') == ''
+
+
+class TestSteerOverridesReference:
+    """A steer must override the reference anchor and rules wherever they
+    conflict — including the subject's APPEARANCE. The scene-scoped steer
+    ("change the setting, action, framing...") let the model silently discard
+    'a beautiful traitorous zombie woman' and render the anchor's skeletal
+    monster instead."""
+
+    CARD = {'name': 'Glissa, the Traitor',
+            'type_line': 'Legendary Creature — Phyrexian Zombie Elf',
+            'oracle_text': 'First strike, deathtouch', 'flavor_text': '',
+            'card_type': 'creature', 'colors': ['B', 'G']}
+
+    def _capture(self, monkeypatch, steer):
+        import sys, types
+        from prompt_generator import generate_subject_with_ai
+        captured = {}
+        fake = types.ModuleType('mlx_llm')
+        def _chat(messages=None, **kw):
+            captured['system'] = messages[0]['content']
+            captured['user'] = messages[1]['content']
+            return 'Glissa, the Traitor, a Phyrexian Zombie Elf, strides forth.'
+        fake.chat = _chat
+        monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
+        generate_subject_with_ai(self.CARD, backend='local', local_model='m',
+                                 steer=steer)
+        return captured
+
+    def test_steer_carries_override_authority(self, monkeypatch):
+        cap = self._capture(monkeypatch, 'a beautiful traitorous zombie woman')
+        assert 'a beautiful traitorous zombie woman' in cap['system']
+        assert 'OVERRIDES every rule above' in cap['system']
+        assert 'APPEARANCE' in cap['system']
+        # the old scene-only scoping that suppressed appearance steers is gone
+        assert 'time, or mood as needed' not in cap['system']
+
+    def test_steer_line_outranks_reference_in_user_msg(self, monkeypatch):
+        cap = self._capture(monkeypatch, 'a beautiful traitorous zombie woman')
+        assert 'OVERRIDES the reference description' in cap['user']
+        # steer appears before the reference anchor it overrides
+        assert cap['user'].index('User steer') < cap['user'].index('Reference description')
+
+    def test_no_steer_no_override_block(self, monkeypatch):
+        cap = self._capture(monkeypatch, '')
+        assert 'USER DIRECTION' not in cap['system']
+        assert 'User steer' not in cap['user']
