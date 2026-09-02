@@ -1703,9 +1703,13 @@ def _build_negative_fallback(style_tokens: dict, deck_meta: dict) -> str:
 # reference's full idiom but its figures/layout start to displace the subject
 # (a 16-card validation matrix: at 81 tokens x 4 refs, artifacts and lands
 # rendered the references' characters; at 25 the subjects returned), 729 = a
-# variation of the reference. Up to STYLE_REFERENCE_MAX_IMAGES references.
-STYLE_REFERENCE_DEFAULT = {'enabled': True, 'tokens': 25, 'strength': 1.0}
-STYLE_REFERENCE_MAX_IMAGES = 4
+# variation of the reference. ONE reference by default: a controlled A/B
+# (four cards, four decks, same prompts + seed) showed every reference's tokens
+# add its CONTENT — four refs at 25 each leaked figures and objects, a single
+# ref at 25 kept the card's subject on all four decks with the style intact.
+# `max_images` raises that (hard cap STYLE_REFERENCE_MAX_IMAGES).
+STYLE_REFERENCE_DEFAULT = {'enabled': True, 'tokens': 25, 'strength': 1.0, 'max_images': 1}
+STYLE_REFERENCE_MAX_IMAGES = 4   # hard cap; the per-deck default is ONE reference
 
 
 def _style_reference_settings(meta) -> dict:
@@ -1716,8 +1720,10 @@ def _style_reference_settings(meta) -> dict:
     try:
         cfg['tokens'] = max(0, int(cfg['tokens']))
         cfg['strength'] = float(cfg['strength'])
+        cfg['max_images'] = max(1, min(STYLE_REFERENCE_MAX_IMAGES, int(cfg['max_images'])))
     except (TypeError, ValueError):
         cfg['tokens'], cfg['strength'] = STYLE_REFERENCE_DEFAULT['tokens'], 1.0
+        cfg['max_images'] = STYLE_REFERENCE_DEFAULT['max_images']
     cfg['enabled'] = bool(cfg['enabled']) and cfg['tokens'] > 0
     return cfg
 
@@ -1733,7 +1739,7 @@ def _style_reference_images(meta, deck_dir) -> list:
         fn = img.get('filename') if isinstance(img, dict) else None
         if fn and (Path(deck_dir) / fn).exists():
             paths.append(str(Path(deck_dir) / fn))
-        if len(paths) >= STYLE_REFERENCE_MAX_IMAGES:
+        if len(paths) >= cfg['max_images']:
             break
     return paths
 
@@ -3612,8 +3618,9 @@ def set_style_source(deck_id):
 @app.route('/api/decks/<deck_id>/style-reference', methods=['GET', 'POST'])
 def api_style_reference(deck_id):
     """Get/set how strongly the deck's inspiration images steer renders (Redux).
-    POST {enabled?, tokens?, strength?} — tokens is the per-image budget
-    (0 = off, 9 palette-only, 81 balanced, 729 clone)."""
+    POST {enabled?, tokens?, strength?, max_images?} — tokens is the per-image
+    budget (0 = off, 9 palette-only, 25 subtle, 81 balanced, 729 clone);
+    max_images how many inspiration images are sent (default 1, cap 4)."""
     deck_dir = DECKS_DIR / deck_id
     deck_json = deck_dir / "deck.json"
     if not deck_json.exists():
@@ -3637,6 +3644,11 @@ def api_style_reference(deck_id):
             return jsonify({'error': 'strength must be a number'}), 400
     if 'enabled' in body:
         cfg['enabled'] = bool(body['enabled'])
+    if 'max_images' in body:
+        try:
+            cfg['max_images'] = max(1, min(STYLE_REFERENCE_MAX_IMAGES, int(body['max_images'])))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'max_images must be an integer'}), 400
     _save_deck_meta_field(deck_id, style_reference=cfg)
     if deck_id == active_deck_id:
         active_deck_meta['style_reference'] = cfg

@@ -72,7 +72,9 @@ decks/<deck-slug>/
   references' figures start displacing the card's subject, 25 (default) = medium + palette
   with the card's own subject, 9 = palette only. References with prominent characters leak
   them above Subtle — the image channel bypasses the text-side franchise de-naming. Per-deck setting `deck.json.style_reference` {enabled, tokens,
-  strength}; API `/api/decks/<id>/style-reference`; up to `STYLE_REFERENCE_MAX_IMAGES` (4) refs.
+  strength, max_images}; API `/api/decks/<id>/style-reference`. ONE reference by default (A/B:
+  every reference's tokens add its content; 4 refs leaked figures, 1 ref kept the subject) —
+  `max_images` up to `STYLE_REFERENCE_MAX_IMAGES` (4).
 - **18 GB memory rule**: FLUX and the LLM/VLM cannot be co-resident. `mlx_llm.unload()` is
   called before loading FLUX; the in-process guard (`_ollama_work_*`/`_wait_for_ollama_idle`,
   historical names) waits for in-flight LLM work to finish before generating.

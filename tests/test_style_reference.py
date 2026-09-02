@@ -44,7 +44,7 @@ class TestTokenPooling:
 class TestSettings:
     def test_defaults(self):
         cfg = ds._style_reference_settings({})
-        assert cfg == {'enabled': True, 'tokens': 25, 'strength': 1.0}
+        assert cfg == {'enabled': True, 'tokens': 25, 'strength': 1.0, 'max_images': 1}
 
     def test_zero_tokens_disables(self):
         cfg = ds._style_reference_settings({'style_reference': {'tokens': 0}})
@@ -60,8 +60,11 @@ class TestSettings:
         meta = {'inspiration_images': [{'filename': f'i{i}.png'} for i in range(6)]
                 + [{'filename': 'missing.png'}]}
         paths = ds._style_reference_images(meta, tmp_path)
-        assert len(paths) == ds.STYLE_REFERENCE_MAX_IMAGES
-        assert all(p.endswith('.png') for p in paths)
+        assert len(paths) == 1                      # ONE reference by default
+        assert paths[0].endswith('i0.png')
+        more = ds._style_reference_images({**meta, 'style_reference': {'max_images': 9}}, tmp_path)
+        assert len(more) == ds.STYLE_REFERENCE_MAX_IMAGES   # hard cap
+        assert all(p.endswith('.png') for p in more)
         assert ds._style_reference_images({**meta, 'style_reference': {'enabled': False}}, tmp_path) == []
         assert ds._style_reference_images(meta, None) == []
 
