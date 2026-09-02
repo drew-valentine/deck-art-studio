@@ -763,3 +763,42 @@ class TestSeparateRulesTextColor:
         svg = create_card_frame_svg(
             __import__('card_frame_renderer')._build_card_data(dict(self.CARD), fs), fs)
         assert 'fill="#112233"' in svg
+
+
+class TestDfcFrontTitle:
+    """A two-sided card's FRONT composite titles only the front face's name —
+    'Darkbore Pathway // Slitherbore Pathway' rendered the full joined name on
+    the front while the back correctly showed just its own title."""
+
+    MDFC = {
+        'name': 'Darkbore Pathway // Slitherbore Pathway',
+        'layout': 'modal_dfc', 'mana_cost': '',
+        'type_line': 'Land', 'oracle_text': '',
+        'card_faces': [
+            {'name': 'Darkbore Pathway', 'type_line': 'Land'},
+            {'name': 'Slitherbore Pathway', 'type_line': 'Land'},
+        ],
+    }
+
+    def test_front_titles_front_face_only(self):
+        from card_frame_renderer import _build_card_data
+        cd = _build_card_data(self.MDFC, {})
+        assert cd.name == 'Darkbore Pathway'
+
+    def test_transform_front_same_rule(self):
+        from card_frame_renderer import _build_card_data
+        card = dict(self.MDFC, layout='transform',
+                    name='Arlinn Kord // Arlinn, Embraced by the Moon')
+        assert _build_card_data(card, {}).name == 'Arlinn Kord'
+
+    def test_back_face_merged_dict_untouched(self):
+        from card_frame_renderer import _build_card_data
+        # the back render path passes a merged dict named for the back alone
+        back = dict(self.MDFC, name='Slitherbore Pathway')
+        assert _build_card_data(back, {}).name == 'Slitherbore Pathway'
+
+    def test_name_override_wins(self):
+        from card_frame_renderer import _build_card_data
+        cd = _build_card_data(self.MDFC,
+                              {'text_overrides': {'name': 'Custom Title'}})
+        assert cd.name == 'Custom Title'
