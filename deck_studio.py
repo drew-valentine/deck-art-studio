@@ -164,7 +164,7 @@ def _is_cancel_flagged(deck_id, card_name):
 gen_queue = generation_queue.GenerationQueue(
     persist_path=SCRIPT_DIR / "queue_state.json",
     deck_exists=lambda did: bool(did) and (DECKS_DIR / did).exists())
-style_analysis_progress = {}  # empty = not running; active: {phase, current, total, message}
+style_analysis_progress = {}  # deck_id -> {phase, current, total, message}; missing/empty = not running
 model_load_progress = {}      # empty = idle; active: {phase, message, pct, model_key, error}
 ollama_pull_progress = {}     # empty = idle; active: {model, status, completed_gb, total_gb, pct}
 
@@ -217,16 +217,30 @@ def _ollama_work_done():
 
 
 # When a style-analysis job runs on the queue worker, this thread-local holds
-# the live Job so every _style_progress_update flows into job.progress — and
-# into the GLOBAL style_analysis_progress ONLY when the job's deck is the
-# active one. A single global used to mean deck A's analysis painted progress
-# all over deck B's UI after a switch.
+# the live Job so every _style_progress_update flows into job.progress and
+# into that job's OWN deck entry of style_analysis_progress — deck A's
+# analysis can never paint progress over deck B's UI, and it can never leave
+# a stale entry behind when the user switches decks mid-run.
 _analysis_job_ctx = threading.local()
 
 
+def _progress_deck_id():
+    """The deck an in-flight style-progress update belongs to: the running
+    analysis job's deck when called from the queue worker, else the active
+    deck (legacy non-job callers)."""
+    job = getattr(_analysis_job_ctx, 'job', None)
+    return job.deck_id if job is not None else active_deck_id
+
+
 def _style_progress_update(phase, current, total, message, sub_phase=None):
-    """Update style analysis progress (job-aware, deck-safe, thread-safe)."""
-    global style_analysis_progress
+    """Update style analysis progress (job-aware, deck-safe, thread-safe).
+
+    Progress is keyed BY DECK. An earlier "mirror to a single global only while
+    the job's deck is active" scheme leaked a stale entry: switch decks
+    mid-analysis and the final clear was skipped, so the last mirrored step
+    ("Analyzing image 2/2... 1/7") was served forever when you switched back.
+    Every update and clear now lands on its own deck's entry regardless of
+    which deck the UI shows; /api/status serves the active deck's entry."""
     prog = {
         'phase': phase,
         'current': current,
@@ -238,20 +252,21 @@ def _style_progress_update(phase, current, total, message, sub_phase=None):
     job = getattr(_analysis_job_ctx, 'job', None)
     if job is not None:
         job.progress = prog
-        if job.deck_id != active_deck_id:
-            return                # never pollute another deck's UI
     with generation_lock:
-        style_analysis_progress = prog
+        style_analysis_progress[_progress_deck_id()] = prog
 
 
 def _style_progress_clear():
-    """Clear style analysis progress (job-aware, deck-safe, thread-safe)."""
-    global style_analysis_progress
-    job = getattr(_analysis_job_ctx, 'job', None)
-    if job is not None and job.deck_id != active_deck_id:
-        return
+    """Clear the current analysis's deck entry (job-aware, thread-safe)."""
     with generation_lock:
-        style_analysis_progress = {}
+        style_analysis_progress.pop(_progress_deck_id(), None)
+
+
+def _style_progress_for_active():
+    """Progress entry for the active deck ({} when idle) — the API shape the
+    frontend has always consumed."""
+    with generation_lock:
+        return dict(style_analysis_progress.get(active_deck_id) or {})
 
 
 def _model_load_progress_update(phase, message, pct=0, model_key='', error=None):
@@ -4966,7 +4981,7 @@ def get_status():
         'is_generating': gen_queue.is_generating,
         'has_api_key': openai_client is not None,
         'ollama_busy': not ollama_idle.is_set(),
-        'style_progress': style_analysis_progress,
+        'style_progress': _style_progress_for_active(),
         'model_load_progress': model_load_progress,
         'cards_rev': cards_revision,
         'ollama_pull_progress': ollama_pull_progress,
