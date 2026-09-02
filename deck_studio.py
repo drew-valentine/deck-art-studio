@@ -1699,9 +1699,12 @@ def _build_negative_fallback(style_tokens: dict, deck_meta: dict) -> str:
 # migration (a papyrus deck's March render screamed Egypt with a feeble text
 # prompt; every text-only FLUX render since was generic fantasy). `tokens` is
 # the per-image budget after grid pooling — the real dial: 9 = palette only,
-# 81 = reference style + the card's own scene, 729 = a variation of the
-# reference. Up to STYLE_REFERENCE_MAX_IMAGES references are sent.
-STYLE_REFERENCE_DEFAULT = {'enabled': True, 'tokens': 81, 'strength': 1.0}
+# 25 = the reference's medium/palette with the card's own subject, 81 = the
+# reference's full idiom but its figures/layout start to displace the subject
+# (a 16-card validation matrix: at 81 tokens x 4 refs, artifacts and lands
+# rendered the references' characters; at 25 the subjects returned), 729 = a
+# variation of the reference. Up to STYLE_REFERENCE_MAX_IMAGES references.
+STYLE_REFERENCE_DEFAULT = {'enabled': True, 'tokens': 25, 'strength': 1.0}
 STYLE_REFERENCE_MAX_IMAGES = 4
 
 
@@ -8164,10 +8167,10 @@ header .separator {
         </div>
         <div class="style-source-row style-ref-row">
           <label for="styleRefSlider" class="style-source-label"
-                 title="How strongly the inspiration images themselves steer each render (FLUX Redux). Off = text only · Palette = colors only · Balanced = reference style with the card's own scene · Clone = a variation of the reference.">Reference strength</label>
-          <input type="range" id="styleRefSlider" class="style-ref-slider" min="0" max="5" step="1" value="3"
+                 title="How strongly the inspiration images themselves steer each render (FLUX Redux). Off = text only · Palette = colors only · Subtle (default) = the reference's medium and palette, each card keeps its own subject · Balanced/Strong = more of the reference's idiom, but its figures start to displace the card's subject (references with prominent characters leak them) · Clone = a variation of the reference.">Reference strength</label>
+          <input type="range" id="styleRefSlider" class="style-ref-slider" min="0" max="5" step="1" value="2"
                  oninput="previewStyleReference(this.value)" onchange="saveStyleReference(this.value)">
-          <span id="styleRefLabel" class="style-ref-label">Balanced</span>
+          <span id="styleRefLabel" class="style-ref-label">Subtle</span>
         </div>
         <div class="overview-btn-row">
           <button class="btn btn-secondary btn-sm" id="btnReanalyzeStyle" onclick="reanalyzeStyle()"
@@ -12419,14 +12422,14 @@ function previewStyleReference(level) {
 function loadStyleReference(cfg) {
   const slider = document.getElementById('styleRefSlider');
   if (!slider) return;
-  const tokens = (cfg && cfg.enabled !== false) ? (cfg.tokens ?? 81) : 0;
+  const tokens = (cfg && cfg.enabled !== false) ? (cfg.tokens ?? 25) : 0;
   slider.value = _styleRefLevelFor(tokens);
   previewStyleReference(slider.value);
 }
 async function saveStyleReference(level) {
   const deckId = document.getElementById('deckSelect').value;
   if (!deckId) return;
-  const lv = STYLE_REF_LEVELS[parseInt(level, 10)] || STYLE_REF_LEVELS[3];
+  const lv = STYLE_REF_LEVELS[parseInt(level, 10)] || STYLE_REF_LEVELS[2];
   previewStyleReference(level);
   try {
     const r = await fetch(`/api/decks/${deckId}/style-reference`, {

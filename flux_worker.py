@@ -249,7 +249,7 @@ class _Engine:
         n_steps = int(req.get("steps") or 4)
         self._ensure_model(model_key, want_redux=bool(ref_images))
         if self._kind == "redux":
-            tokens = int(redux.get("tokens") or 81)
+            tokens = int(redux.get("tokens") or 25)
             strength = float(redux.get("strength") or 1.0)
             _REDUX_STATE["k"] = max(1, int(round(tokens ** 0.5))) if ref_images else 0
             _log(f"redux {w}x{h} steps={n_steps} refs={len(ref_images)} "

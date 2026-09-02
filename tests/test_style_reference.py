@@ -44,7 +44,7 @@ class TestTokenPooling:
 class TestSettings:
     def test_defaults(self):
         cfg = ds._style_reference_settings({})
-        assert cfg == {'enabled': True, 'tokens': 81, 'strength': 1.0}
+        assert cfg == {'enabled': True, 'tokens': 25, 'strength': 1.0}
 
     def test_zero_tokens_disables(self):
         cfg = ds._style_reference_settings({'style_reference': {'tokens': 0}})
@@ -52,7 +52,7 @@ class TestSettings:
 
     def test_bad_values_fall_back(self):
         cfg = ds._style_reference_settings({'style_reference': {'tokens': 'lots', 'strength': 'x'}})
-        assert cfg['tokens'] == 81 and cfg['strength'] == 1.0
+        assert cfg['tokens'] == 25 and cfg['strength'] == 1.0
 
     def test_reference_images_resolve_and_cap(self, tmp_path):
         for i in range(6):
@@ -109,7 +109,7 @@ class TestApi:
         (d / 'a.png').write_bytes(b'x')
         monkeypatch.setattr(ds, 'DECKS_DIR', decks)
         g = client.get('/api/decks/deckR/style-reference').get_json()
-        assert g['style_reference']['tokens'] == 81 and g['reference_count'] == 1
+        assert g['style_reference']['tokens'] == 25 and g['reference_count'] == 1
         p = client.post('/api/decks/deckR/style-reference', json={'tokens': 9}).get_json()
         assert p['success'] and p['style_reference']['tokens'] == 9
         saved = json.loads((d / 'deck.json').read_text())['style_reference']

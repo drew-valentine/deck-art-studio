@@ -68,8 +68,10 @@ decks/<deck-slug>/
   pipeline had. Weights come from the ungated mirror `Runware/FLUX.1-Redux-dev` (override with
   `MFLUX_REDUX_REPO`; mflux hardcodes the gated official repo, so the worker patches
   `ModelConfig.dev_redux`). The style dial is TOKEN POOLING (`_pool_token_grid`), not Redux's
-  scalar strength: 729 tokens = a variation of the reference, 81 (default) = style + the card's
-  own scene, 9 = palette only. Per-deck setting `deck.json.style_reference` {enabled, tokens,
+  scalar strength: 729 tokens = a variation of the reference, 81 = full idiom but the
+  references' figures start displacing the card's subject, 25 (default) = medium + palette
+  with the card's own subject, 9 = palette only. References with prominent characters leak
+  them above Subtle — the image channel bypasses the text-side franchise de-naming. Per-deck setting `deck.json.style_reference` {enabled, tokens,
   strength}; API `/api/decks/<id>/style-reference`; up to `STYLE_REFERENCE_MAX_IMAGES` (4) refs.
 - **18 GB memory rule**: FLUX and the LLM/VLM cannot be co-resident. `mlx_llm.unload()` is
   called before loading FLUX; the in-process guard (`_ollama_work_*`/`_wait_for_ollama_idle`,

@@ -384,7 +384,7 @@ class LocalImageGenerator:
                  seed: Optional[int] = None,
                  progress_callback=None,
                  reference_images: Optional[list] = None,
-                 reference_tokens: int = 81,
+                 reference_tokens: int = 25,
                  reference_strength: float = 1.0,
                  **_ignored):
         """Generate an image with FLUX (in the worker subprocess). Returns a PIL.Image.
@@ -392,8 +392,9 @@ class LocalImageGenerator:
         reference_images: optional inspiration image paths — FLUX Redux embeds
         them so the reference ART steers the render (the IP-Adapter role the
         SDXL pipeline had). reference_tokens is the per-image token budget after
-        grid pooling (the style dial: 9 palette-only ... 81 balanced ... 729 =
-        variation of the reference); reference_strength scales those tokens.
+        grid pooling (the style dial: 9 palette-only ... 25 subtle (default)
+        ... 81 balanced ... 729 = variation of the reference);
+        reference_strength scales those tokens.
 
         schnell ignores guidance / negative prompt (accepted but unused). Legacy
         kwargs are accepted via **_ignored for call-site compatibility.
@@ -424,10 +425,10 @@ class LocalImageGenerator:
             }
             refs = [str(p) for p in (reference_images or []) if p]
             if refs:
-                req["redux"] = {"images": refs, "tokens": int(reference_tokens or 81),
+                req["redux"] = {"images": refs, "tokens": int(reference_tokens or 25),
                                 "strength": float(reference_strength or 1.0)}
             print(f"[flux] -> worker {'redux' if refs else 'txt2img'} {w}x{h}, steps={n_steps}"
-                  f"{f', refs={len(refs)} tokens/ref={int(reference_tokens or 81)}' if refs else ''}: {prompt[:80]}")
+                  f"{f', refs={len(refs)} tokens/ref={int(reference_tokens or 25)}' if refs else ''}: {prompt[:80]}")
             try:
                 try:
                     self._send(req)
