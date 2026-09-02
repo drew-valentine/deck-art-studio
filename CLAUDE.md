@@ -63,6 +63,14 @@ decks/<deck-slug>/
   `MFLUX_SCHNELL_REPO` env var.
 - **LLM**: `mlx-lm` (Llama 3.1 8B / 3.2 3B, 4-bit) for prompt generation + style/subject distillation.
 - **Vision**: `mlx-vlm` (Qwen2.5-VL 7B, 4-bit) for inspiration style analysis.
+- **Style reference (Redux)**: `flux_worker.py` loads `Flux1Redux` (schnell + SigLIP + Redux projector)
+  and appends the deck's inspiration images as reference tokens — the IP-Adapter role the SDXL
+  pipeline had. Weights come from the ungated mirror `Runware/FLUX.1-Redux-dev` (override with
+  `MFLUX_REDUX_REPO`; mflux hardcodes the gated official repo, so the worker patches
+  `ModelConfig.dev_redux`). The style dial is TOKEN POOLING (`_pool_token_grid`), not Redux's
+  scalar strength: 729 tokens = a variation of the reference, 81 (default) = style + the card's
+  own scene, 9 = palette only. Per-deck setting `deck.json.style_reference` {enabled, tokens,
+  strength}; API `/api/decks/<id>/style-reference`; up to `STYLE_REFERENCE_MAX_IMAGES` (4) refs.
 - **18 GB memory rule**: FLUX and the LLM/VLM cannot be co-resident. `mlx_llm.unload()` is
   called before loading FLUX; the in-process guard (`_ollama_work_*`/`_wait_for_ollama_idle`,
   historical names) waits for in-flight LLM work to finish before generating.
