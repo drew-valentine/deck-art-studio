@@ -2943,6 +2943,12 @@ def _build_card_data(card_dict: dict, frame_settings: dict = None) -> CardData:
             # Each half's cost renders in its column header; a single cost in
             # the title bar would be misleading
             mana_cost = ''
+    elif (layout in ('transform', 'modal_dfc') and ' // ' in name
+            and not text_ovr.get('name')):
+        # Physical two-sided card: the FRONT face titles only its own name,
+        # like the real card. (The back render path passes a face-merged dict
+        # whose name is already the back title alone, so it never hits this.)
+        name = name.split(' // ')[0]
 
     return CardData(
         name=name,
