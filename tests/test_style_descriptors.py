@@ -358,3 +358,39 @@ class TestEvidenceDerivedInkAxes:
         assert out.startswith('fine-line ink illustration')
         assert 'sparse airy composition' in out
         assert 'dense intricate detail' not in out
+
+
+class TestUndeclaredSourceMedium:
+    """A deck with NO declared style source must still get medium anchors —
+    from its own analyses. The gate `if style_source else ''` left a
+    hieroglyph/papyrus deck with a bare palette block ("palette of dusty
+    coral, muted gold, ...") that rendered nothing like its references."""
+
+    PAPYRUS = ("Source: Original\nArt Style: Hieroglyphic ink drawing\n"
+               "Colors: dusty coral, muted gold, tan, black\n"
+               "Technique:\n- Medium: Ink on papyrus\n"
+               "Source: Original\nArt Style: Egyptian-inspired illustration\n"
+               "- Medium: flat ink and pigment on papyrus")
+
+    def test_evidence_vote_picks_medium(self):
+        from vision_analyzer import _classify_medium_from_evidence
+        assert _classify_medium_from_evidence(self.PAPYRUS, '', 'm') == 'ink illustration'
+
+    def test_vote_reads_only_medium_lines(self):
+        # 'film' in a Themes line must not vote for photograph
+        from vision_analyzer import _classify_medium_from_evidence
+        text = ("Art Style: loose watercolor sketch\nThemes: film noir detectives\n"
+                "- Medium: watercolour and gouache")
+        assert _classify_medium_from_evidence(text, '', 'm') == 'watercolor'
+
+    def test_undeclared_deck_block_has_anchors(self, monkeypatch):
+        from vision_analyzer import build_flux_style_block
+        _fake_vlm(monkeypatch, prose="")
+        out = build_flux_style_block('/nope/x.png', style_source='',
+                                     stored_descriptions=self.PAPYRUS)
+        assert out.startswith('ink illustration'), out
+        assert 'palette of' in out
+
+    def test_no_evidence_no_anchors(self):
+        from vision_analyzer import _classify_medium_from_evidence
+        assert _classify_medium_from_evidence('', '', 'm') == ''

@@ -1485,6 +1485,31 @@ def _classify_style_medium(style_source: str, text_model: str,
     return ''
 
 
+def _classify_medium_from_evidence(stored_descriptions: str, prose: str,
+                                   text_model: str) -> str:
+    """Medium for a deck with NO declared style source: a deterministic
+    whole-token vote over the analyses' own medium lines ("Art Style: ...",
+    "Medium: ...") using the same keyword vocabulary as the name classifier;
+    the few-shot LLM classifier only if no keyword hits. Returns an
+    _MEDIUM_ANCHORS key or ''."""
+    import re as _re
+    text = stored_descriptions or ''
+    lines = [ln for ln in text.splitlines()
+             if _re.match(r'\s*[-*\s]*(art style|medium)\s*:', ln, _re.IGNORECASE)]
+    evidence = ' '.join(lines) if lines else (text or prose or '')
+    tokens = set(_re.findall(r'[a-z0-9-]+', evidence.lower()))
+    if tokens:
+        votes = {m: len(tokens & keys) for m, keys in _MEDIUM_KEYWORD_MAP.items()}
+        best = max(votes.values())
+        if best:
+            # first map entry wins ties — same fixed priority as the name path
+            return next(m for m, v in votes.items() if v == best)
+    if not (prose or text):
+        return ''
+    return _classify_style_medium('(undeclared — infer from the image read)',
+                                  text_model, img_desc=(prose or text)[:400])
+
+
 def _medium_anchors(medium: str) -> list:
     """Canonical anchor descriptors for a classified medium ([] if unknown)."""
     return list(_MEDIUM_ANCHORS.get(medium, []))
@@ -1557,9 +1582,17 @@ def build_flux_style_block(image_path, style_source: str = '',
     evidence = (stored_descriptions or '') + ' ' + ' '.join(proses)
 
     # -- foundation: anchors (line-weight aware) --------------------------------
-    medium = _classify_style_medium(style_source, text_model,
-                                    img_desc=best_prose[:400]) \
-        if style_source else ''
+    # Declared source → keyword map / few-shot classifier on the NAME.
+    # No declaration → the deck's own analyses decide. This gate used to be
+    # `if style_source else ''`, which left an undeclared deck with NO medium
+    # anchors at all: a papyrus-hieroglyph deck whose analyses said "ink on
+    # papyrus" rendered from a bare palette line and looked nothing like its
+    # references. Evidence is the fallback authority, never silence.
+    medium = (_classify_style_medium(style_source, text_model,
+                                     img_desc=best_prose[:400])
+              if style_source
+              else _classify_medium_from_evidence(stored_descriptions,
+                                                  best_prose, text_model))
     anchors = _medium_anchors(medium)
     if anchors and anchors[0] == 'ink illustration':
         # Ink variants are decided per-AXIS from textual evidence — line

@@ -168,15 +168,15 @@ class TestAnalysisJobs:
         ds.gen_queue.cancel(job.id)
 
     def test_progress_never_pollutes_other_decks(self, populated_state):
-        # A running analysis for an INACTIVE deck must not write the global
-        # style progress (which drives the active deck's UI).
-        ds.style_analysis_progress = {}
+        # A running analysis for an INACTIVE deck must not appear in the
+        # active deck's progress (which drives the UI).
+        ds.style_analysis_progress.clear()
         job = ds.Job(type=ds.ANALYZE, deck_id='some-other-deck', card_name='',
                      params={'mode': 'distill'})
         ds._analysis_job_ctx.job = job
         try:
             ds._style_progress_update('analyzing', 1, 5, 'working...')
-            assert ds.style_analysis_progress == {}          # global untouched
+            assert ds._style_progress_for_active() == {}     # active deck clean
             assert job.progress['message'] == 'working...'   # job carries it
             ds._style_progress_clear()
             assert ds.style_analysis_progress == {}
@@ -184,16 +184,37 @@ class TestAnalysisJobs:
             ds._analysis_job_ctx.job = None
 
     def test_progress_mirrors_for_active_deck(self, populated_state):
-        ds.style_analysis_progress = {}
+        ds.style_analysis_progress.clear()
         job = ds.Job(type=ds.ANALYZE, deck_id=ds.active_deck_id, card_name='',
                      params={'mode': 'distill'})
         ds._analysis_job_ctx.job = job
         try:
             ds._style_progress_update('analyzing', 2, 5, 'active work')
-            assert ds.style_analysis_progress.get('message') == 'active work'
+            assert ds._style_progress_for_active().get('message') == 'active work'
         finally:
             ds._analysis_job_ctx.job = None
-            ds.style_analysis_progress = {}
+            ds.style_analysis_progress.clear()
+
+    def test_deck_switch_mid_analysis_leaves_no_stale_progress(self, populated_state, monkeypatch):
+        # The observed bug: analysis started on deck A (active), the user
+        # switched to deck B before it finished, and A's last mirrored step
+        # ("Analyzing image 2/2... 1/7") was served forever on switching back.
+        ds.style_analysis_progress.clear()
+        deck_a = ds.active_deck_id
+        job = ds.Job(type=ds.ANALYZE, deck_id=deck_a, card_name='',
+                     params={'mode': 'reanalyze'})
+        ds._analysis_job_ctx.job = job
+        try:
+            ds._style_progress_update('analyzing', 1, 7, 'Analyzing image 2/2...')
+            monkeypatch.setattr(ds, 'active_deck_id', 'deck-b')   # user switches
+            assert ds._style_progress_for_active() == {}          # B shows idle
+            ds._style_progress_update('distilling', 5, 7, 'Distilling...')
+            ds._style_progress_clear()                            # job finishes
+            monkeypatch.setattr(ds, 'active_deck_id', deck_a)     # user returns
+            assert ds._style_progress_for_active() == {}          # no stale entry
+        finally:
+            ds._analysis_job_ctx.job = None
+            ds.style_analysis_progress.clear()
 
     def test_deck_delete_cancels_analysis_jobs(self, client, populated_state):
         job = ds.gen_queue.enqueue(ds.Job(
