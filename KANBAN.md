@@ -82,9 +82,39 @@
 
 ## In Progress
 
+- [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Owner: drew-valentine
+  - Branch: `feat/redux-style-reference`
+  - Root cause of every post-July style complaint: the FLUX/MLX migration (PR #2) dropped IP-Adapter image conditioning, so deck style became text-only. The inspiration images stopped reaching the image model at all — every fix since has been an attempt to describe them in words instead.
+  - Evidence: demo-alela v1 (March, SDXL + IP-Adapter) reads as unmistakably Egyptian; no FLUX render since does.
+  - Prototype done: FLUX Redux on schnell via mflux 0.19.1 with reference-token pooling (729 → 81 tokens) holds style and subject together at 57 s/card, faster than the text-only path (~65 s). Weights are ungated (Runware/FLUX.1-Redux-dev mirror).
+  - Scope:
+    - [ ] Wire `Flux1Redux` into `flux_worker` with a token-pooling hook
+    - [ ] Pass each deck's inspiration images as references
+    - [ ] Per-deck style-reference strength (token budget, default 81) setting + UI
+    - [ ] Cache reference embeddings per deck
+    - [ ] Guard against reference figures and glyph text leaking into card art
+    - [ ] Validate on the Seuss, Moebius, cartoon, and Egyptian decks
+    - [ ] PR
+  - Acceptance criteria (Given/When/Then):
+    - [ ] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
+    - [ ] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders.
+    - [ ] Given a deck whose references contain figures or lettering, when cards are generated, then neither the reference figures nor their glyph text appear in the card art.
+    - [ ] Given the four validation decks (Seuss, Moebius, cartoon, Egyptian), when a card from each is rendered, then the result reads as that deck's source style — the demo-alela v1 bar.
+    - [ ] Given a batch run, when per-card time is measured, then it stays at or under the current text-only path.
+
 ## In Review
 
 ## Done
+
+- [x] Style authority: the user's declared style source outranks the model's interpretation | Priority: P1 | Completed: 2026-09-02 | Owner: drew-valentine
+  - Shipped as v1.49.0 (minor, released 2026-09-02) — four squash-merged PRs: #41 (commit 321ca79), #42 (ca9dcbc), #43 + #45 (merged as #45, commit 146953c), and #44 (f888827).
+  - Principle: when a user declares a style source, that declaration wins over whatever the vision model inferred, in every model-facing prompt.
+  - #41 — the declared source overrides the model's interpretation everywhere a prompt is built. Root case: the Dr. Seuss deck, declared "hand drawn", kept being described to FLUX as digital/vector art.
+  - #42 — Steer & Render overrides the reference anchor, appearance included. Root case: a Glissa steer was silently discarded because the reference anchor outranked it.
+  - #43 — evidence-derived ink axes: line weight, line character, and density are decoupled instead of moving together; the source-name stripper no longer eats medium words along with the franchise name.
+  - #45 — per-deck analysis progress (switching decks no longer leaves a stale entry behind) and an evidence-derived medium for decks with no declared source. Root case: demo-alela showed stuck progress and a palette-only style block.
+  - #44 — DFC front composites title only the front face's name. Root case: Darkbore Pathway rendered both face names in the title.
+  - Also fixed: a latent `NameError` in motif extraction.
 
 - [x] Ship README refresh: engaging README with fresh screenshots reflecting major features | Priority: P1 | Completed: 2026-07-21 | Owner: drew-valentine
   - Squash-merged to main via PR #37 (commit 3f390e2); tagged v1.48.1 (patch, released 2026-07-21).
