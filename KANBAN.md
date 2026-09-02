@@ -82,27 +82,31 @@
 
 ## In Progress
 
-- [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Owner: drew-valentine
+## In Review
+
+- [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Review Started: 2026-09-02 | Owner: drew-valentine
+  - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — awaiting the owner's ship-it.
   - Branch: `feat/redux-style-reference`
   - Root cause of every post-July style complaint: the FLUX/MLX migration (PR #2) dropped IP-Adapter image conditioning, so deck style became text-only. The inspiration images stopped reaching the image model at all — every fix since has been an attempt to describe them in words instead.
   - Evidence: demo-alela v1 (March, SDXL + IP-Adapter) reads as unmistakably Egyptian; no FLUX render since does.
   - Prototype done: FLUX Redux on schnell via mflux 0.19.1 with reference-token pooling (729 → 81 tokens) holds style and subject together at 57 s/card, faster than the text-only path (~65 s). Weights are ungated (Runware/FLUX.1-Redux-dev mirror).
+  - Implemented: `Flux1Redux` wired into `flux_worker` with reference-token pooling and a per-`(path, mtime, tokens)` embedding cache. The resident Redux model also serves reference-less decks (mflux `[]` → `None` fix), so there is no second model to swap in.
+  - Implemented: per-deck `style_reference` setting, `/api/decks/<id>/style-reference`, and a "Reference strength" slider (Off / Palette / Subtle / Balanced / Strong / Clone).
+  - Validated live: Egyptian deck 60 s; Seuss deck with 4 references 76 s and unmistakably Seuss; no-reference deck 53 s. 407 tests green (13 new).
   - Scope:
-    - [ ] Wire `Flux1Redux` into `flux_worker` with a token-pooling hook
-    - [ ] Pass each deck's inspiration images as references
-    - [ ] Per-deck style-reference strength (token budget, default 81) setting + UI
-    - [ ] Cache reference embeddings per deck
+    - [x] Wire `Flux1Redux` into `flux_worker` with a token-pooling hook
+    - [x] Pass each deck's inspiration images as references
+    - [x] Per-deck style-reference strength (token budget, default 81) setting + UI
+    - [x] Cache reference embeddings per deck
     - [ ] Guard against reference figures and glyph text leaking into card art
-    - [ ] Validate on the Seuss, Moebius, cartoon, and Egyptian decks
-    - [ ] PR
+    - [ ] Validate on the Seuss, Moebius, cartoon, and Egyptian decks — Seuss and Egyptian done; Moebius and cartoon still to run
+    - [x] PR
   - Acceptance criteria (Given/When/Then):
-    - [ ] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
-    - [ ] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders.
+    - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
+    - [ ] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — slider ships Off→Clone; per-step adherence sweep not yet run.
     - [ ] Given a deck whose references contain figures or lettering, when cards are generated, then neither the reference figures nor their glyph text appear in the card art.
-    - [ ] Given the four validation decks (Seuss, Moebius, cartoon, Egyptian), when a card from each is rendered, then the result reads as that deck's source style — the demo-alela v1 bar.
-    - [ ] Given a batch run, when per-card time is measured, then it stays at or under the current text-only path.
-
-## In Review
+    - [ ] Given the four validation decks (Seuss, Moebius, cartoon, Egyptian), when a card from each is rendered, then the result reads as that deck's source style — the demo-alela v1 bar. — Seuss and Egyptian clear the bar; Moebius and cartoon not yet run.
+    - [ ] Given a batch run, when per-card time is measured, then it stays at or under the current text-only path. — Egyptian 60 s and no-reference 53 s are under the ~65 s baseline; Seuss with 4 references is 76 s, over it. Needs a ruling on whether multi-reference decks are in scope for this bar.
 
 ## Done
 
