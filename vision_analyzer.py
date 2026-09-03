@@ -1641,13 +1641,14 @@ def style_idiom_seen(image_path, style_source: str, vision_model: str,
     work it is. An enrichment (a VLM read), so it goes after the foundation.
     Phrases already in ``exclude`` are dropped."""
     src = (style_source or '').strip().replace('&', 'and')
-    if not src or image_path is None or not vision_model:
+    if image_path is None or not vision_model:
         return []
+    lead = f"This image is from the work of {src}. " if src else "This is a reference illustration. "
     try:
         import mlx_llm
         seen = mlx_llm.vision(
             str(image_path),
-            f"This image is from the work of {src}. Describe the DRAWING IDIOM that "
+            lead + "Describe the DRAWING IDIOM that "
             "makes this style recognizable, as visible in this image: line quality "
             "(weight, wobble, cleanliness), how eyes, faces and anatomy are drawn, "
             "shading method, recurring textures or motifs. Output ONLY a comma-"
@@ -1705,7 +1706,7 @@ def style_staging_recall(style_source: str, text_model: str,
     stored with the block at distillation. Never names anyone. '' on failure."""
     src = (style_source or '').strip().replace('&', 'and')
     if not src:
-        return ''
+        return style_staging_seen(image_path, vision_model)
     try:
         import mlx_llm
         reply = mlx_llm.chat(
@@ -1919,8 +1920,8 @@ def build_flux_style_block(image_path, style_source: str = '',
     recalled = style_idiom_recall(style_source, text_model) if style_source else []
     parts.extend(recalled)            # deterministic knowledge: foundation
     parts.extend(motifs)
-    if style_source:                  # a VLM read: enrichment, after the foundation
-        parts.extend(style_idiom_seen(image_path, style_source, vision_model, exclude=recalled))
+    # a VLM read of the reference (needs no name): enrichment, after the foundation
+    parts.extend(style_idiom_seen(image_path, style_source, vision_model, exclude=recalled))
     if influence:
         parts.append(influence)
     out, count = [], 0

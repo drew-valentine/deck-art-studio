@@ -478,9 +478,21 @@ def test_staging_recall_unknown_falls_back_to_reference_read(monkeypatch):
     monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
     out = va.style_staging_recall('Some Painter Nobody Knows', 'm', image_path='ref.png', vision_model='v')
     assert out.startswith('The scene is a sunlit desert') and 'serene wonder' in out
-    # no source at all -> reference read only when an image is given
+    # no source at all -> the reference read stands in (needs no name)
     assert va.style_staging_recall('', 'm') == ''
-    assert va.style_staging_recall('', 'm', image_path='ref.png', vision_model='v') == ''
+    assert va.style_staging_recall('', 'm', image_path='ref.png', vision_model='v').startswith('The scene is')
     # idiom recall honours UNKNOWN too
     va._IDIOM_RECALL_CACHE.clear()
     assert va.style_idiom_recall('Some Painter Nobody Knows', 'm') == []
+
+
+def test_idiom_seen_needs_no_name(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    asked = {}
+    def vision(path, prompt, **kw):
+        asked['prompt'] = prompt; return "bold ink outlines, halftone dots, dynamic diagonal panels"
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=vision))
+    out = va.style_idiom_seen('ref.png', '', 'v')
+    assert out == ['bold ink outlines', 'halftone dots', 'dynamic diagonal panels']
+    assert asked['prompt'].startswith('This is a reference illustration.')
