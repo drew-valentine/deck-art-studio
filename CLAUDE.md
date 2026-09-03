@@ -82,6 +82,14 @@ decks/<deck-slug>/
   the analyst recognized in the references (`vision_analyzer.recognized_style_source`, majority of the
   per-image `Source:` lines, ignoring 'Original'). Used for the render lead, scene-writer hint,
   medium classification and distillation — de-named like any declaration. Declaration always wins.
+- **Named-style idiom (text side)**: the image channel carries palette/finish, not drawing idiom.
+  At distillation `vision_analyzer.style_idiom_recall` (8B Llama when cached — the 3B half-knows
+  styles) + `style_idiom_seen` (VLM reads the reference, told whose work it is) put the idiom
+  phrases into the FLUX block (palette excluded — evidence does palette). `style_staging_recall`
+  stores how the style STAGES scenes + its tonal register in `deck.json.style_staging`; the scene
+  writer gets that plus the block minus hues (`prompt_generator.hint_without_palette`) — hues
+  in the writer's hint become scene content. Writer rules: one subject in the foreground, two
+  sentences (45-word whole-sentence cap), rules-text zones (library/graveyard) are never scenery.
 - **18 GB memory rule**: FLUX and the LLM/VLM cannot be co-resident. `mlx_llm.unload()` is
   called before loading FLUX; the in-process guard (`_ollama_work_*`/`_wait_for_ollama_idle`,
   historical names) waits for in-flight LLM work to finish before generating.
