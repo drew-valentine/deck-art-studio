@@ -643,3 +643,12 @@ def test_writer_retries_once_when_the_draft_buries_the_subject(monkeypatch):
     assert pg.generate_subject_with_ai(card, None, backend='local', local_model='m').startswith('Sol Ring')
     assert pg._opens_with_subject("Keiga, the Tide Star, a Dragon Spirit, soars.", {'name': 'Keiga, the Tide Star', 'card_type': 'creature'})
     assert not pg._opens_with_subject("A storm gathers over the sea. Keiga appears.", {'name': 'Keiga, the Tide Star', 'card_type': 'creature'})
+
+
+def test_literal_name_words_splits_coined_compounds():
+    from prompt_generator import literal_name_words, _split_compound
+    d = {'dragon', 'storm', 'breaching', 'chance', 'encounter', 'wolf', 'fire'}
+    assert literal_name_words('Breaching Dragonstorm', d) == ['breaching', 'dragon', 'storm']
+    assert literal_name_words('Chance Encounter', d) == ['chance', 'encounter']
+    assert _split_compound('Wolfire', d) == ['Wolfire']          # too short to split (< 8)
+    assert _split_compound('dragonstorm', set()) == ['dragonstorm']   # no dictionary: no-op

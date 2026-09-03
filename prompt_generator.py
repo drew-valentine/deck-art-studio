@@ -257,6 +257,51 @@ def _literal_object_from_name(name: str):
     return None
 
 
+_DICT_WORDS = None
+
+
+def _dictionary():
+    """Lower-case system word list (macOS/Linux /usr/share/dict/words), loaded
+    once; an empty set where none exists (CI) — splitting then simply does
+    nothing."""
+    global _DICT_WORDS
+    if _DICT_WORDS is None:
+        try:
+            with open('/usr/share/dict/words', encoding='utf-8', errors='ignore') as f:
+                _DICT_WORDS = {w.strip().lower() for w in f if len(w.strip()) >= 3}
+        except OSError:
+            _DICT_WORDS = set()
+    return _DICT_WORDS
+
+
+def _split_compound(word: str, words=None) -> list:
+    """'dragonstorm' -> ['dragon', 'storm'] when the word itself is not in the
+    dictionary but splits into two dictionary words (each 4+ letters). Coined
+    card-name compounds are the writer's hardest case ("Breaching Dragonstorm"
+    became a roller coaster); the parts name the picture. Generic — no card
+    knowledge, just the system word list."""
+    d = _dictionary() if words is None else words
+    w = word.lower()
+    if not d or len(w) < 8 or w in d:
+        return [word]
+    for i in range(4, len(w) - 3):
+        a, b = w[:i], w[i:]
+        if a in d and b in d:
+            return [a, b]
+    return [word]
+
+
+def literal_name_words(name: str, words=None) -> list:
+    """The name's words with coined compounds split ('Breaching Dragonstorm'
+    -> ['breaching', 'dragon', 'storm']); articles and possessives dropped."""
+    out = []
+    for tok in re.findall(r"[A-Za-z]+", name or ''):
+        if tok.lower() in ('the', 'and', 'of', 'a', 'an', 's'):
+            continue
+        out.extend(w.lower() for w in _split_compound(tok, words))
+    return out
+
+
 def _describe_enchantment(name, oracle, keywords, atmosphere, flavor=''):
     """Generate description for an enchantment card.
 
@@ -281,10 +326,12 @@ def _describe_enchantment(name, oracle, keywords, atmosphere, flavor=''):
     # familiar over a library". Say so, or the writer invents a subject.
     # no illustrative example here: with nothing concrete in the card, the
     # writer parrots the example ("a whirlwind of wolves" for Chance Encounter)
-    name_line = (f" Its name is the scene: read '{name}' LITERALLY — every concrete "
-                 f"noun in it is depicted, a compound word is split into its parts, and "
-                 f"a verb in it is the action shown; if the name is abstract, depict "
-                 f"the moment it describes happening to real people or creatures"
+    parts = literal_name_words(name)
+    words_hint = (f" (its words: {', '.join(parts)})" if parts else '')
+    name_line = (f" Its name is the scene: read '{name}' LITERALLY{words_hint} — every "
+                 f"concrete noun in it is depicted and a verb in it is the action shown; "
+                 f"if the name is abstract, depict the moment it describes happening to "
+                 f"real people or creatures"
                  + ("; the story sets the mood, not the subject." if story else "."))
     return (
         f"A concrete illustrated scene representing the enchantment {name} — "
