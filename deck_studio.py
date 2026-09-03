@@ -3241,11 +3241,13 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         all_descs = '\n'.join(img.get('style_description', '')
                               for img in insp_imgs
                               if img.get('style_description'))
+        ref_paths = [deck_dir / img['filename'] for img in insp_imgs
+                     if img.get('filename') and (deck_dir / img['filename']).exists()]
         flux_style_prompt = build_flux_style_block(
             first_img, style_source=style_source,
             vision_model=bcfg.get('ollama_vision_model', 'llava:7b'),
             text_model=bcfg.get('ollama_model', 'llama3.2:3b'),
-            stored_descriptions=all_descs)
+            stored_descriptions=all_descs, reference_paths=ref_paths)
         if len(flux_style_prompt.split()) < 10:
             flux_style_prompt = build_flux_style_descriptors(
                 first_img, style_source=style_source, backend=llm_backend,

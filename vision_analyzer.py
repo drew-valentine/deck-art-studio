@@ -1928,6 +1928,106 @@ def style_idiom_descriptors(style_source: str, text_model: str,
                                      exclude=recall, max_words=max_words)
 
 
+# ---- H26: palette and colour coverage from the reference PIXELS ------------
+# The VLM's palette prose ("dusty coral") is a read; pixel statistics are a
+# measurement. Names come from a generic colour vocabulary (nearest named hue),
+# never from any deck.
+_NAMED_COLOURS = [
+    ('black', (20, 20, 20)), ('white', (245, 245, 245)), ('grey', (128, 128, 128)),
+    ('dark grey', (70, 70, 70)), ('light grey', (190, 190, 190)),
+    ('red', (200, 30, 30)), ('dark red', (120, 15, 20)), ('crimson', (170, 20, 60)),
+    ('coral', (240, 110, 90)), ('salmon pink', (240, 150, 140)), ('pink', (235, 140, 190)),
+    ('magenta', (200, 40, 160)), ('purple', (120, 50, 160)), ('violet', (150, 100, 220)),
+    ('lavender', (190, 170, 230)), ('indigo', (60, 40, 140)), ('navy', (25, 35, 90)),
+    ('blue', (40, 80, 200)), ('sky blue', (120, 180, 240)), ('teal', (30, 130, 130)),
+    ('turquoise', (60, 200, 200)), ('cyan', (80, 220, 240)), ('green', (40, 150, 60)),
+    ('dark green', (20, 80, 40)), ('olive', (110, 120, 40)), ('lime', (160, 220, 60)),
+    ('mint', (170, 230, 190)), ('yellow', (240, 220, 40)), ('gold', (215, 170, 40)),
+    ('mustard', (200, 170, 60)), ('orange', (240, 140, 30)), ('amber', (240, 180, 60)),
+    ('brown', (120, 75, 40)), ('tan', (200, 170, 120)), ('beige', (225, 205, 170)),
+    ('cream', (245, 235, 205)), ('peach', (245, 200, 160)), ('rust', (170, 80, 30)),
+    ('maroon', (100, 30, 40)), ('sepia', (140, 100, 60)),
+]
+
+
+_HUE_NAMES = [  # (upper bound in degrees, name) — generic colour vocabulary
+    (15, 'red'), (40, 'orange'), (65, 'yellow'), (90, 'yellow-green'), (150, 'green'),
+    (185, 'teal'), (200, 'cyan'), (250, 'blue'), (275, 'indigo'), (300, 'purple'),
+    (335, 'magenta'), (360, 'red')]
+
+
+def _hue_name(h_deg: float, sat: float, val: float) -> str:
+    base = next(n for ub, n in _HUE_NAMES if h_deg < ub)
+    if base in ('orange', 'yellow') and val < 0.6:
+        return 'brown'
+    if base == 'red' and val < 0.45:
+        return 'maroon'
+    if sat < 0.4:
+        return {'red': 'dusty red', 'orange': 'peach', 'yellow': 'sand', 'green': 'sage',
+                'teal': 'muted teal', 'blue': 'slate blue', 'purple': 'mauve',
+                'magenta': 'dusty pink'}.get(base, 'muted ' + base)
+    if val > 0.85 and sat < 0.6:
+        return 'pale ' + base
+    return base
+
+
+def pixel_palette(image_path, n_bins: int = 12):
+    """Measure a reference: dominant hues by pixel share among SATURATED pixels
+    (hue-angle bins, named from a generic vocabulary), the white-paper
+    fraction, and mean saturation. {'hues': [...], 'paper': 0..1,
+    'saturation': 0..1} or None."""
+    try:
+        from PIL import Image
+        import colorsys
+        im = Image.open(image_path).convert('RGB')
+        im.thumbnail((192, 192))
+        px = list(im.getdata())
+        total = float(len(px)) or 1.0
+        bins = {}
+        sat_sum = 0.0
+        paper_n = 0
+        for r, g, b in px:
+            h, sv, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+            sat_sum += sv
+            if sv < 0.14 and v > 0.78:      # paper: bright and unsaturated (scans are cream, not pure white)
+                paper_n += 1
+            if sv < 0.25 or v < 0.2:
+                continue
+            key = int((h * 360) // (360 / n_bins))
+            acc = bins.setdefault(key, [0, 0.0, 0.0, 0.0])
+            acc[0] += 1; acc[1] += h * 360; acc[2] += sv; acc[3] += v
+        paper = paper_n / total
+        ranked = sorted(bins.items(), key=lambda kv: -kv[1][0])
+        hues = []
+        for _, (n, hs, ss, vs) in ranked:
+            if n / total < 0.02:
+                break
+            name = _hue_name(hs / n, ss / n, vs / n)
+            if name not in hues:
+                hues.append(name)
+            if len(hues) >= 5:
+                break
+        return {'hues': hues, 'paper': round(paper, 3), 'saturation': round(sat_sum / total, 3)}
+    except Exception as e:
+        print(f"  [style] pixel palette failed: {e}")
+        return None
+
+
+def pixel_coverage_phrase(stats) -> str:
+    """Colour-coverage clause from measurements: how much paper shows and how
+    saturated the fills are. '' when no stats."""
+    if not stats:
+        return ''
+    paper, sat = stats.get('paper', 0.0), stats.get('saturation', 0.0)
+    if sat < 0.12:
+        return 'monochrome, uncoloured ink on white paper'
+    if paper >= 0.35:
+        return 'coloured figures and objects on open white paper'
+    if sat >= 0.38:
+        return 'fully coloured with saturated flat colour fills, no bare white paper'
+    return 'fully coloured with soft muted fills, no bare white paper'
+
+
 def _medium_anchors(medium: str) -> list:
     """Canonical anchor descriptors for a classified medium ([] if unknown)."""
     return list(_MEDIUM_ANCHORS.get(medium, []))
@@ -1937,11 +2037,24 @@ def _medium_anchors(medium: str) -> list:
 
 
 
+def pixel_coverage_from_refs(image_path, reference_paths=None) -> str:
+    """Colour-coverage clause measured over the deck's references (mean paper
+    fraction and saturation); '' when nothing is readable."""
+    paths = [p for p in (reference_paths or [image_path]) if p]
+    stats = [st for st in (pixel_palette(p) for p in paths) if st]
+    if not stats:
+        return ''
+    mean = {'paper': sum(x['paper'] for x in stats) / len(stats),
+            'saturation': sum(x['saturation'] for x in stats) / len(stats)}
+    return pixel_coverage_phrase(mean)
+
+
 def build_flux_style_block(image_path, style_source: str = '',
                            vision_model: str = 'llava:7b',
                            text_model: str = 'llama3.1:8b',
                            max_words: int = 72,
-                           stored_descriptions: str = '') -> str:
+                           stored_descriptions: str = '',
+                           reference_paths=None) -> str:
     """Procedural style block: deterministic foundation, VLM as enrichment.
 
     The requirement is REPEATABLE style transfer from every fresh
@@ -2063,6 +2176,7 @@ def build_flux_style_block(image_path, style_source: str = '',
     # of saturated flat fills rendered as uncoloured ink once the block led
     # with "ink illustration" and pale hue names. Stated explicitly, right
     # after the medium, so the image model knows whether the paper is filled.
+    measured = pixel_coverage_from_refs(image_path, reference_paths)
     ev_all = ((stored_descriptions or '') or evidence).lower()
     _c = lambda words: sum(ev_all.count(w) for w in words)
     coloured = _c(('saturated', 'vibrant', 'vivid', 'bold color', 'bold colour',
@@ -2072,7 +2186,9 @@ def build_flux_style_block(image_path, style_source: str = '',
     mono = _c(('monochrome', 'black and white', 'black-and-white', 'grayscale',
                'greyscale', 'uncolored', 'uncoloured', 'sepia', 'pen and ink only',
                'no color', 'no colour'))
-    if coloured > mono and coloured > 0:
+    if measured:                      # a measurement outranks the word vote
+        anchors.append(measured)
+    elif coloured > mono and coloured > 0:
         anchors.append('fully coloured with saturated flat colour fills, no bare white paper')
     elif mono > coloured:
         anchors.append('monochrome, uncoloured ink on white paper')

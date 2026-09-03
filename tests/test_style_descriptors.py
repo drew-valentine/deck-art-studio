@@ -559,3 +559,24 @@ def test_declared_source_medium_prefers_stored_evidence_over_raw_read(monkeypatc
                                     text_model='m', stored_descriptions=stored)
     assert 'photograph' not in blk
     assert va._evidence_medium_vote(stored) != ''
+
+
+def test_pixel_palette_measures_paper_and_hues(tmp_path):
+    from PIL import Image, ImageDraw
+    import vision_analyzer as va
+    # white page with a saturated teal figure and a red object
+    im = Image.new('RGB', (200, 200), (255, 255, 255)); d = ImageDraw.Draw(im)
+    d.rectangle([20, 20, 100, 180], fill=(30, 140, 140)); d.ellipse([120, 120, 180, 180], fill=(210, 30, 30))
+    p = tmp_path / 'ref.png'; im.save(p)
+    st = va.pixel_palette(p)
+    assert st['paper'] > 0.5 and st['hues'][0] == 'teal' and 'red' in st['hues']
+    assert va.pixel_coverage_phrase(st) == 'coloured figures and objects on open white paper'
+    # a fully painted saturated image
+    im2 = Image.new('RGB', (200, 200), (240, 200, 40)); ImageDraw.Draw(im2).rectangle([0, 100, 200, 200], fill=(40, 90, 210))
+    p2 = tmp_path / 'ref2.png'; im2.save(p2)
+    st2 = va.pixel_palette(p2)
+    assert st2['paper'] == 0 and va.pixel_coverage_phrase(st2).startswith('fully coloured with saturated')
+    assert va.pixel_coverage_phrase(None) == ''
+    assert va.pixel_coverage_from_refs(p, [p, p2]) in ('coloured figures and objects on open white paper',
+                                                       'fully coloured with soft muted fills, no bare white paper',
+                                                       'fully coloured with saturated flat colour fills, no bare white paper')
