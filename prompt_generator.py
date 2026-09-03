@@ -279,8 +279,8 @@ def _describe_enchantment(name, oracle, keywords, atmosphere, flavor=''):
     # With no flavor text the name is the strongest imagery cue: a card called
     # "Breaching Dragonstorm" is a storm of dragons breaking through, not "a
     # familiar over a library". Say so, or the writer invents a subject.
-    name_line = ('' if story else
-                 f" Its name is the scene: depict what '{name}' literally evokes.")
+    name_line = (f" Its name is the scene: depict what '{name}' literally evokes"
+                 + ("; the story sets the mood, not the subject." if story else "."))
     return (
         f"A concrete illustrated scene representing the enchantment {name} — "
         f"depict the people, creatures, place, or event it embodies (not abstract "
@@ -542,7 +542,10 @@ def _limit_scene_sentences(text: str, max_sentences: int = 2, max_words: int = 4
         head = ' '.join(words[:max_words])
         cut = max(head.rfind(', '), head.rfind('; '), head.rfind('. '))
         head = head[:cut] if cut > len(head) // 2 else head
-        out = head.rstrip(' ,;') + '.'
+        out = head.rstrip(' ,;.') + '.'
+        tail = _re.split(r'(?<=[.!?])\s+', out)
+        if len(tail) > 1 and len(tail[-1].split()) < 6:
+            out = ' '.join(tail[:-1]).strip()
     return out
 
 
@@ -637,7 +640,9 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         "setting, weather, or atmosphere ('In the heart of the swirling mist...') "
         "— the image model paints whatever comes first, and setting-first "
         "openings produce subjectless art. "
-        "COMPOSITION RULE (critical): ONE focal subject, ONE setting, ONE action. "
+        "COMPOSITION RULE (critical): ONE focal subject, ONE setting, ONE action. The "
+        "focal subject is the largest thing in the frame, in the foreground, clearly "
+        "visible — never buried behind props or scenery. "
         "Do not add secondary creatures, characters, or props unless the card's own "
         "text names them — a 4-step image model cannot resolve competing focal points, "
         "so every extra element muddies the picture. Two SHORT sentences, under 40 words total. "
@@ -742,7 +747,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
            f"conflict): {steer.strip()}\n" if steer and steer.strip() else "")
         + f"Reference description: {base_desc}\n"
         f"Ground the scene in this card's flavor and rules — concrete subjects, not "
-        f"abstract energy. Rewrite into a detailed scene description (2-3 sentences):"
+        f"abstract energy. Rewrite into a scene description (two short sentences):"
     )
 
     try:
