@@ -1846,7 +1846,7 @@ def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '') -> 
     rest = ' '.join(sents[1:]).rstrip(' .') if len(sents) > 1 else ''
     bits = [b for b in (style_bits or []) if b]
     lead, block = (bits[0], bits[1:]) if bits else ('', [])
-    order = os.environ.get('FLUX_PROMPT_ORDER', 'subject-early')
+    order = os.environ.get('FLUX_PROMPT_ORDER', 'medium-subject-idiom')
     if order == 'style-first':
         pieces = [', '.join(bits), subject]
     elif order == 'subject-early':
