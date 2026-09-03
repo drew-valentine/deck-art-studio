@@ -526,3 +526,19 @@ def test_style_source_kind_recall(monkeypatch):
     assert va.style_source_kind('Nobody', 'm') == ''
     assert va.style_source_kind('Garbage', 'm') == ''
     assert va.style_source_kind('', 'm') == ''
+
+
+def test_block_states_colour_coverage_from_evidence(monkeypatch):
+    import vision_analyzer as va
+    monkeypatch.setattr(va, 'analyze_inspiration_style', lambda *a, **k: {})
+    monkeypatch.setattr(va, 'style_idiom_recall', lambda *a, **k: [])
+    monkeypatch.setattr(va, 'style_idiom_seen', lambda *a, **k: [])
+    coloured = ("Art Style: whimsical hand-drawn illustration\nMedium: pen and ink with flat color fills\n"
+                "Colors: teal, bright yellow, red\nTechnique: loose wobbly line, saturated flat colour fills")
+    blk = va.build_flux_style_block('x.png', style_source='', text_model='m', stored_descriptions=coloured)
+    assert 'fully coloured with saturated flat colour fills' in blk
+    assert blk.index('fully coloured') < blk.index('palette of')
+    mono = ("Art Style: pen and ink illustration\nMedium: black and white ink\nColors: black, white\n"
+            "Technique: monochrome crosshatching, uncoloured")
+    blk2 = va.build_flux_style_block('x.png', style_source='', text_model='m', stored_descriptions=mono)
+    assert 'monochrome, uncoloured ink on white paper' in blk2

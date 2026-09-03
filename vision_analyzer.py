@@ -1996,6 +1996,24 @@ def build_flux_style_block(image_path, style_source: str = '',
         elif sparse > dense:
             anchors.append('sparse airy composition on open background')
 
+    # Colour COVERAGE is its own evidence axis, for every medium: a reference
+    # of saturated flat fills rendered as uncoloured ink once the block led
+    # with "ink illustration" and pale hue names. Stated explicitly, right
+    # after the medium, so the image model knows whether the paper is filled.
+    ev_all = ((stored_descriptions or '') or evidence).lower()
+    _c = lambda words: sum(ev_all.count(w) for w in words)
+    coloured = _c(('saturated', 'vibrant', 'vivid', 'bold color', 'bold colour',
+                   'flat color', 'flat colour', 'colorful', 'colourful',
+                   'bright color', 'bright colour', 'full color', 'full colour',
+                   'rich color', 'rich colour'))
+    mono = _c(('monochrome', 'black and white', 'black-and-white', 'grayscale',
+               'greyscale', 'uncolored', 'uncoloured', 'sepia', 'pen and ink only',
+               'no color', 'no colour'))
+    if coloured > mono and coloured > 0:
+        anchors.append('fully coloured with saturated flat colour fills, no bare white paper')
+    elif mono > coloured:
+        anchors.append('monochrome, uncoloured ink on white paper')
+
     # -- foundation + enrichment: hues/motifs/influence (stored data FIRST) -----
     hues, motifs, influence = [], [], ''
     for source in [stored_descriptions] + proses:
