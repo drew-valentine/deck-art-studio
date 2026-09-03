@@ -522,11 +522,12 @@ class TestChatPreambleStripped:
 
 # ── H11: composition discipline ─────────────────────────────────────────────
 
-def test_limit_scene_sentences_keeps_two():
+def test_limit_scene_sentences_keeps_three():
     from prompt_generator import _limit_scene_sentences
     txt = ("A dragon rears over the waves. Lightning splits the sky behind it. "
            "A shark leaps beside it! Fish scatter.")
-    assert _limit_scene_sentences(txt) == "A dragon rears over the waves. Lightning splits the sky behind it."
+    assert _limit_scene_sentences(txt) == "A dragon rears over the waves. Lightning splits the sky behind it. A shark leaps beside it!"
+    assert _limit_scene_sentences(txt, 2) == "A dragon rears over the waves. Lightning splits the sky behind it."
     assert _limit_scene_sentences("One sentence only.") == "One sentence only."
     assert _limit_scene_sentences("") == ""
 

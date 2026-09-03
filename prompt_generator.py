@@ -594,7 +594,7 @@ def hint_without_palette(block: str) -> str:
     return ', '.join(x for x in out if x)
 
 
-def _limit_scene_sentences(text: str, max_sentences: int = 2, max_words: int = 45) -> str:
+def _limit_scene_sentences(text: str, max_sentences: int = 3, max_words: int = 64) -> str:
     """Composition backstop: keep the first ``max_sentences`` sentences. The
     scene writer is asked for two; a third almost always introduces a second
     focal element (a shark beside the dragon, a gravestone beside the dock)."""
@@ -617,7 +617,14 @@ def _limit_scene_sentences(text: str, max_sentences: int = 2, max_words: int = 4
         # sentence gets a clause-boundary cut
         sents = _re.split(r'(?<=[.!?])\s+', out)
         if len(sents) > 1 and len(sents[0].split()) >= 12:
-            out = sents[0].strip()
+            # keep as many whole sentences as fit under the cap
+            kept, n = [], 0
+            for sent in sents:
+                w = len(sent.split())
+                if n + w > max_words:
+                    break
+                kept.append(sent); n += w
+            out = ' '.join(kept).strip() if kept else sents[0].strip()
         else:
             head = ' '.join(words[:max_words])
             cut = max(head.rfind(', '), head.rfind('; '), head.rfind('. '))
@@ -770,7 +777,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     system_msg = (
         "You write art descriptions for card illustrations. "
         "Given an MTG card and a reference description, rewrite it into a more "
-        "creative and evocative two-sentence scene. "
+        "cinematic three-sentence scene that an art director would frame and hang. "
         "THE #1 RULE: the card's own subject (from the reference description) MUST "
         "be the single, unmistakable, dominant focal point that fills the frame. "
         "Enhance the imagery; do NOT change WHAT is depicted and do NOT introduce a "
@@ -791,10 +798,18 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         "visible — never buried behind props or scenery. "
         "Do not add secondary creatures, characters, or props unless the card's own "
         "text names them — a 4-step image model cannot resolve competing focal points, "
-        "so every extra element muddies the picture. Two SHORT sentences, under 40 words total. "
-        "Be inventive and VARY it each time: choose a fresh setting, camera angle, "
-        "distance, time of day, weather, and composition so re-rolls feel distinct "
-        "rather than repeating the same scene — but always keep the same focal subject. "
+        "so every extra element muddies the picture. "
+        "SCENE GRAMMAR (what makes it art rather than a catalogue photo), in three "
+        "sentences of about sixty words total: (1) the subject, opened as the OPENING "
+        "RULE says, caught at a MOMENT — mid-action, or the instant before something "
+        "happens; (2) a deliberate CAMERA and SCALE — a low angle so it fills the frame, "
+        "an extreme close-up, or the subject tiny against something vast — plus ONE "
+        "strong LIGHT with a named quality (rim-lit from behind, a single shaft through "
+        "dust, hard side light, glow from below); (3) ONE atmospheric detail that "
+        "carries the setting (spray, embers, drifting dust, rain on the lens) and "
+        "nothing else. Be inventive and VARY it each time: a fresh setting, camera "
+        "angle, distance, time of day, weather, and composition so re-rolls feel "
+        "distinct — but always the same single focal subject. "
         "PRESERVE the subject's defining anatomy stated in the reference: if it says "
         "a SINGLE / central / one eye (a cyclops), the creature has exactly ONE eye — "
         "write 'eye' (singular), NEVER 'eyes', and never give it two. Likewise keep "
@@ -847,8 +862,9 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             system_msg += (
                 f"\n\nCRITICAL — The art style is: {style_hint}. "
                 "Describe specific, concrete visual details — composition, posture, "
-                "objects, lighting. NEVER use dramatic fantasy language like 'maelstrom', "
-                "'volcanic fury', 'arcane energy', 'swirling vortex', 'blazing', 'exploding'."
+                "objects, lighting. Cinematic framing and light are REQUIRED; generic "
+                "magic filler is BANNED: never 'maelstrom', 'volcanic fury', 'arcane "
+                "energy', 'swirling vortex', 'mystical aura', 'otherworldly glow'."
                 f"\n\nSTAGING AND REGISTER — stage the scene the way this artist would, and "
                 f"write in their tone: {staging.strip()} Apply this to the setting, props, "
                 "posture and mood ONLY — the card's subject stays exactly what it is. "
@@ -918,7 +934,8 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         + (f"Flavor text (use this as the THEMATIC ANCHOR for the scene): {safe_flavor}\n" if safe_flavor else "")
         + f"Direction: {guidance}\n"
         + figure_line
-        + "Keep it simple: one subject, one setting, one action, two sentences.\n"
+        + "One subject. Then camera and scale, one strong light, one moment, one "
+          "atmospheric detail. Three sentences, about sixty words.\n"
         + (f"User steer (OVERRIDES the reference description wherever they "
            f"conflict): {steer.strip()}\n" if steer and steer.strip() else "")
         + f"Reference description: {base_desc}\n"
@@ -952,7 +969,8 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                     {'role': 'user', 'content':
                         f"Your draft does not open with the subject. Rewrite it so the "
                         f"FIRST words name '{name}' itself, as the dominant foreground "
-                        "subject, then the setting. Two short sentences."},
+                        "subject, then the setting. Three sentences: subject at a moment, "
+                        "camera and light, one atmospheric detail."},
                 ],
                 model=local_model, max_tokens=140, temperature=0.6)
             retry = _strip_chat_preamble(retry)
@@ -961,7 +979,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             print(f"  [prompt_gen] opening rule retry for {name}: {'kept' if out is retry else 'draft kept'}")
         out = _strip_franchise_sentences(out, style_source_name or style_hint)   # output backstop
         out = _strip_example_leak(out, card)
-        out = _limit_scene_sentences(out, 2)
+        out = _limit_scene_sentences(out, 3)
         # H21: writer variance is the dominant failure now (a chair inside a
         # ring, a bird for a faerie). A cheap checklist pass judges the draft
         # against the card; one lower-temperature re-roll if it fails.
@@ -977,10 +995,11 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                         {'role': 'user', 'content':
                             f"Problems with that draft: {problems} Rewrite it so the ONLY focal "
                             f"subject is {name} exactly as the card describes it, nothing invented "
-                            "beside it. Two short sentences."},
+                            "beside it. Three sentences: subject at a moment, camera and light, "
+                            "one atmospheric detail."},
                     ],
                     model=local_model, max_tokens=140, temperature=0.5)
-                redo = _limit_scene_sentences(_strip_chat_preamble(redo), 2)
+                redo = _limit_scene_sentences(_strip_chat_preamble(redo), 3)
                 if len(redo.split()) >= 5 and _opens_with_subject(redo, card) \
                         and not _scene_problems(redo, card, local_model):
                     out = redo
