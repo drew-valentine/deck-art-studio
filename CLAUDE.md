@@ -101,6 +101,9 @@ decks/<deck-slug>/
   FIGURE_IDIOM, SCENE_CHECK, REDUX_EDGE_CROP, FLUX_LEAD_OVERRIDE, FLUX_GUARD_EXTRA). Colour coverage
   is measured from reference pixels (`pixel_palette`); character-heavy references (VLM yes/no,
   `prominent_character`) default the deck to Medium unless `style_reference.user_set`.
+  End-of-batch inspection (`INSPECT` job, `_execute_inspect_job`, `vision_analyzer.inspect_render`):
+  VLM defect checklist over the batch's renders, verdict in `.meta.json['inspection']`, one
+  automatic re-roll then a final record-only pass; `POST /api/decks/<id>/inspect`; RENDER_INSPECT=0.
   STANDING RULE: deck-agnostic and style-agnostic — a new style must work with zero code
   changes; derive facts from the declaration, model knowledge and vision reads, never tables.
 - **18 GB memory rule**: FLUX and the LLM/VLM cannot be co-resident. `mlx_llm.unload()` is
