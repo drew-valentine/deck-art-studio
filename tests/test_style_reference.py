@@ -315,3 +315,13 @@ def test_flux_prompt_medium_subject_idiom_order(monkeypatch):
             'palette of bright yellow, dusty coral, exaggerated body proportions, wobbly eyes']
     out = ds._assemble_flux_prompt(bits, 'Keiga, a Dragon Spirit, bursts from the sea. Mist below.')
     assert out.startswith('in the style of X, original character designs, cel animation, fully coloured with saturated flat colour fills, no bare white paper, palette of bright yellow, dusty coral. Keiga, a Dragon Spirit, bursts from the sea. exaggerated body proportions, wobbly eyes. Mist below.')
+
+
+def test_flux_prompt_coverage_subject_block_order(monkeypatch):
+    import deck_studio as ds
+    monkeypatch.delenv('FLUX_PROMPT_ORDER', raising=False)
+    bits = ['in the style of X, original character designs',
+            'cel animation, fully coloured with saturated flat colour fills, no bare white paper, '
+            'palette of bright yellow, dusty coral, wobbly eyes']
+    out = ds._assemble_flux_prompt(bits, 'Glissa, a Zombie Elf, leans on a tree. A worm wriggles.')
+    assert out.startswith('in the style of X, original character designs, fully coloured with saturated flat colour fills, no bare white paper. Glissa, a Zombie Elf, leans on a tree. cel animation, palette of bright yellow, dusty coral, wobbly eyes. A worm wriggles.')

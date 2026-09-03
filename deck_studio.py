@@ -1846,11 +1846,20 @@ def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '') -> 
     rest = ' '.join(sents[1:]).rstrip(' .') if len(sents) > 1 else ''
     bits = [b for b in (style_bits or []) if b]
     lead, block = (bits[0], bits[1:]) if bits else ('', [])
-    order = os.environ.get('FLUX_PROMPT_ORDER', 'medium-subject-idiom')
+    order = os.environ.get('FLUX_PROMPT_ORDER', 'coverage-subject-block')
     if order == 'style-first':
         pieces = [', '.join(bits), subject]
     elif order == 'subject-early':
         pieces = [lead, first, ', '.join(block), rest]
+    elif order == 'coverage-subject-block':
+        # lead + the short colour-coverage clause, then the subject sentence
+        # (within the first ~25 tokens), then the whole block, then the rest
+        # of the scene. Medium-first kept colour but lost a Seuss elf to her
+        # tree; subject-early kept the elf but lost the colour.
+        items = [x.strip() for x in ', '.join(block).split(',') if x.strip()]
+        cov = [x for x in items if x.lower().startswith(('fully coloured', 'no bare', 'monochrome', 'uncoloured'))]
+        others = [x for x in items if x not in cov]
+        pieces = [', '.join(x for x in [lead] + cov if x), first, ', '.join(others), rest]
     else:
         # medium anchors (through the palette clause) stay in front with the
         # lead; the subject follows; the idiom, motifs and reference read
