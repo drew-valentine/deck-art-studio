@@ -90,6 +90,12 @@ decks/<deck-slug>/
   writer gets that plus the block minus hues (`prompt_generator.hint_without_palette`) — hues
   in the writer's hint become scene content. Writer rules: one subject in the foreground, two
   sentences (45-word whole-sentence cap), rules-text zones (library/graveyard) are never scenery.
+  Also recalled at distillation, each with an UNKNOWN escape: `style_source_kind`
+  (franchise / artist / movement — the franchise gate for de-naming; the `_FRANCHISE_PHRASES`
+  table is only the offline fallback), `style_lineage` (a de-named production lineage for the
+  render lead), `style_idiom` (list; the writer puts it on creatures as a figure idiom).
+  STANDING RULE: deck-agnostic and style-agnostic — a new style must work with zero code
+  changes; derive facts from the declaration, model knowledge and vision reads, never tables.
 - **18 GB memory rule**: FLUX and the LLM/VLM cannot be co-resident. `mlx_llm.unload()` is
   called before loading FLUX; the in-process guard (`_ollama_work_*`/`_wait_for_ollama_idle`,
   historical names) waits for in-flight LLM work to finish before generating.
