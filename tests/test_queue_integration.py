@@ -327,3 +327,19 @@ def test_inspect_job_rerolls_defective_cards_once(monkeypatch, tmp_path):
     job2 = ds.Job(type=ds.INSPECT, deck_id='d', card_name='', params={'card_names': ['Keiga, the Tide Star'], 'final': True})
     ds._execute_inspect_job(job2, ctx)
     assert queued == []
+
+
+def test_generate_batch_takes_enqueues_each_card_n_times(monkeypatch, client):
+    import deck_studio as ds
+    queued = []
+    class J:  # minimal job stand-in
+        def __init__(self, n): self.id = n
+    monkeypatch.setattr(ds, '_enqueue_art', lambda deck_id, name, **kw: queued.append(('art', name, kw.get('label'))) or J(len(queued)))
+    monkeypatch.setattr(ds, '_enqueue_inspection', lambda deck_id, names, **kw: queued.append(('inspect', tuple(names))))
+    monkeypatch.setattr(ds, 'cards_db', [{'name': 'Sol Ring', 'card_type': 'artifact'}, {'name': 'Keiga, the Tide Star', 'card_type': 'creature'}])
+    r = client.post('/api/generate-batch', json={'card_names': ['Sol Ring', 'Keiga, the Tide Star'], 'skip_existing': False, 'takes': 2})
+    assert r.status_code == 200, r.get_json()
+    arts = [q for q in queued if q[0] == 'art']
+    assert [a[1] for a in arts] == ['Sol Ring', 'Keiga, the Tide Star', 'Sol Ring', 'Keiga, the Tide Star']
+    assert arts[0][2].endswith('(take 1/2)') and arts[-1][2].endswith('(take 2/2)')
+    assert queued[-1] == ('inspect', ('Sol Ring', 'Keiga, the Tide Star'))

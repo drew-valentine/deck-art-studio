@@ -5243,6 +5243,13 @@ def generate_batch():
     data = request.json or {}
     card_names = data.get('card_names', [])
     skip_existing = data.get('skip_existing', True)
+    # "Takes": render each card N times (fresh seeds); every take archives the
+    # previous one as a version, so the user picks the best in the versions
+    # UI. Roll-to-roll variance is the biggest remaining quality factor.
+    try:
+        takes = max(1, min(3, int(data.get('takes', 1) or 1)))
+    except (TypeError, ValueError):
+        takes = 1
     feedback = data.get('feedback', '')
 
     if not card_names:
@@ -5297,10 +5304,12 @@ def generate_batch():
 
     dname = _deck_display_name(active_deck_id)   # hoisted: one registry read for the whole batch
     job_ids = []
-    for n in card_names:
-        job = _enqueue_art(active_deck_id, n, face=face_map.get(n, 'all'),
-                           feedback=(feedback or None), deck_name=dname)
-        job_ids.append(job.id)
+    for take in range(takes):
+        for n in card_names:
+            job = _enqueue_art(active_deck_id, n, face=face_map.get(n, 'all'),
+                               feedback=(feedback or None), deck_name=dname,
+                               label=(f'{n} (take {take + 1}/{takes})' if takes > 1 else None))
+            job_ids.append(job.id)
     # End-of-batch inspection: the vision model checks every render for
     # anatomy / duplication / text defects and re-queues failures once.
     if os.environ.get('RENDER_INSPECT', '1') != '0':
@@ -11084,18 +11093,22 @@ async function generateArt() {
     fields: [
       { type: 'textarea', name: 'feedback', label: 'Art Direction (optional)',
         placeholder: 'e.g. darker tones, more dramatic lighting', rows: 3 },
+      { type: 'checkbox', name: 'twoTakes',
+        label: 'Two takes per card — each take is kept as a version, pick the best afterwards (doubles render time)',
+        checked: false },
     ],
     cost: costStr,
     confirmText: 'Generate',
   });
   if (!result) return;
   const feedback = result.feedback || '';
+  const takes = result.twoTakes ? 2 : 1;
 
   try {
     const resp = await fetch('/api/generate-batch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ card_names: names, skip_existing: false, feedback: feedback || '' }),
+      body: JSON.stringify({ card_names: names, skip_existing: false, feedback: feedback || '', takes }),
     });
     const batchResult = await resp.json();
     if (batchResult.success) {
