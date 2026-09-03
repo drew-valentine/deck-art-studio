@@ -2046,6 +2046,16 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     with generation_lock:
         _status[card_name]['message'] = ('Generating with style references...'
                                          if ref_images else 'Generating from text prompt...')
+    # experiment hook (block-range A/B): STYLE_BLOCKS_DOUBLE="0-12" widens the
+    # style-block window the references are shown to; unset = the worker default
+    ref_blocks = None
+    _rng = os.environ.get('STYLE_BLOCKS_DOUBLE', '').strip()
+    if _rng and '-' in _rng:
+        try:
+            a, b = (int(x) for x in _rng.split('-', 1))
+            ref_blocks = {'double': list(range(a, b + 1)), 'single': []}
+        except ValueError:
+            ref_blocks = None
     return gen.generate(
         prompt=flux_prompt,
         width=w, height=h,
@@ -2055,6 +2065,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
         reference_tokens=ref_cfg['tokens'],
         reference_strength=ref_cfg['strength'],
         reference_average=ref_cfg['average'],
+        reference_blocks=ref_blocks,
     )
 
 
