@@ -591,14 +591,14 @@ def test_writer_puts_figure_idiom_on_creatures_only(monkeypatch):
     import prompt_generator as pg
     seen = {}
     def chat(messages, **kw):
-        seen['sys'] = messages[0]['content']; return "Keiga, a Dragon Spirit, lifts off. Mist."
+        seen['user'] = messages[1]['content']; return "Keiga, a Dragon Spirit, lifts off. Mist."
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
     crt = {'name': 'Keiga, the Tide Star', 'type_line': 'Legendary Creature — Dragon Spirit',
            'card_type': 'creature', 'oracle_text': 'Flying', 'subtypes': ['Dragon', 'Spirit']}
     pg.generate_subject_with_ai(crt, None, backend='local', local_model='m',
                                 figure_idiom='bulging mismatched eyes, lumpy anatomy')
-    assert 'FIGURE IDIOM' in seen['sys'] and 'lumpy anatomy' in seen['sys']
+    assert 'Figure idiom' in seen['user'] and 'lumpy anatomy' in seen['user']
     land = {'name': 'Command Tower', 'type_line': 'Land', 'card_type': 'land', 'oracle_text': ''}
     pg.generate_subject_with_ai(land, None, backend='local', local_model='m',
                                 figure_idiom='bulging mismatched eyes, lumpy anatomy')
-    assert 'FIGURE IDIOM' not in seen['sys']
+    assert 'Figure idiom' not in seen['user']

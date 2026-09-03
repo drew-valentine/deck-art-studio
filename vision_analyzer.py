@@ -1579,12 +1579,16 @@ def _idiom_phrases(text: str, style_source: str, max_words: int) -> list:
            for p in re.split(r'[,\n]+', (text or '').strip().split('\n')[0])]
     # a lone adjective is a comma inside a phrase ("exaggerated, distorted
     # body proportions") — rejoin it with what follows
-    merged = []
+    merged, pending = [], []
     for p in raw:
-        if merged and len(merged[-1].split()) == 1 and p:
-            merged[-1] = merged[-1] + ' ' + p
-        else:
-            merged.append(p)
+        if not p:
+            continue
+        if len(p.split()) == 1:
+            pending.append(p)          # "exaggerated, distorted, irregular body proportions"
+            continue
+        merged.append(' '.join(pending + [p])); pending = []
+    if pending:
+        merged.append(' '.join(pending))
     for phrase in merged:
         toks = phrase.split()
         if not toks or len(toks) > 8:

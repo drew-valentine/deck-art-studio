@@ -754,15 +754,16 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                     "feel cohesive — never let them replace or upstage the card's own subject."
                 )
 
+    # The image model renders "a dragon" as ITS default dragon unless the
+    # prompt says how this artist draws one; the block's idiom words are
+    # global, this puts them on the creature itself. It goes in the USER
+    # message next to the task — at the tail of the long system message the
+    # 8B writer dropped it.
+    figure_line = ''
     if figure_idiom and figure_idiom.strip() and card_type in ('creature', 'planeswalker'):
-        # The image model renders "a dragon" as ITS default dragon unless the
-        # prompt says how this artist draws one; the block's idiom words are
-        # global, this puts them on the creature itself.
-        system_msg += (
-            f"\n\nFIGURE IDIOM — draw the creature the way this artist draws figures: "
-            f"{figure_idiom.strip()}. In the FIRST sentence describe its eyes, face and "
-            "body in those terms (its identity and creature type stay exactly as given)."
-        )
+        figure_line = (f"Figure idiom (REQUIRED in the first sentence): describe the creature's "
+                       f"eyes, face and body in this artist's terms — {figure_idiom.strip()} — "
+                       "keeping its identity and creature type exactly as given.\n")
 
     if steer and steer.strip():
         # The steer OVERRIDES the rules and the reference anchor wherever they
@@ -799,6 +800,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         f"Card: {name}\nType: {type_line}\n{rules_line}"
         + (f"Flavor text (use this as the THEMATIC ANCHOR for the scene): {safe_flavor}\n" if safe_flavor else "")
         + f"Direction: {guidance}\n"
+        + figure_line
         + "Keep it simple: one subject, one setting, one action, two sentences.\n"
         + (f"User steer (OVERRIDES the reference description wherever they "
            f"conflict): {steer.strip()}\n" if steer and steer.strip() else "")
