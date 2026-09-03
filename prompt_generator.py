@@ -578,6 +578,34 @@ def _limit_scene_sentences(text: str, max_sentences: int = 2, max_words: int = 4
     return out
 
 
+def _subject_words(card: dict) -> set:
+    """Words that identify the card's subject for the opening check: the
+    name's own words (minus articles and possessives) plus, for artifacts,
+    the literal object noun. Generic — no per-card knowledge."""
+    import re as _re
+    name = (card.get('name') or '').split(' // ')[0]
+    words = {w.lower() for w in _re.findall(r"[A-Za-z]{3,}", name)} - {'the', 'and', 'from'}
+    lit = _literal_object_from_name(name) if card.get('card_type') == 'artifact' else None
+    if lit:
+        words |= {w.lower() for w in _re.findall(r"[A-Za-z]{3,}", lit)} - {'the', 'and'}
+    return words
+
+
+def _opens_with_subject(text: str, card: dict) -> bool:
+    """True when the FIRST sentence names the subject (any of its words). The
+    opening rule is the writer's #1 rule and the one it breaks most: "Ink
+    flows from a delicate quill held by a nearby scribe..." for Sol Ring."""
+    import re as _re
+    if not text:
+        return False
+    # the OPENING is the first few words, not the whole first sentence — "Ink
+    # flows from a quill ... as the ring glows" mentions the ring but does not
+    # open with it
+    first = _re.split(r'(?<=[.!?])\s+', text.strip())[0]
+    opening = ' '.join(first.split()[:8]).lower()
+    return bool(_subject_words(card) & set(_re.findall(r"[a-z]{3,}", opening)))
+
+
 def _strip_chat_preamble(text: str) -> str:
     """Small chat models sometimes answer like a chat turn — "Here is a
     rewritten description for Bountiful Landscape:" — and that line was
@@ -827,6 +855,24 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                               # events super intend impact"), so keep it lower.
         )
         out = _strip_chat_preamble(out)
+        if not _opens_with_subject(out, card):
+            # one strict retry: the draft buried the subject; ask for the
+            # same scene opening on it (generic check — the name's own words)
+            retry = mlx_llm.chat(
+                messages=[
+                    {'role': 'system', 'content': system_msg},
+                    {'role': 'user', 'content': user_msg},
+                    {'role': 'assistant', 'content': out},
+                    {'role': 'user', 'content':
+                        f"Your draft does not open with the subject. Rewrite it so the "
+                        f"FIRST words name '{name}' itself, as the dominant foreground "
+                        "subject, then the setting. Two short sentences."},
+                ],
+                model=local_model, max_tokens=140, temperature=0.6)
+            retry = _strip_chat_preamble(retry)
+            if _opens_with_subject(retry, card):
+                out = retry
+            print(f"  [prompt_gen] opening rule retry for {name}: {'kept' if out is retry else 'draft kept'}")
         out = _strip_franchise_sentences(out, style_source_name or style_hint)   # output backstop
         out = _strip_example_leak(out, card)
         out = _limit_scene_sentences(out, 2)

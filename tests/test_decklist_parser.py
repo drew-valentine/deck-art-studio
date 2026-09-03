@@ -623,3 +623,23 @@ def test_franchise_phrase_uses_recalled_kind_over_table():
     # no kind stored: the table is the fallback
     assert franchise_style_phrase('Rick and Morty') == 'an adult animated sci-fi cartoon series'
     assert franchise_style_phrase('Moebius') is None
+
+
+def test_writer_retries_once_when_the_draft_buries_the_subject(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    replies = iter(["Ink flows from a delicate quill held by a nearby scribe, as the ring glows. Quiet.",
+                    "Sol Ring, a golden ring, rests on a papyrus sheet. A scribe's quill lies beside it."])
+    calls = []
+    def chat(messages, **kw):
+        calls.append(len(messages)); return next(replies)
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    card = {'name': 'Sol Ring', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'}
+    out = pg.generate_subject_with_ai(card, None, backend='local', local_model='m')
+    assert out.startswith('Sol Ring') and calls == [2, 4]
+    # a good first draft is not retried
+    replies2 = iter(["Sol Ring, a golden ring, glows on an altar. Dust hangs in the light."])
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda messages, **kw: next(replies2)))
+    assert pg.generate_subject_with_ai(card, None, backend='local', local_model='m').startswith('Sol Ring')
+    assert pg._opens_with_subject("Keiga, the Tide Star, a Dragon Spirit, soars.", {'name': 'Keiga, the Tide Star', 'card_type': 'creature'})
+    assert not pg._opens_with_subject("A storm gathers over the sea. Keiga appears.", {'name': 'Keiga, the Tide Star', 'card_type': 'creature'})
