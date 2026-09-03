@@ -535,3 +535,29 @@ def test_scene_writer_prompt_has_composition_rule():
     import inspect, prompt_generator as pg
     src = inspect.getsource(pg)
     assert 'ONE focal subject, ONE setting, ONE action' in src
+
+
+def test_hint_without_palette_strips_hue_list():
+    from prompt_generator import hint_without_palette
+    blk = ("cel animation, thick black outlines, palette of bright yellow, vivid orange, "
+           "desaturated green, dusty coral, bold lines, wobbly eyes, flat shading")
+    out = hint_without_palette(blk)
+    assert 'palette' not in out and 'coral' not in out and 'yellow' not in out
+    assert out.startswith('cel animation, thick black outlines')
+    assert 'wobbly eyes' in out and 'flat shading' in out
+    assert hint_without_palette('') == ''
+
+
+def test_writer_system_prompt_carries_staging(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    seen = {}
+    def chat(messages, **kw):
+        seen['sys'] = messages[0]['content']; return "A signet ring sits on a bench. It glows."
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    card = {'name': 'Arcane Signet', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'}
+    pg.generate_subject_with_ai(card, None, backend='local', local_model='m',
+                                style_hint='an adult animated sci-fi cartoon series — cel animation',
+                                staging='Scenes are staged in cluttered garages. The register is deadpan absurd.')
+    assert 'STAGING AND REGISTER' in seen['sys'] and 'deadpan absurd' in seen['sys']
+    assert 'calm, artful film still' not in seen['sys']

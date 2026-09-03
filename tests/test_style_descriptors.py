@@ -438,3 +438,17 @@ def test_block_carries_idiom_after_anchors(monkeypatch):
                              "Color Palette: teal, orange\nSource: Rick and Morty"))
     assert 'wobbly thin outlines' in block and 'bulging eyes' in block
     assert block.index('wobbly') < block.index('palette of')
+
+
+def test_style_staging_recall_drops_named_sentences(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    monkeypatch.setattr(va, '_preferred_idiom_model', lambda m: m)
+    fake = types.SimpleNamespace(chat=lambda **kw: (
+        "Scenes are staged in cluttered garages and alien bazaars with figures slouching mid-argument, "
+        "seen at medium distance. Rick usually stands to the left. The register is deadpan absurd."))
+    monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
+    out = va.style_staging_recall('Rick & Morty', 'm')
+    assert out.startswith('Scenes are staged') and 'deadpan absurd' in out
+    assert 'Rick' not in out
+    assert va.style_staging_recall('', 'm') == ''

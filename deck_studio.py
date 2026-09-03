@@ -3126,6 +3126,11 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         if flux_style_prompt:
             print(f"  [distill] FLUX style descriptors ({'named: '+style_source if style_source else 'image-only'}): {flux_style_prompt}")
     data['flux_style_prompt'] = flux_style_prompt
+    # How the named style stages scenes + its register: the scene writer's
+    # share of the idiom (the block above is the image model's share).
+    from vision_analyzer import style_staging_recall
+    data['style_staging'] = (style_staging_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
+                             if style_source else '')
 
     with open(deck_json_path, 'w') as f:
         json.dump(data, f, indent=2)
@@ -3134,6 +3139,7 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         active_deck_meta['style_tokens'] = tokens
         active_deck_meta['clip_directives'] = clip_dirs
         active_deck_meta['flux_style_prompt'] = flux_style_prompt
+        active_deck_meta['style_staging'] = data['style_staging']
 
     if tokens:
         print(f"  [distill] Style tokens saved for {deck_id}: {list(tokens.keys())}")
@@ -3988,9 +3994,13 @@ def _execute_prompt_job(job, ctx):
         # garages), which are character attractors at render time.
         from prompt_generator import franchise_style_phrase
         style_hint = franchise_style_phrase(style_name) or style_name
-        flux_style = (data.get('flux_style_prompt') or '').strip()
+        # The block's palette clause is for the image model; in the writer's
+        # hint it turns into scene content ("coral-colored stone").
+        from prompt_generator import hint_without_palette
+        flux_style = hint_without_palette(data.get('flux_style_prompt') or '')
         if flux_style:
             style_hint = f"{style_hint} — {flux_style}" if style_hint else flux_style
+        staging = (data.get('style_staging') or '').strip()
         can_ai = (bcfg['llm_backend'] == 'local') or openai_client
         if job.use_ai and can_ai:
             # Retry on transient rate limits (429) with backoff before falling
@@ -4004,7 +4014,7 @@ def _execute_prompt_job(job, ctx):
                         unit, openai_client, backend=bcfg['llm_backend'],
                         local_model=bcfg['ollama_model'], style_hint=style_hint,
                         steer=(job.feedback or ''),
-                        style_source_name=style_name)
+                        style_source_name=style_name, staging=staging)
                     break
                 except Exception as e:
                     err_str = str(e)

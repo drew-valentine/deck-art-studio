@@ -1652,6 +1652,59 @@ def style_idiom_seen(image_path, style_source: str, vision_model: str,
     return out
 
 
+def style_staging_recall(style_source: str, text_model: str) -> str:
+    """How a NAMED style STAGES a scene and its tonal register — for the
+    scene writer, not the image model. The drawing idiom says how lines and
+    faces look; this says what the artist would put in the frame around the
+    card's subject (settings, props, how figures act and pose) and in what
+    tone (deadpan absurd / whimsical / grim). Two sentences, temperature 0,
+    stored with the block at distillation. Never names anyone. '' on failure."""
+    src = (style_source or '').strip().replace('&', 'and')
+    if not src:
+        return ''
+    try:
+        import mlx_llm
+        reply = mlx_llm.chat(
+            messages=[
+                {'role': 'system', 'content':
+                    "You are an art director. Given the name of an art style, artist, "
+                    "show or movement, write exactly two sentences. Sentence 1: how it "
+                    "STAGES a scene — typical settings and props, how figures act and "
+                    "pose, camera distance. Sentence 2: its TONAL REGISTER (for example "
+                    "deadpan absurd, gentle whimsy, grim gothic, serene wonder). Plain "
+                    "concrete language. NEVER name characters, people, places or the "
+                    "style itself."},
+                {'role': 'user', 'content': "Style: Moebius"},
+                {'role': 'assistant', 'content':
+                    "Scenes are staged in vast empty deserts or crystalline cities with a "
+                    "lone figure in flowing robes standing still or gliding on an odd "
+                    "vehicle, seen from a distance so the landscape dwarfs them. The "
+                    "register is serene, dreamlike wonder — quiet, unhurried, slightly "
+                    "mystical."},
+                {'role': 'user', 'content': f"Style: {src}"},
+            ],
+            model=_preferred_idiom_model(text_model), max_tokens=120, temperature=0.0)
+    except Exception as e:
+        print(f"  [style] staging recall failed: {e}")
+        return ''
+    text = ' '.join((reply or '').split())
+    src_words = {w.lower() for w in re.findall(r'[A-Za-z]{3,}', src)} - {'and', 'the', 'von', 'van', 'der'}
+    keep = []
+    for sent in re.split(r'(?<=[.!?])\s+', text):
+        toks = sent.split()
+        if not toks:
+            continue
+        low = [t.lower().strip('.,;:') for t in toks]
+        # a Capitalized word after the first token is a name leaking through
+        if any(t[:1].isupper() for t in toks[1:]) or any(t in src_words for t in low):
+            continue
+        keep.append(sent.strip())
+    out = ' '.join(keep[:2])
+    if out:
+        print(f"  [style] staging for '{src}': {out}")
+    return out
+
+
 def style_idiom_descriptors(style_source: str, text_model: str,
                             image_path=None, vision_model: str = '',
                             max_words: int = _IDIOM_MAX_WORDS) -> list:

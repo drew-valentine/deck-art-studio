@@ -521,6 +521,26 @@ _PREAMBLE_RE = re.compile(
     r"[^\n:]{0,120}:\s*", re.IGNORECASE)
 
 
+def hint_without_palette(block: str) -> str:
+    """The style block minus its 'palette of ...' clause. Hue names are for
+    the image model; handed to the scene writer they become scene content
+    ('dusty coral background', 'coral-colored stone')."""
+    import re as _re
+    if not block:
+        return ''
+    parts = [p.strip() for p in block.split(',')]
+    out, skipping = [], False
+    for p in parts:
+        if p.lower().startswith('palette of'):
+            skipping = True          # the clause runs across several commas
+            continue
+        if skipping and p and p == p.lower() and len(p.split()) <= 3 and not _re.search(r'\b(lines?|ink|shading|outlines?|textures?|brush|pen|strokes?|detail|anatomy|eyes|faces|forms|hair)\b', p):
+            continue                 # still inside the hue list
+        skipping = False
+        out.append(p)
+    return ', '.join(x for x in out if x)
+
+
 def _limit_scene_sentences(text: str, max_sentences: int = 2, max_words: int = 45) -> str:
     """Composition backstop: keep the first ``max_sentences`` sentences. The
     scene writer is asked for two; a third almost always introduces a second
@@ -582,7 +602,7 @@ def _strip_example_leak(text: str, card: dict) -> str:
 def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'openai',
                               local_model: str = 'llama3.1:8b',
                               style_hint: str = '', steer: str = '',
-                              style_source_name: str = '') -> str:
+                              style_source_name: str = '', staging: str = '') -> str:
     """Use an LLM to generate a subject description tailored to the deck's style.
 
     Sends the LLM a rule-based description as a reference anchor plus
@@ -627,7 +647,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     system_msg = (
         "You write art descriptions for card illustrations. "
         "Given an MTG card and a reference description, rewrite it into a more "
-        "creative and evocative 2-3 sentence scene. "
+        "creative and evocative two-sentence scene. "
         "THE #1 RULE: the card's own subject (from the reference description) MUST "
         "be the single, unmistakable, dominant focal point that fills the frame. "
         "Enhance the imagery; do NOT change WHAT is depicted and do NOT introduce a "
@@ -695,6 +715,18 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                     "NOT become the focal point or replace the card's own subject. Keep the "
                     "card's subject dominant and clearly readable; the themes are set dressing."
                 )
+        elif staging and staging.strip():
+            # the register comes from the style itself (see style_staging_recall),
+            # not from the calm-film-still default below
+            system_msg += (
+                f"\n\nCRITICAL — The art style is: {style_hint}. "
+                "Describe specific, concrete visual details — composition, posture, "
+                "objects, lighting. NEVER use dramatic fantasy language like 'maelstrom', "
+                "'volcanic fury', 'arcane energy', 'swirling vortex', 'blazing', 'exploding'."
+                f"\n\nSTAGING AND REGISTER — stage the scene the way this artist would, and "
+                f"write in their tone: {staging.strip()} Apply this to the setting, props, "
+                "posture and mood ONLY — the card's subject stays exactly what it is."
+            )
         else:
             system_msg += (
                 f"\n\nCRITICAL — The art style is: {style_hint}. "
