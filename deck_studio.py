@@ -1832,6 +1832,24 @@ def _effective_style_source(meta) -> str:
          if isinstance(im, dict)])
 
 
+def _with_figure_idiom(subject: str, idiom, max_phrases: int = 3) -> str:
+    """Append the style's drawing idiom to the subject's FIRST sentence
+    ("Keiga, a Dragon Spirit, rises from the sea, drawn with wobbly eyes,
+    lumpy anatomy"). No-op without idiom or when the sentence already
+    carries any of it."""
+    import re as _re
+    phrases = [p.strip() for p in (idiom or []) if p and p.strip()][:max_phrases]
+    if not subject or not phrases:
+        return subject
+    sents = _re.split(r'(?<=[.!?])\s+', subject.strip())
+    first = sents[0]
+    low = first.lower()
+    if any(p.lower() in low for p in phrases):
+        return subject
+    first = first.rstrip(' .!?') + ', drawn with ' + ', '.join(phrases) + '.'
+    return ' '.join([first] + sents[1:])
+
+
 def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '') -> str:
     """Order: style lead, the scene's FIRST sentence (the subject), the rest of
     the style block, the rest of the scene, feedback. FLUX weights early
@@ -1890,7 +1908,7 @@ def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '') -> 
 
 
 def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_override=None,
-                    deck_meta=None, deck_dir=None):
+                    deck_meta=None, deck_dir=None, seed=None, card_type=None):
     """Generate an image with the local FLUX model (mflux). Returns a PIL Image.
 
     Style always rides in the text prompt (the style source name + distilled
@@ -1929,6 +1947,13 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     # Drop a leading "{style_tag}.\n\n" if this is a legacy bundled prompt.
     secs = body.split('.\n\n', 1)
     subject = (secs[1] if len(secs) == 2 else body).strip()
+
+    # --- H22: the style's figure idiom on the creature itself, deterministically.
+    # The writer applies it only on a good roll; the render prompt adds it to
+    # the creature's own sentence regardless ("..., drawn with wobbly eyes,
+    # lumpy anatomy").
+    if card_type in ('creature', 'planeswalker') and os.environ.get('FIGURE_IDIOM', '1') != '0':
+        subject = _with_figure_idiom(subject, (_meta.get('style_idiom') or []))
 
     # --- Card Back override (avoid FLUX rendering a literal physical card back) ---
     if card_name.lower().startswith('card back'):
@@ -2008,6 +2033,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     return gen.generate(
         prompt=flux_prompt,
         width=w, height=h,
+        seed=seed,
         progress_callback=on_step,
         reference_images=ref_images,
         reference_tokens=ref_cfg['tokens'],
@@ -2125,7 +2151,7 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                           status_dict=None, raw_art_dir=None, composite_dir=None,
                           versions_dir=None, cards_db_snapshot=None, face='front',
                           deck_meta=None, model_key=None, prompt_map=None,
-                          deck_id=None):
+                          deck_id=None, seed=None):
     """Generate art for ONE face of a card using the active model config.
 
     Optional params let the queue worker pass the JOB's captured deck context
@@ -2259,7 +2285,8 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
             result_image = _generate_local(card_name, model_cfg, full_prompt,
                                            status_dict=_status,
                                            size_override=actual_size,
-                                           deck_meta=_meta,
+                                           deck_meta=_meta, seed=seed,
+                                           card_type=(card or {}).get('card_type'),
                                            deck_dir=_raw_art_dir.parent)
         else:
             result_image = _generate_openai(card_name, model_cfg, full_prompt,
@@ -2296,6 +2323,7 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                 'card_prompt': base_prompt,
                 'distilled_subject': _meta.get('card_subjects', {}).get(card_name, ''),
                 'feedback': feedback,
+                'seed': seed,
                 'style_reference': ({**_style_reference_settings(_meta),
                                      'images': [Path(p).name for p in
                                                 _style_reference_images(_meta, _raw_art_dir.parent)]}
@@ -4039,7 +4067,8 @@ def _execute_art_job(job, ctx):
         face=job.face, status_dict=sink, raw_art_dir=ctx['raw_art_dir'],
         composite_dir=ctx['composite_dir'], versions_dir=ctx['versions_dir'],
         cards_db_snapshot=ctx['cards'], deck_meta=ctx['meta'],
-        model_key=job.model_key, prompt_map=ctx['prompts'], deck_id=job.deck_id)
+        model_key=job.model_key, prompt_map=ctx['prompts'], deck_id=job.deck_id,
+        seed=(job.params or {}).get('seed'))
     if not ok and msg != 'Cancelled':
         raise RuntimeError(msg)
     if job.deck_id == active_deck_id:
@@ -5026,14 +5055,15 @@ def _deck_display_name(deck_id):
 
 
 def _enqueue_art(deck_id, card_name, face='all', custom_prompt=None, feedback=None,
-                 label=None, deck_name=None):
+                 label=None, deck_name=None, seed=None):
     """Build + enqueue an ART job, snapshotting the current model. Pass
     ``deck_name`` to skip the per-call registry read when enqueuing in a loop."""
     job = Job(type=ART, deck_id=deck_id,
               deck_name=deck_name if deck_name is not None else _deck_display_name(deck_id),
               card_name=card_name, face=face, custom_prompt=custom_prompt,
               feedback=feedback, model_key=active_model_key,
-              label=label or card_name.replace(BACK_FACE_SUFFIX, ''))
+              label=label or card_name.replace(BACK_FACE_SUFFIX, ''),
+              params=({'seed': int(seed)} if seed is not None else {}))
     _cancel_single.discard((deck_id, card_name))  # clear stale cancel so job isn't discarded
     return gen_queue.enqueue(job)
 
@@ -5049,6 +5079,11 @@ def generate_single():
     card_name = data.get('card_name')
     feedback = data.get('feedback')
     custom_prompt = data.get('custom_prompt')
+    seed = data.get('seed')
+    try:
+        seed = int(seed) if seed is not None and str(seed).strip() != '' else None
+    except (TypeError, ValueError):
+        seed = None
     face = data.get('face', 'all')
     if face not in ('front', 'back', 'all'):
         return jsonify({'error': 'face must be front, back, or all'}), 400
@@ -5060,7 +5095,7 @@ def generate_single():
         return jsonify({'error': f'Card not in deck: {card_name}'}), 404
 
     job = _enqueue_art(active_deck_id, card_name, face=face,
-                       custom_prompt=custom_prompt, feedback=feedback)
+                       custom_prompt=custom_prompt, feedback=feedback, seed=seed)
     return jsonify({'success': True, 'queued': 1, 'job_ids': [job.id],
                     'message': f'Queued art for {card_name}'})
 

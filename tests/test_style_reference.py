@@ -325,3 +325,24 @@ def test_flux_prompt_coverage_subject_block_order(monkeypatch):
             'palette of bright yellow, dusty coral, wobbly eyes']
     out = ds._assemble_flux_prompt(bits, 'Glissa, a Zombie Elf, leans on a tree. A worm wriggles.')
     assert out.startswith('in the style of X, original character designs, fully coloured with saturated flat colour fills, no bare white paper. Glissa, a Zombie Elf, leans on a tree. cel animation, palette of bright yellow, dusty coral, wobbly eyes. A worm wriggles.')
+
+
+def test_with_figure_idiom_appends_to_first_sentence_only():
+    import deck_studio as ds
+    out = ds._with_figure_idiom('Keiga, a Dragon Spirit, rises from the sea. Mist hangs low.',
+                                ['wobbly eyes', 'lumpy anatomy', 'thick chaotic lines', 'extra'])
+    assert out == 'Keiga, a Dragon Spirit, rises from the sea, drawn with wobbly eyes, lumpy anatomy, thick chaotic lines. Mist hangs low.'
+    # already present -> untouched; no idiom -> untouched
+    assert ds._with_figure_idiom('Keiga, drawn with wobbly eyes, rises.', ['wobbly eyes']) == 'Keiga, drawn with wobbly eyes, rises.'
+    assert ds._with_figure_idiom('Keiga rises.', []) == 'Keiga rises.'
+
+
+def test_enqueue_art_stores_seed_in_params(monkeypatch):
+    import deck_studio as ds
+    captured = {}
+    monkeypatch.setattr(ds.gen_queue, 'enqueue', lambda job: captured.__setitem__('job', job))
+    monkeypatch.setattr(ds, '_deck_display_name', lambda d: 'Deck')
+    ds._enqueue_art('deck-a', 'Sol Ring', seed=1234)
+    assert captured['job'].params == {'seed': 1234}
+    ds._enqueue_art('deck-a', 'Sol Ring')
+    assert captured['job'].params == {}
