@@ -133,6 +133,10 @@
     - H29 shipped: end-of-batch render inspection (vision model, defect checklist, verdict in `.meta.json`, one auto re-roll, final record-only pass; POST `/api/decks/<id>/inspect`). Trial on the m8 renders running.
     - "Two takes per card" batch option shipped (each take archived as a version; user picks).
     - Signatures escalated from cosmetic to public-materials: the model printed the declared reference artist's real name on a card. Text/lead/crop mitigations all failed; the inspection pass treats any text or signature as a defect.
+    - Drew's fourth bar added: WOW. The two-sentence composition rule fixed clutter but flattened the drama (correct subject, centred, candle-lit). Replaced by a scene grammar with one subject: subject at a moment; deliberate camera and scale plus one named light; one atmospheric detail; three sentences, about sixty words (cap 64, whole sentences). Fixed-seed A/B on Seuss (seed 4321): 3 of 3 improved (hourglass on a mound became a rainbow clockwork castle; Glissa a close-up figure in gnarled branches). Four more decks (seed 2026): 5-6 of 8 with real drama (Keiga on a wave, Krark in a shaft of light, vine-choked ruins, crystalline mesa, consuls under a beam). Shipped as the default (e869715).
+    - Krark's Thumb: "a detached thumb" renders a whole hand; the artifact guidance now says a body-part object is one part, detached at its base, no hand, presented as a kept relic (strung, mounted, on a cloth). Fixed-seed test: digit / talisman phrasings work, jar grew a fist. (143762d)
+    - Inspector refined to a count protocol with edge-strip confirmation; end-to-end loop verified on a real batch (Krark flagged → auto re-roll → final pass). Writer drafts are now logged before backstops (one subject-less draft slipped through with no retry logged — open).
+    - Judging procedure: count limbs at full resolution before any pass; name the face shown for two-faced cards.
   - Scope:
     - [x] Wire `Flux1Redux` into `flux_worker` with a token-pooling hook
     - [x] Pass each deck's inspiration images as references
@@ -151,7 +155,9 @@
     - [x] Creature design — per-type style-block window (creatures 0-14) makes creatures read as the source's own on all five decks (m7)
     - [x] m8 final validation on shipped defaults — see verdict; criterion stays open
     - [x] Inspection trial catches the three-armed Krark / signatures — count protocol + edge-strip confirmation: 6/16 flagged, all true positives (Krark hands, Keiga doubled head, four signatures/text); 10 clean cards silent
+    - [x] Scene grammar (wow) validated on five decks at fixed seeds
     - [ ] Fake signatures on artist-named ink decks — PUBLIC-MATERIALS issue (a real artist name was rendered); text/lead/crop mitigations failed; the inspection pass flags them
+    - [ ] Writer backstop miss: subject-less draft with no opening-retry log (diagnose with the new draft log)
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
