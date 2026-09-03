@@ -8897,8 +8897,21 @@ async function openQueueJob(deckId, cardName) {
     }
   }
   if (!base) { switchPanelTab('inspiration'); return; }   // style-analysis job
-  const card = allCards.find(c => c.name === base);
-  if (!card) { showToast('Card not found in this deck', 'warning'); return; }
+  let card = allCards.find(c => c.name === base);
+  if (!card) {
+    // The grid can be stale relative to the job (a deck edited or imported
+    // since the last load): refresh the card list once before giving up.
+    try {
+      const resp = await fetch('/api/cards');
+      if (resp.ok) { allCards = await resp.json(); renderGrid(); }
+    } catch (e) { /* fall through to the message below */ }
+    card = allCards.find(c => c.name === base);
+  }
+  if (!card) {
+    const deckLabel = document.getElementById('deckSelect')?.selectedOptions?.[0]?.textContent || deckId || 'this deck';
+    showToast(`"${base}" is no longer in ${deckLabel.replace(/ \(\d+\/\d+\)$/, '')}`, 'warning');
+    return;
+  }
   selectCard(base);
   if (isBack && (card.is_dfc || card.is_split_halves)) setFace('back');
   switchPanelTab('card');
