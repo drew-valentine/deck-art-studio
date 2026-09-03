@@ -3129,8 +3129,9 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
     # How the named style stages scenes + its register: the scene writer's
     # share of the idiom (the block above is the image model's share).
     from vision_analyzer import style_staging_recall, style_idiom_recall
-    data['style_staging'] = (style_staging_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
-                             if style_source else '')
+    data['style_staging'] = style_staging_recall(
+        style_source, bcfg.get('ollama_model', 'llama3.2:3b'),
+        image_path=first_img, vision_model=bcfg.get('ollama_vision_model', 'llava:7b'))
     # the drawing idiom as a list, for the scene writer's creature clause
     # (memoized — the block builder above already asked)
     data['style_idiom'] = (style_idiom_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))

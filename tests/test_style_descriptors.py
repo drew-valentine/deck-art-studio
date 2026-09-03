@@ -466,3 +466,21 @@ def test_style_idiom_recall_is_memoized(monkeypatch):
     a = va.style_idiom_recall('Some Artist Nobody Knows', 'm')
     b = va.style_idiom_recall('some artist nobody knows', 'm')
     assert a == b == ['thin wobbly outlines', 'bulging eyes'] and len(calls) == 1
+
+
+def test_staging_recall_unknown_falls_back_to_reference_read(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    monkeypatch.setattr(va, '_preferred_idiom_model', lambda m: m)
+    fake = types.SimpleNamespace(
+        chat=lambda **kw: "UNKNOWN",
+        vision=lambda *a, **kw: "The scene is a sunlit desert plateau with a lone tower, seen from far away. The register is serene wonder.")
+    monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
+    out = va.style_staging_recall('Some Painter Nobody Knows', 'm', image_path='ref.png', vision_model='v')
+    assert out.startswith('The scene is a sunlit desert') and 'serene wonder' in out
+    # no source at all -> reference read only when an image is given
+    assert va.style_staging_recall('', 'm') == ''
+    assert va.style_staging_recall('', 'm', image_path='ref.png', vision_model='v') == ''
+    # idiom recall honours UNKNOWN too
+    va._IDIOM_RECALL_CACHE.clear()
+    assert va.style_idiom_recall('Some Painter Nobody Knows', 'm') == []

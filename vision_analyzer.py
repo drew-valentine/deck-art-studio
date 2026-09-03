@@ -1540,7 +1540,9 @@ _IDIOM_SYSTEM = (
     "movement, list the VISUAL DRAWING IDIOM that makes it recognizable: line "
     "quality, how eyes/faces/anatomy are drawn, shading method, recurring "
     "textures or motifs. Output ONLY a comma-separated list of 6-8 short "
-    "concrete phrases. NEVER name characters, people, places or the style itself.")
+    "concrete phrases. NEVER name characters, people, places or the style itself. "
+    "If you do not actually know this style or artist, output exactly UNKNOWN — "
+    "never guess.")
 _IDIOM_FEWSHOT = [
     {'role': 'user', 'content': "Style: Moebius"},
     {'role': 'assistant', 'content':
@@ -1622,6 +1624,10 @@ def style_idiom_recall(style_source: str, text_model: str,
     except Exception as e:
         print(f"  [style] idiom recall failed: {e}")
         return []
+    if 'unknown' in (reply or '').strip().lower()[:12]:
+        print(f"  [style] idiom recall: model does not know '{src}' — using the reference read only")
+        _IDIOM_RECALL_CACHE[key] = []
+        return []
     phrases = _idiom_phrases(reply, src, max_words)
     if phrases:
         print(f"  [style] idiom recalled for '{src}': {', '.join(phrases)}")
@@ -1659,7 +1665,38 @@ def style_idiom_seen(image_path, style_source: str, vision_model: str,
     return out
 
 
-def style_staging_recall(style_source: str, text_model: str) -> str:
+def style_staging_seen(image_path, vision_model: str) -> str:
+    """Staging + register READ from the reference itself: how THIS picture
+    stages its scene (setting, props, lighting, camera) and its tone. The
+    grounded fallback when the language model does not know the named
+    source (an unknown name would otherwise be answered with a confident
+    guess — 'grim gothic ruins' for a serene line artist)."""
+    if image_path is None or not vision_model:
+        return ''
+    try:
+        import mlx_llm
+        reply = mlx_llm.vision(
+            str(image_path),
+            "Write exactly two sentences about how this picture STAGES its scene. "
+            "Sentence 1: the kind of setting, the props and objects, the lighting and "
+            "the camera distance. Sentence 2: its TONAL REGISTER (for example deadpan "
+            "absurd, gentle whimsy, grim gothic, serene wonder). Describe the setting "
+            "and props generically; do NOT describe the people or creatures in it, "
+            "and never name anyone.",
+            model=vision_model, max_tokens=120, temperature=0.0)
+    except Exception as e:
+        print(f"  [style] staging read failed: {e}")
+        return ''
+    text = ' '.join((reply or '').split())
+    sents = [x.strip() for x in re.split(r'(?<=[.!?])\s+', text) if x.strip()]
+    out = ' '.join(sents[:2])
+    if out:
+        print(f"  [style] staging seen in reference: {out}")
+    return out
+
+
+def style_staging_recall(style_source: str, text_model: str,
+                         image_path=None, vision_model: str = '') -> str:
     """How a NAMED style STAGES a scene and its tonal register — for the
     scene writer, not the image model. The drawing idiom says how lines and
     faces look; this says what the artist would put in the frame around the
@@ -1679,6 +1716,8 @@ def style_staging_recall(style_source: str, text_model: str) -> str:
                     "STAGES a scene — typical settings, props, lighting and camera "
                     "distance. Do NOT describe its recurring cast or any character "
                     "types (the subject of each picture is supplied separately). "
+                    "If you do not actually know this style or artist, output exactly "
+                    "UNKNOWN — never guess. "
                     "Sentence 2: its TONAL REGISTER (for example "
                     "deadpan absurd, gentle whimsy, grim gothic, serene wonder). Plain "
                     "concrete language. Describe props and settings GENERICALLY (a ray "
@@ -1696,7 +1735,10 @@ def style_staging_recall(style_source: str, text_model: str) -> str:
             model=_preferred_idiom_model(text_model), max_tokens=120, temperature=0.0)
     except Exception as e:
         print(f"  [style] staging recall failed: {e}")
-        return ''
+        return style_staging_seen(image_path, vision_model)
+    if 'unknown' in (reply or '').strip().lower()[:12]:
+        print(f"  [style] staging recall: model does not know '{src}' — reading the reference")
+        return style_staging_seen(image_path, vision_model)
     text = ' '.join((reply or '').split())
     src_words = {w.lower() for w in re.findall(r'[A-Za-z]{3,}', src)} - {'and', 'the', 'von', 'van', 'der'}
     keep = []
@@ -1712,7 +1754,8 @@ def style_staging_recall(style_source: str, text_model: str) -> str:
     out = ' '.join(keep[:2])
     if out:
         print(f"  [style] staging for '{src}': {out}")
-    return out
+        return out
+    return style_staging_seen(image_path, vision_model)
 
 
 def style_idiom_descriptors(style_source: str, text_model: str,
