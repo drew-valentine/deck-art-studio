@@ -777,15 +777,19 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     safe_flavor = _strip_franchise_sentences(flavor,
                                              style_source_name or style_hint)
 
+    # Rules text is game mechanics, not imagery: "exile cards from the top of
+    # your library" made an enchantment a library twice. Only creatures and
+    # planeswalkers get it (keywords like flying / menace are visual).
+    rules_line = f"Rules: {oracle}\n" if card_type in ('creature', 'planeswalker') and oracle else ""
     user_msg = (
-        f"Card: {name}\nType: {type_line}\nRules: {oracle}\n"
+        f"Card: {name}\nType: {type_line}\n{rules_line}"
         + (f"Flavor text (use this as the THEMATIC ANCHOR for the scene): {safe_flavor}\n" if safe_flavor else "")
         + f"Direction: {guidance}\n"
         + "Keep it simple: one subject, one setting, one action, two sentences.\n"
         + (f"User steer (OVERRIDES the reference description wherever they "
            f"conflict): {steer.strip()}\n" if steer and steer.strip() else "")
         + f"Reference description: {base_desc}\n"
-        f"Ground the scene in this card's flavor and rules — concrete subjects, not "
+        f"Ground the scene in this card's name and flavor — concrete subjects, not "
         f"abstract energy. Rewrite into a scene description (two short sentences):"
     )
 

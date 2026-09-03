@@ -567,3 +567,20 @@ def test_scene_writer_prompt_treats_zones_as_game_terms():
     import inspect, prompt_generator as pg
     src = inspect.getsource(pg.generate_subject_with_ai)
     assert "game ZONES, not places" in src
+
+
+def test_writer_omits_rules_text_for_noncreatures(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    seen = {}
+    def chat(messages, **kw):
+        seen['user'] = messages[1]['content']; return "A storm of dragons breaks the gate. Sunlight."
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    ench = {'name': 'Breaching Dragonstorm', 'type_line': 'Enchantment', 'card_type': 'enchantment',
+            'oracle_text': 'exile cards from the top of your library until you exile a nonland card.'}
+    pg.generate_subject_with_ai(ench, None, backend='local', local_model='m')
+    assert 'library' not in seen['user']
+    crt = {'name': 'Keiga, the Tide Star', 'type_line': 'Legendary Creature — Dragon Spirit',
+           'card_type': 'creature', 'oracle_text': 'Flying', 'subtypes': ['Dragon', 'Spirit']}
+    pg.generate_subject_with_ai(crt, None, backend='local', local_model='m')
+    assert 'Rules: Flying' in seen['user']
