@@ -1994,8 +1994,12 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
         # rendered as card art); render_style_lead swaps them for a de-named
         # genre phrase + original-characters guard. Artist names pass through.
         from prompt_generator import render_style_lead
-        style_bits.append(render_style_lead(style_source, lineage=(_meta.get('style_lineage') or ''),
-                                            kind=(_meta.get('style_source_kind') or '')))
+        lead = render_style_lead(style_source, lineage=(_meta.get('style_lineage') or ''),
+                                 kind=(_meta.get('style_source_kind') or ''))
+        # experiment hook only (H24 A/B): replace the lead's phrase wholesale
+        if os.environ.get('FLUX_LEAD_OVERRIDE'):
+            lead = f"in the style of {os.environ['FLUX_LEAD_OVERRIDE']}"
+        style_bits.append(lead)
     if flux_style_prompt:
         # Image-first descriptors (the vision model read the actual inspiration,
         # reconciled with the named style if one was given). Works for ANY style,
