@@ -1535,55 +1535,124 @@ def _classify_medium_from_evidence(stored_descriptions: str, prose: str,
                                   text_model, img_desc=(prose or text)[:400])
 
 
-def style_idiom_descriptors(style_source: str, text_model: str, max_words: int = 24) -> list:
-    """Drawing-idiom descriptors for a NAMED style the language model knows
-    ("Rick and Morty" -> wobbly thin outlines, bulging eyes with pinprick
-    pupils, drooling deadpan faces, lumpy anatomy, acid-green palette ...).
-    Medium anchors are generic by design ('cel animation, cartoonish'); the
-    idiom is what makes a named style recognizable, and the render lead may
-    not carry the name (franchises are de-named to keep their cast out). Runs
-    once per distillation at temperature 0 and is stored with the block, so
-    re-analyzing reproduces it. Never names characters. [] on failure."""
+_IDIOM_SYSTEM = (
+    "You are an art director. Given the name of an art style, artist, show or "
+    "movement, list the VISUAL DRAWING IDIOM that makes it recognizable: line "
+    "quality, how eyes/faces/anatomy are drawn, shading method, recurring "
+    "textures or motifs. Output ONLY a comma-separated list of 6-8 short "
+    "concrete phrases. NEVER name characters, people, places or the style itself.")
+_IDIOM_FEWSHOT = [
+    {'role': 'user', 'content': "Style: Moebius"},
+    {'role': 'assistant', 'content':
+        "thin precise pen line, elongated faces with sparse features, flat "
+        "shaded forms, stiff elegant poses, recurring spirals and curves, "
+        "vast empty desert spaces"},
+]
+_IDIOM_PALETTE_WORDS = ('palette', 'color', 'colour', 'tones', 'hues')
+_IDIOM_MAX_WORDS = 40
+
+
+def _preferred_idiom_model(text_model: str) -> str:
+    """Idiom recall is knowledge work: the 3B model answers 'exaggerated,
+    angular, metallic textures' for a show it half-knows, the 8B model gets
+    the line, faces and motifs right. It runs once per distillation, so use
+    the larger model whenever its weights are already on disk."""
+    try:
+        from pathlib import Path
+        hub = Path.home() / '.cache' / 'huggingface' / 'hub'
+        if (hub / 'models--mlx-community--Llama-3.1-8B-Instruct-4bit').exists():
+            return 'llama3.1:8b'
+    except Exception:
+        pass
+    return text_model
+
+
+def _idiom_phrases(text: str, style_source: str, max_words: int) -> list:
+    """Split a comma list into idiom phrases, dropping leaks (Capitalized
+    tokens, words from the source name) and palette phrases (palette comes
+    from the evidence pass, not from recall — recall gets it wrong)."""
+    src_words = {w.lower() for w in re.findall(r'[A-Za-z]{3,}', style_source or '')} - {'and', 'the', 'von', 'van', 'der'}
+    out, seen, count = [], set(), 0
+    for phrase in re.split(r'[,\n]+', (text or '').strip().split('\n')[0]):
+        phrase = re.sub(r'^(and|or)\s+', '', phrase.strip().strip('.;:"\'')).strip()
+        toks = phrase.split()
+        if not toks or len(toks) > 8:
+            continue
+        low = [t.lower().strip('.,') for t in toks]
+        if any(t[:1].isupper() for t in toks) or any(t in src_words for t in low):
+            continue
+        if any(t.startswith(w) for t in low for w in _IDIOM_PALETTE_WORDS):
+            continue
+        key = ' '.join(low)
+        if key in seen or count + len(toks) > max_words:
+            continue
+        seen.add(key); out.append(phrase); count += len(toks)
+    return out
+
+
+def style_idiom_recall(style_source: str, text_model: str,
+                       max_words: int = _IDIOM_MAX_WORDS) -> list:
+    """What the language model KNOWS about a named style's drawing idiom
+    (line, faces, anatomy, shading, motifs). Deterministic (temperature 0),
+    so it belongs to the block's foundation. Never palette, never names."""
     src = (style_source or '').strip().replace('&', 'and')
     if not src:
         return []
     try:
         import mlx_llm
         reply = mlx_llm.chat(
-            messages=[
-                {'role': 'system', 'content':
-                    "You are an art director. Given the name of an art style, artist, "
-                    "show or movement, list the VISUAL DRAWING IDIOM that makes it "
-                    "recognizable: line quality, how eyes/faces/anatomy are drawn, "
-                    "shading, color tendencies, recurring textures or motifs. Output "
-                    "ONLY a comma-separated list of 6-8 short concrete phrases. NEVER "
-                    "name characters, people, places or the style itself."},
-                {'role': 'user', 'content': "Style: Dr. Seuss"},
-                {'role': 'assistant', 'content':
-                    "loose wobbly pen line, curved architecture with no straight lines, "
-                    "tufted trees and fur, sparse white backgrounds, flat pastel fills, "
-                    "long bendy limbs, whimsical impossible contraptions"},
-                {'role': 'user', 'content': f"Style: {src}"},
-            ],
-            model=text_model, max_tokens=90, temperature=0.0,
-        )
+            messages=[{'role': 'system', 'content': _IDIOM_SYSTEM}] + _IDIOM_FEWSHOT
+                     + [{'role': 'user', 'content': f"Style: {src}"}],
+            model=_preferred_idiom_model(text_model), max_tokens=90, temperature=0.0)
     except Exception as e:
-        print(f"  [style] idiom expansion failed: {e}")
+        print(f"  [style] idiom recall failed: {e}")
         return []
-    line = _clean_descriptors(reply or '', style_source, max_descriptors=8, reorder=False)
-    src_words = {w.lower() for w in re.findall(r'[A-Za-z]{3,}', src)}
-    out, count = [], 0
-    for phrase in [p.strip() for p in line.split(',') if p.strip()]:
-        toks = phrase.split()
-        # idiom phrases are common nouns; a Capitalized token or a word from
-        # the source name is a character/creator leaking through
-        if any(t[:1].isupper() for t in toks) or any(t.lower().strip('.,') in src_words for t in toks):
-            continue
-        n = len(toks)
-        if count + n > max_words:
-            break
-        out.append(phrase); count += n
+    phrases = _idiom_phrases(reply, src, max_words)
+    if phrases:
+        print(f"  [style] idiom recalled for '{src}': {', '.join(phrases)}")
+    return phrases
+
+
+def style_idiom_seen(image_path, style_source: str, vision_model: str,
+                     exclude=(), max_words: int = _IDIOM_MAX_WORDS) -> list:
+    """What the vision model SEES of the idiom in a reference when told whose
+    work it is. An enrichment (a VLM read), so it goes after the foundation.
+    Phrases already in ``exclude`` are dropped."""
+    src = (style_source or '').strip().replace('&', 'and')
+    if not src or image_path is None or not vision_model:
+        return []
+    try:
+        import mlx_llm
+        seen = mlx_llm.vision(
+            str(image_path),
+            f"This image is from the work of {src}. Describe the DRAWING IDIOM that "
+            "makes this style recognizable, as visible in this image: line quality "
+            "(weight, wobble, cleanliness), how eyes, faces and anatomy are drawn, "
+            "shading method, recurring textures or motifs. Output ONLY a comma-"
+            "separated list of 6-8 short concrete phrases. Never name characters, "
+            "people, places or the creator.",
+            model=vision_model, max_tokens=120, temperature=0.0)
+    except Exception as e:
+        print(f"  [style] idiom reading failed: {e}")
+        return []
+    have = {p.lower() for p in exclude}
+    budget = max_words - sum(len(p.split()) for p in exclude)
+    out = [p for p in _idiom_phrases(seen, src, max(budget, 0)) if p.lower() not in have]
+    if out:
+        print(f"  [style] idiom seen in reference: {', '.join(out)}")
     return out
+
+
+def style_idiom_descriptors(style_source: str, text_model: str,
+                            image_path=None, vision_model: str = '',
+                            max_words: int = _IDIOM_MAX_WORDS) -> list:
+    """Recall + seen, merged and capped (see the two helpers). Medium anchors
+    are generic by design ('cel animation, cartoonish'); the idiom is what
+    makes a named style recognizable, and the render lead may not carry the
+    name (franchises are de-named to keep their cast out)."""
+    recall = style_idiom_recall(style_source, text_model, max_words)
+    return recall + style_idiom_seen(image_path, style_source, vision_model,
+                                     exclude=recall, max_words=max_words)
 
 
 def _medium_anchors(medium: str) -> list:
@@ -1598,7 +1667,7 @@ def _medium_anchors(medium: str) -> list:
 def build_flux_style_block(image_path, style_source: str = '',
                            vision_model: str = 'llava:7b',
                            text_model: str = 'llama3.1:8b',
-                           max_words: int = 64,
+                           max_words: int = 90,
                            stored_descriptions: str = '') -> str:
     """Procedural style block: deterministic foundation, VLM as enrichment.
 
@@ -1727,11 +1796,13 @@ def build_flux_style_block(image_path, style_source: str = '',
     parts = list(anchors)
     # named-style idiom (see style_idiom_descriptors) sits right after the
     # medium anchors — the earliest, heaviest-weighted tokens after the lead
-    if style_source:
-        parts.extend(style_idiom_descriptors(style_source, text_model))
+    recalled = style_idiom_recall(style_source, text_model) if style_source else []
+    parts.extend(recalled)            # deterministic knowledge: foundation
     if hues:
         parts.append('palette of ' + ', '.join(hues))
     parts.extend(motifs)
+    if style_source:                  # a VLM read: enrichment, after the foundation
+        parts.extend(style_idiom_seen(image_path, style_source, vision_model, exclude=recalled))
     if influence:
         parts.append(influence)
     out, count = [], 0

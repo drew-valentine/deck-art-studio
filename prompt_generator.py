@@ -516,7 +516,7 @@ _PREAMBLE_RE = re.compile(
     r"[^\n:]{0,120}:\s*", re.IGNORECASE)
 
 
-def _limit_scene_sentences(text: str, max_sentences: int = 2) -> str:
+def _limit_scene_sentences(text: str, max_sentences: int = 2, max_words: int = 45) -> str:
     """Composition backstop: keep the first ``max_sentences`` sentences. The
     scene writer is asked for two; a third almost always introduces a second
     focal element (a shark beside the dragon, a gravestone beside the dock)."""
@@ -524,7 +524,17 @@ def _limit_scene_sentences(text: str, max_sentences: int = 2) -> str:
     if not text:
         return text
     parts = _re.split(r'(?<=[.!?])\s+', text.strip())
-    return ' '.join(parts[:max_sentences]).strip()
+    out = ' '.join(parts[:max_sentences]).strip()
+    # word cap: the writer front-loads the focal subject, so trailing clauses
+    # are where the second turtle / cat pile / soldier crowd arrives — cut at
+    # the last clause boundary before the cap
+    words = out.split()
+    if len(words) > max_words:
+        head = ' '.join(words[:max_words])
+        cut = max(head.rfind(', '), head.rfind('; '), head.rfind('. '))
+        head = head[:cut] if cut > len(head) // 2 else head
+        out = head.rstrip(' ,;') + '.'
+    return out
 
 
 def _strip_chat_preamble(text: str) -> str:
@@ -621,7 +631,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         "COMPOSITION RULE (critical): ONE focal subject, ONE setting, ONE action. "
         "Do not add secondary creatures, characters, or props unless the card's own "
         "text names them — a 4-step image model cannot resolve competing focal points, "
-        "so every extra element muddies the picture. Two sentences maximum. "
+        "so every extra element muddies the picture. Two SHORT sentences, under 40 words total. "
         "Be inventive and VARY it each time: choose a fresh setting, camera angle, "
         "distance, time of day, weather, and composition so re-rolls feel distinct "
         "rather than repeating the same scene — but always keep the same focal subject. "

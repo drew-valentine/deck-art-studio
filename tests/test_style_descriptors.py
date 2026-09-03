@@ -401,15 +401,21 @@ class TestUndeclaredSourceMedium:
 def test_style_idiom_descriptors_uses_llm_and_caps_words(monkeypatch):
     import sys, types
     import vision_analyzer as va
-    fake = types.SimpleNamespace(chat=lambda **kw: (
-        "wobbly thin outlines, bulging eyes with pinprick pupils, drooling deadpan faces, "
-        "lumpy simplified anatomy, acid-green and purple palette, scribbly line detail, "
-        "flat cel shading, Rick Sanchez"))
+    monkeypatch.setattr(va, '_preferred_idiom_model', lambda m: m)
+    fake = types.SimpleNamespace(
+        chat=lambda **kw: (
+            "wobbly thin outlines, bulging eyes with pinprick pupils, drooling deadpan faces, "
+            "lumpy simplified anatomy, muted and dark color palette, scribbly line detail, "
+            "flat cel shading, Rick Sanchez"),
+        vision=lambda *a, **kw: "wobbly thin outlines, vibrant colors, sci-fi gadgetry and machinery")
     monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
-    out = va.style_idiom_descriptors('Rick & Morty', 'm', max_words=24)
-    assert out and out[0].startswith('wobbly')
-    assert sum(len(p.split()) for p in out) <= 24
+    out = va.style_idiom_descriptors('Rick & Morty', 'm', image_path='x.png', vision_model='v', max_words=40)
+    assert out[0] == 'wobbly thin outlines'
+    assert 'sci-fi gadgetry and machinery' in out          # merged from the vision read
+    assert out.count('wobbly thin outlines') == 1          # de-duplicated
+    assert sum(len(p.split()) for p in out) <= 40
     assert not any(w.lower() in ('rick', 'sanchez', 'morty') for p in out for w in p.split())
+    assert not any('palette' in p or 'colors' in p for p in out)   # palette is evidence work
 
 
 def test_style_idiom_descriptors_empty_source_or_failure(monkeypatch):
@@ -423,8 +429,8 @@ def test_style_idiom_descriptors_empty_source_or_failure(monkeypatch):
 
 def test_block_carries_idiom_after_anchors(monkeypatch):
     import vision_analyzer as va
-    monkeypatch.setattr(va, 'style_idiom_descriptors',
-                        lambda src, model, max_words=24: ['wobbly thin outlines', 'bulging eyes'])
+    monkeypatch.setattr(va, 'style_idiom_recall', lambda src, model, **kw: ['wobbly thin outlines', 'bulging eyes'])
+    monkeypatch.setattr(va, 'style_idiom_seen', lambda *a, **kw: [])
     monkeypatch.setattr(va, 'analyze_inspiration_style', lambda *a, **k: {})
     block = va.build_flux_style_block(
         'unused.png', style_source='Rick & Morty', text_model='m',
