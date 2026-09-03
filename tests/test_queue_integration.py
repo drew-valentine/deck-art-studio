@@ -298,15 +298,19 @@ def test_inspect_render_derives_defects_from_counts(monkeypatch):
         'I cannot tell.',
     ])
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: next(answers)))
+    monkeypatch.setattr(va, '_edge_marks_present', lambda path, vm: True)   # confirm every text/signature flag
     assert va.inspect_render('x.png', 'Krark', 'creature', 'v') == []
     assert va.inspect_render('x.png', 'Krark', 'creature', 'v') == ['extra limbs', 'malformed hands', 'signature']
     assert va.inspect_render('x.png', 'Keiga', 'creature', 'v') == ['doubled head', 'duplicated subject', 'text']
     assert va.inspect_render('x.png', 'Glissa', 'creature', 'v') == ['subject missing']
     assert va.inspect_render('x.png', 'Glissa', 'creature', 'v') is None
-    # object cards ignore anatomy counts but still flag text / signature / copies
+    # object cards ignore anatomy counts and copies but still flag text / signature
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(
-        vision=lambda *a, **k: 'heads=1; arms=3; hands=3; copies=1; text=no; signature=yes; subject=yes; hands_ok=no'))
+        vision=lambda *a, **k: 'heads=1; arms=3; hands=3; copies=3; text=no; signature=yes; subject=yes; hands_ok=no'))
     assert va.inspect_render('x.png', 'Sol Ring', 'artifact', 'v') == ['signature']
+    # an unconfirmed signature flag (clean edge strips) is dropped
+    monkeypatch.setattr(va, '_edge_marks_present', lambda path, vm: False)
+    assert va.inspect_render('x.png', 'Sol Ring', 'artifact', 'v') == []
     assert va.inspect_render(None, 'x', 'creature', 'v') is None
 
 

@@ -1877,13 +1877,50 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
             defects.append('malformed hands')
         if c.get('subject', True) is False:
             defects.append('subject missing')
-    if c.get('copies', 1) > 1:
-        defects.append('duplicated subject')
-    if c.get('text') is True:
-        defects.append('text')
-    if c.get('signature') is True:
-        defects.append('signature')
+        if c.get('copies', 1) > 1:        # a procession or a crowd is a scene, not a defect
+            defects.append('duplicated subject')
+    # Text / signature: the whole-image yes/no fires on almost every card.
+    # Confirm on the edge strips where marks actually sit — a crop with real
+    # letters in it is an easy yes, a crop without is an easy no.
+    if c.get('text') is True or c.get('signature') is True:
+        if _edge_marks_present(image_path, vision_model):
+            defects.append('text' if c.get('text') is True else 'signature')
     return defects
+
+
+def _edge_marks_present(image_path, vision_model: str) -> bool:
+    """Crop the bottom and top strips of the render and ask, per strip,
+    whether letters, numerals, handwriting or a signature are visible.
+    Any yes confirms the whole-image flag."""
+    try:
+        from PIL import Image
+        import tempfile, os as _os
+        import mlx_llm
+        im = Image.open(image_path).convert('RGB')
+        w, h = im.size
+        strips = [im.crop((0, int(h * 0.86), w, h)), im.crop((0, 0, w, int(h * 0.14)))]
+        for strip in strips:
+            fd, path = tempfile.mkstemp(suffix='.png', prefix='inspect_strip_')
+            _os.close(fd)
+            try:
+                strip.save(path)
+                reply = mlx_llm.vision(
+                    path,
+                    "Look only at this strip. Are there any letters, words, numerals, "
+                    "handwriting, a signature or a copyright mark visible? Answer "
+                    "exactly marks=yes or marks=no.",
+                    model=vision_model, max_tokens=8, temperature=0.0)
+            finally:
+                try:
+                    _os.remove(path)
+                except OSError:
+                    pass
+            if 'marks=yes' in (reply or '').lower().replace(' ', ''):
+                return True
+        return False
+    except Exception as e:
+        print(f"  [inspect] edge check failed: {e}")
+        return True          # keep the whole-image flag when the check cannot run
 
 
 def style_staging_seen(image_path, vision_model: str) -> str:
