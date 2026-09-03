@@ -77,7 +77,20 @@ def _pool_token_grid(emb, k):
     return grid.reshape(b, k * k, d)
 
 
-_REDUX_STATE = {"k": 0, "cache": {}, "average": True}
+_REDUX_STATE = {"k": 0, "cache": {}, "average": True,
+                # block-selective injection (see _install_block_mask)
+                "n_ref_tokens": 0, "txt_tokens": 0,
+                "allow_double": None, "allow_single": None, "cur": None}
+
+# Which FLUX blocks may SEE the reference tokens. Found by sweep (2026-09-03):
+# with the reference visible in every block, a full-strength reference is
+# cloned (its figures and layout replace the card's subject); restricted to the
+# EARLY DOUBLE blocks the same reference carries its medium, palette and stroke
+# while the card keeps its own subject. Single blocks and late double blocks
+# are where content leaks — the same style/content split the SDXL pipeline's
+# IP-Adapter exploited by injecting into one up-block only.
+STYLE_BLOCKS_DOUBLE = tuple(range(0, 10))
+STYLE_BLOCKS_SINGLE = ()
 
 
 def _redux_weights_cached() -> bool:
@@ -88,6 +101,50 @@ def _redux_weights_cached() -> bool:
         return isinstance(try_to_load_from_cache(REDUX_REPO, "image_embedder/diffusion_pytorch_model.safetensors"), str)
     except Exception:
         return False
+
+
+def _install_block_mask():
+    """Patch FLUX attention ONCE so reference tokens are masked out of every
+    block except the allowed style blocks. Reference tokens sit at positions
+    [T, T+R) of the joint sequence (after the T text tokens); an additive -1e9
+    on those key positions hides them from that block's attention."""
+    from mflux.models.flux.model.flux_transformer.common import attention_utils as AU
+    from mflux.models.flux.model.flux_transformer.joint_transformer_block import JointTransformerBlock
+    from mflux.models.flux.model.flux_transformer.single_transformer_block import SingleTransformerBlock
+    if getattr(AU.AttentionUtils, "_das_block_mask", False):
+        return
+    import mlx.core as mx
+    original = AU.AttentionUtils.compute_attention
+
+    def _masked(query, key, value, batch_size, num_heads, head_dim, mask=None):
+        st = _REDUX_STATE
+        cur, R, T = st["cur"], st["n_ref_tokens"], st["txt_tokens"]
+        if cur is not None and R > 0:
+            kind, idx = cur
+            allowed = st["allow_double"] if kind == "d" else st["allow_single"]
+            if allowed is not None and idx not in allowed:
+                Lk = key.shape[2]
+                if T + R <= Lk:
+                    m = mx.concatenate([mx.zeros((T,), dtype=query.dtype),
+                                        mx.full((R,), -1e9, dtype=query.dtype),
+                                        mx.zeros((Lk - T - R,), dtype=query.dtype)]).reshape(1, 1, 1, Lk)
+                    mask = m if mask is None else mask + m
+        return original(query, key, value, batch_size, num_heads, head_dim, mask=mask)
+
+    AU.AttentionUtils.compute_attention = staticmethod(_masked)
+    jc, sc = JointTransformerBlock.__call__, SingleTransformerBlock.__call__
+
+    def _jcall(self, *a, **kw):
+        _REDUX_STATE["cur"] = ("d", self.layer)
+        return jc(self, *a, **kw)
+
+    def _scall(self, *a, **kw):
+        _REDUX_STATE["cur"] = ("s", self.layer)
+        return sc(self, *a, **kw)
+
+    JointTransformerBlock.__call__ = _jcall
+    SingleTransformerBlock.__call__ = _scall
+    AU.AttentionUtils._das_block_mask = True
 
 
 def _install_redux_pooling():
@@ -132,7 +189,8 @@ def _install_redux_pooling():
             # have in common (medium, palette, stroke) — measured cleaner and
             # leak-free versus any single reference at the same budget, and it
             # costs one reference's worth of tokens no matter how many are used.
-            return [sum(embs) / len(embs)]
+            embs = [sum(embs) / len(embs)]
+        _REDUX_STATE["n_ref_tokens"] = sum(int(e.shape[1]) for e in embs)
         return embs
 
     RU.ReduxUtil.embed_images = staticmethod(_embed_images)
@@ -170,6 +228,7 @@ class _Engine:
         cfg = self._model_config(model_key)
         if want_redux:
             _install_redux_pooling()
+            _install_block_mask()
             # mflux hardcodes the gated official repo for the Redux weights;
             # point its config at the mirror (or whatever MFLUX_REDUX_REPO says).
             _orig = ModelConfig.dev_redux
@@ -258,18 +317,29 @@ class _Engine:
         n_steps = int(req.get("steps") or 4)
         self._ensure_model(model_key, want_redux=bool(ref_images))
         if self._kind == "redux":
-            tokens = int(redux.get("tokens") or 25)
+            tokens = int(redux.get("tokens") or 729)
             strength = float(redux.get("strength") or 1.0)
             _REDUX_STATE["average"] = bool(redux.get("average", True))
+            blocks = redux.get("blocks") or {}
+            _REDUX_STATE["allow_double"] = (set(blocks["double"]) if blocks.get("double") is not None
+                                            else set(STYLE_BLOCKS_DOUBLE))
+            _REDUX_STATE["allow_single"] = (set(blocks["single"]) if blocks.get("single") is not None
+                                            else set(STYLE_BLOCKS_SINGLE))
+            _REDUX_STATE["txt_tokens"] = int(self._flux.model_config.max_sequence_length)
+            _REDUX_STATE["n_ref_tokens"] = 0
             _REDUX_STATE["k"] = max(1, int(round(tokens ** 0.5))) if ref_images else 0
             _log(f"redux {w}x{h} steps={n_steps} refs={len(ref_images)}"
                  f"{' (averaged)' if len(ref_images) > 1 and _REDUX_STATE['average'] else ''} "
                  f"tokens={_REDUX_STATE['k'] ** 2 if ref_images else 0} "
                  f"strength={strength}: {prompt[:80]}")
-            result = self._flux.generate_image(
-                seed=seed, prompt=prompt, num_inference_steps=n_steps, width=w, height=h,
-                redux_image_paths=ref_images,
-                redux_image_strengths=[strength] * len(ref_images))
+            try:
+                result = self._flux.generate_image(
+                    seed=seed, prompt=prompt, num_inference_steps=n_steps, width=w, height=h,
+                    redux_image_paths=ref_images,
+                    redux_image_strengths=[strength] * len(ref_images))
+            finally:
+                _REDUX_STATE["cur"] = None
+                _REDUX_STATE["n_ref_tokens"] = 0
         else:
             _log(f"txt2img {w}x{h} steps={n_steps}: {prompt[:80]}")
             result = self._flux.generate_image(

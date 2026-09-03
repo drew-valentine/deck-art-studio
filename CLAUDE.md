@@ -67,11 +67,12 @@ decks/<deck-slug>/
   and appends the deck's inspiration images as reference tokens — the IP-Adapter role the SDXL
   pipeline had. Weights come from the ungated mirror `Runware/FLUX.1-Redux-dev` (override with
   `MFLUX_REDUX_REPO`; mflux hardcodes the gated official repo, so the worker patches
-  `ModelConfig.dev_redux`). The style dial is TOKEN POOLING (`_pool_token_grid`), not Redux's
-  scalar strength: 81 (Balanced, the CEILING — `STYLE_REFERENCE_MAX_TOKENS`) = full idiom
-  but the references' figures start displacing the card's subject, 25 (default) = medium +
-  palette with the card's own subject, 9 = palette only; 729 (a variation of the reference)
-  is deliberately unreachable. References with prominent characters leak
+  `ModelConfig.dev_redux`). KEY MECHANISM: **block-selective injection** (`_install_block_mask`)
+  — reference tokens are masked out of attention in every FLUX block except the early DOUBLE
+  blocks (`STYLE_BLOCKS_DOUBLE` = 0-9): injected everywhere a reference is CLONED (its figures
+  replace the subject); in the style blocks only, it carries medium/palette/stroke and the card
+  keeps its subject at the full 729-token grid. `tokens` is then a pure strength dial
+  (81 light / 256 medium / 729 strong = default); `_pool_token_grid` pools the 27x27 grid. References with prominent characters leak
   them above Subtle — the image channel bypasses the text-side franchise de-naming. Per-deck setting `deck.json.style_reference` {enabled, tokens,
   strength, max_images, average}; API `/api/decks/<id>/style-reference`. References are AVERAGED
   (element-wise mean of the pooled tokens across up to `STYLE_REFERENCE_MAX_IMAGES`=4 refs): content

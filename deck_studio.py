@@ -1697,21 +1697,20 @@ def _build_negative_fallback(style_tokens: dict, deck_meta: dict) -> str:
 # Style reference (FLUX Redux) — the deck's inspiration IMAGES steer every
 # render, restoring the IP-Adapter role the SDXL pipeline had before the MLX
 # migration (a papyrus deck's March render screamed Egypt with a feeble text
-# prompt; every text-only FLUX render since was generic fantasy). `tokens` is
-# the per-image budget after grid pooling — the real dial: 9 = palette only,
-# 25 = the reference's medium/palette with the card's own subject, 81 = the
-# reference's full idiom but its figures/layout start to displace the subject
-# (a 16-card validation matrix: at 81 tokens x 4 refs, artifacts and lands
-# rendered the references' characters; at 25 the subjects returned), 729 = a
-# variation of the reference. Every reference's tokens add its CONTENT (four
-# refs concatenated at 25 each leaked figures and objects), so references are
-# AVERAGED by default: the element-wise mean over up to STYLE_REFERENCE_MAX_IMAGES
-# references cancels each image's content and keeps the shared style — cleaner
-# and leak-free versus any single reference, at one reference's token cost.
-# `average: false` falls back to concatenating (then keep max_images at 1).
-STYLE_REFERENCE_DEFAULT = {'enabled': True, 'tokens': 25, 'strength': 1.0, 'max_images': 4, 'average': True}
+# prompt; every text-only FLUX render since was generic fantasy).
+#
+# The worker injects the reference tokens into FLUX's EARLY DOUBLE BLOCKS only
+# (flux_worker.STYLE_BLOCKS_DOUBLE). That block split is what makes this work:
+# injected everywhere, a full-strength reference is cloned (its figures and
+# layout replace the card's subject); restricted to the style blocks, the same
+# reference carries its medium, palette and stroke while the card keeps its own
+# subject — measured on the Moebius, Seuss and Egyptian decks at the full
+# 729-token grid. `tokens` is therefore a pure strength dial (9 palette-only …
+# 729 full), and references are AVERAGED (element-wise mean over up to
+# STYLE_REFERENCE_MAX_IMAGES images) so what they share dominates.
+STYLE_REFERENCE_DEFAULT = {'enabled': True, 'tokens': 729, 'strength': 1.0, 'max_images': 4, 'average': True}
 STYLE_REFERENCE_MAX_IMAGES = 4   # hard cap; the per-deck default is ONE reference
-STYLE_REFERENCE_MAX_TOKENS = 81  # 'Balanced' is the ceiling — above it the reference's content displaces the subject
+STYLE_REFERENCE_MAX_TOKENS = 729  # full Redux grid; safe at any budget now that references are injected into style blocks only
 
 
 def _style_reference_settings(meta) -> dict:
@@ -3625,7 +3624,7 @@ def set_style_source(deck_id):
 def api_style_reference(deck_id):
     """Get/set how strongly the deck's inspiration images steer renders (Redux).
     POST {enabled?, tokens?, strength?, max_images?} — tokens is the per-image
-    budget (0 = off, 9 palette-only, 25 subtle, 81 balanced — the ceiling);
+    budget (0 = off, 81 light, 256 medium, 729 strong — the full grid);
     max_images how many inspiration images are sent (default 1, cap 4)."""
     deck_dir = DECKS_DIR / deck_id
     deck_json = deck_dir / "deck.json"
@@ -8191,10 +8190,10 @@ header .separator {
         </div>
         <div class="style-source-row style-ref-row">
           <label for="styleRefSlider" class="style-source-label"
-                 title="How strongly the inspiration images themselves steer each render (FLUX Redux). Off = text only · Palette = colors only · Subtle (default) = the reference's medium and palette, each card keeps its own subject · Balanced = the reference's full idiom (references with prominent characters may leak them).">Reference strength</label>
-          <input type="range" id="styleRefSlider" class="style-ref-slider" min="0" max="3" step="1" value="2"
+                 title="How strongly the inspiration images themselves steer each render (FLUX Redux, injected into the model's style blocks only — the card keeps its own subject at every setting). Off = text only · Light · Medium · Strong (default) = the references' full medium, palette and stroke.">Reference strength</label>
+          <input type="range" id="styleRefSlider" class="style-ref-slider" min="0" max="3" step="1" value="3"
                  oninput="previewStyleReference(this.value)" onchange="saveStyleReference(this.value)">
-          <span id="styleRefLabel" class="style-ref-label">Subtle</span>
+          <span id="styleRefLabel" class="style-ref-label">Strong</span>
         </div>
         <div class="overview-btn-row">
           <button class="btn btn-secondary btn-sm" id="btnReanalyzeStyle" onclick="reanalyzeStyle()"
@@ -12424,14 +12423,14 @@ async function saveStyleSource(value) {
 // Style reference strength: slider levels -> per-image Redux token budget.
 // 729 = Redux's native 27x27 grid (a variation of the reference); pooled
 // budgets keep the style statistics and drop the reference's layout.
-// Balanced (81 pooled tokens) is the ceiling: above it the reference's own
-// figures and layout displace the card's subject, which is never what a deck
-// wants — so the dial simply doesn't go there.
+// References are injected into FLUX's style blocks only (see flux_worker),
+// so the dial is pure strength: the full 729-token grid ('Strong', default)
+// carries the reference's medium, palette and stroke without its figures.
 const STYLE_REF_LEVELS = [
-  { label: 'Off',      tokens: 0 },
-  { label: 'Palette',  tokens: 9 },
-  { label: 'Subtle',   tokens: 25 },
-  { label: 'Balanced', tokens: 81 },
+  { label: 'Off',    tokens: 0 },
+  { label: 'Light',  tokens: 81 },
+  { label: 'Medium', tokens: 256 },
+  { label: 'Strong', tokens: 729 },
 ];
 function _styleRefLevelFor(tokens) {
   let best = 0;
@@ -12447,14 +12446,14 @@ function previewStyleReference(level) {
 function loadStyleReference(cfg) {
   const slider = document.getElementById('styleRefSlider');
   if (!slider) return;
-  const tokens = (cfg && cfg.enabled !== false) ? (cfg.tokens ?? 25) : 0;
+  const tokens = (cfg && cfg.enabled !== false) ? (cfg.tokens ?? 729) : 0;
   slider.value = _styleRefLevelFor(tokens);
   previewStyleReference(slider.value);
 }
 async function saveStyleReference(level) {
   const deckId = document.getElementById('deckSelect').value;
   if (!deckId) return;
-  const lv = STYLE_REF_LEVELS[parseInt(level, 10)] || STYLE_REF_LEVELS[2];
+  const lv = STYLE_REF_LEVELS[parseInt(level, 10)] || STYLE_REF_LEVELS[3];
   previewStyleReference(level);
   try {
     const r = await fetch(`/api/decks/${deckId}/style-reference`, {
