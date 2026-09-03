@@ -468,22 +468,26 @@ def test_style_idiom_recall_is_memoized(monkeypatch):
     assert a == b == ['thin wobbly outlines', 'bulging eyes'] and len(calls) == 1
 
 
-def test_staging_recall_unknown_falls_back_to_reference_read(monkeypatch):
+def test_staging_reads_the_reference_first_then_recalls(monkeypatch):
     import sys, types
     import vision_analyzer as va
     monkeypatch.setattr(va, '_preferred_idiom_model', lambda m: m)
     fake = types.SimpleNamespace(
-        chat=lambda **kw: "UNKNOWN",
+        chat=lambda **kw: "Scenes are staged in grim gothic ruins. The register is foreboding.",
         vision=lambda *a, **kw: "The scene is a sunlit desert plateau with a lone tower, seen from far away. The register is serene wonder.")
     monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
-    out = va.style_staging_recall('Some Painter Nobody Knows', 'm', image_path='ref.png', vision_model='v')
-    assert out.startswith('The scene is a sunlit desert') and 'serene wonder' in out
-    # no source at all -> the reference read stands in (needs no name)
+    # with a reference: the read wins over the name recall
+    out = va.style_staging_recall('Some Painter', 'm', image_path='ref.png', vision_model='v')
+    assert out.startswith('The scene is a sunlit desert') and 'gothic' not in out
+    # no reference: name recall
+    assert 'grim gothic ruins' in va.style_staging_recall('Some Painter', 'm')
+    # neither name nor reference
     assert va.style_staging_recall('', 'm') == ''
-    assert va.style_staging_recall('', 'm', image_path='ref.png', vision_model='v').startswith('The scene is')
-    # idiom recall honours UNKNOWN too
+    # UNKNOWN recall -> nothing
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda **kw: "UNKNOWN"))
+    assert va.style_staging_recall('Nobody', 'm') == ''
     va._IDIOM_RECALL_CACHE.clear()
-    assert va.style_idiom_recall('Some Painter Nobody Knows', 'm') == []
+    assert va.style_idiom_recall('Nobody', 'm') == []
 
 
 def test_idiom_seen_needs_no_name(monkeypatch):
@@ -496,3 +500,15 @@ def test_idiom_seen_needs_no_name(monkeypatch):
     out = va.style_idiom_seen('ref.png', '', 'v')
     assert out == ['bold ink outlines', 'halftone dots', 'dynamic diagonal panels']
     assert asked['prompt'].startswith('This is a reference illustration.')
+
+
+def test_style_lineage_recall_filters_names_and_unknown(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    monkeypatch.setattr(va, '_preferred_idiom_model', lambda m: m)
+    va._LINEAGE_CACHE.clear()
+    replies = iter(["late-night adult animation on a cable comedy network", "UNKNOWN", "a Rick and Morty style cartoon"])
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda **kw: next(replies)))
+    assert va.style_lineage_recall('Rick & Morty', 'm') == 'late-night adult animation on a cable comedy network'
+    assert va.style_lineage_recall('Nobody Knows This', 'm') == ''
+    assert va.style_lineage_recall('Rick and Morty Show', 'm') == ''   # name leaked into the phrase -> dropped

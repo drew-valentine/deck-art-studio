@@ -1670,6 +1670,55 @@ def style_idiom_seen(image_path, style_source: str, vision_model: str,
     return out
 
 
+_LINEAGE_CACHE = {}
+
+
+def style_lineage_recall(style_source: str, text_model: str) -> str:
+    """The PRODUCTION LINEAGE of a named franchise as a short de-named phrase
+    the image model knows better than a generic genre label: the network,
+    studio, movement or era ('late-night adult animation on a cable comedy
+    network', 'mid-century children's picture book', 'French bande dessinée
+    of the Métal Hurlant era'). The render lead has to avoid the franchise
+    NAME (it summons the cast) and the hand-written genre phrase is weak;
+    the lineage is the strongest de-named handle. '' when unknown."""
+    src = (style_source or '').strip().replace('&', 'and')
+    if not src:
+        return ''
+    key = (src.lower(), text_model)
+    if key in _LINEAGE_CACHE:
+        return _LINEAGE_CACHE[key]
+    try:
+        import mlx_llm
+        reply = mlx_llm.chat(
+            messages=[
+                {'role': 'system', 'content':
+                    "You are an art historian. Given the name of a show, film, artist "
+                    "or art style, answer with ONE short phrase (under 12 words) naming "
+                    "its production lineage: the network or studio type, movement, "
+                    "medium and era — the kind of phrase an image model recognizes. "
+                    "NEVER name characters or people. If unsure, answer exactly UNKNOWN."},
+                {'role': 'user', 'content': "Style: The Simpsons"},
+                {'role': 'assistant', 'content': "1990s prime-time American animated sitcom"},
+                {'role': 'user', 'content': "Style: Moebius"},
+                {'role': 'assistant', 'content': "1970s French bande dessinée of the Métal Hurlant era"},
+                {'role': 'user', 'content': f"Style: {src}"},
+            ],
+            model=_preferred_idiom_model(text_model), max_tokens=40, temperature=0.0)
+    except Exception as e:
+        print(f"  [style] lineage recall failed: {e}")
+        return ''
+    text = ' '.join((reply or '').split()).strip().strip('."\'')
+    src_words = {w.lower() for w in re.findall(r'[A-Za-z]{3,}', src)} - {'and', 'the'}
+    toks = text.split()
+    if (not text or 'unknown' in text.lower()[:12] or len(toks) > 14
+            or any(t.lower().strip('.,') in src_words for t in toks)):
+        _LINEAGE_CACHE[key] = ''
+        return ''
+    print(f"  [style] lineage for '{src}': {text}")
+    _LINEAGE_CACHE[key] = text
+    return text
+
+
 def style_staging_seen(image_path, vision_model: str) -> str:
     """Staging + register READ from the reference itself: how THIS picture
     stages its scene (setting, props, lighting, camera) and its tone. The
@@ -1709,8 +1758,13 @@ def style_staging_recall(style_source: str, text_model: str,
     tone (deadpan absurd / whimsical / grim). Two sentences, temperature 0,
     stored with the block at distillation. Never names anyone. '' on failure."""
     src = (style_source or '').strip().replace('&', 'and')
-    if not src:
-        return style_staging_seen(image_path, vision_model)
+    # The reference is ground truth for staging: the user chose these images
+    # for what they show. A name recall guesses ("grim gothic ruins" for a
+    # serene line artist paired with an obscure name), so it is the fallback
+    # when no reference can be read.
+    seen = style_staging_seen(image_path, vision_model)
+    if seen or not src:
+        return seen
     try:
         import mlx_llm
         reply = mlx_llm.chat(
@@ -1740,10 +1794,10 @@ def style_staging_recall(style_source: str, text_model: str,
             model=_preferred_idiom_model(text_model), max_tokens=120, temperature=0.0)
     except Exception as e:
         print(f"  [style] staging recall failed: {e}")
-        return style_staging_seen(image_path, vision_model)
+        return ''
     if 'unknown' in (reply or '').strip().lower()[:12]:
-        print(f"  [style] staging recall: model does not know '{src}' — reading the reference")
-        return style_staging_seen(image_path, vision_model)
+        print(f"  [style] staging recall: model does not know '{src}'")
+        return ''
     text = ' '.join((reply or '').split())
     src_words = {w.lower() for w in re.findall(r'[A-Za-z]{3,}', src)} - {'and', 'the', 'von', 'van', 'der'}
     keep = []
@@ -1759,8 +1813,7 @@ def style_staging_recall(style_source: str, text_model: str,
     out = ' '.join(keep[:2])
     if out:
         print(f"  [style] staging for '{src}': {out}")
-        return out
-    return style_staging_seen(image_path, vision_model)
+    return out
 
 
 def style_idiom_descriptors(style_source: str, text_model: str,

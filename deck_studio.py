@@ -1878,7 +1878,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
         # rendered as card art); render_style_lead swaps them for a de-named
         # genre phrase + original-characters guard. Artist names pass through.
         from prompt_generator import render_style_lead
-        style_bits.append(render_style_lead(style_source))
+        style_bits.append(render_style_lead(style_source, lineage=(_meta.get('style_lineage') or '')))
     if flux_style_prompt:
         # Image-first descriptors (the vision model read the actual inspiration,
         # reconciled with the named style if one was given). Works for ANY style,
@@ -3136,6 +3136,11 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
     # (memoized — the block builder above already asked)
     data['style_idiom'] = (style_idiom_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
                            if style_source else [])
+    from vision_analyzer import style_lineage_recall
+    from prompt_generator import franchise_style_phrase
+    # only franchises need a de-named lead; artists/movements pass verbatim
+    data['style_lineage'] = (style_lineage_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
+                             if style_source and franchise_style_phrase(style_source) else '')
 
     with open(deck_json_path, 'w') as f:
         json.dump(data, f, indent=2)
@@ -3146,6 +3151,7 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         active_deck_meta['flux_style_prompt'] = flux_style_prompt
         active_deck_meta['style_staging'] = data['style_staging']
         active_deck_meta['style_idiom'] = data['style_idiom']
+        active_deck_meta['style_lineage'] = data['style_lineage']
 
     if tokens:
         print(f"  [distill] Style tokens saved for {deck_id}: {list(tokens.keys())}")

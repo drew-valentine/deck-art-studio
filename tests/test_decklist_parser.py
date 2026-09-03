@@ -602,3 +602,11 @@ def test_writer_puts_figure_idiom_on_creatures_only(monkeypatch):
     pg.generate_subject_with_ai(land, None, backend='local', local_model='m',
                                 figure_idiom='bulging mismatched eyes, lumpy anatomy')
     assert 'Figure idiom' not in seen['user']
+
+
+def test_render_style_lead_prefers_lineage_for_franchises():
+    from prompt_generator import render_style_lead
+    assert render_style_lead('Rick and Morty') == 'in the style of an adult animated sci-fi cartoon series, original character designs'
+    assert render_style_lead('Rick and Morty', lineage='late-night adult animation on a cable comedy network') == \
+        'in the style of late-night adult animation on a cable comedy network, original character designs'
+    assert render_style_lead('Moebius', lineage='ignored for artists') == 'in the style of Moebius'

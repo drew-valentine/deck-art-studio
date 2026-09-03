@@ -868,16 +868,19 @@ def franchise_style_phrase(style_source: str):
     return None
 
 
-def render_style_lead(style_source: str) -> str:
+def render_style_lead(style_source: str, lineage: str = '') -> str:
     """The style lead for the image-model prompt. Franchise names are replaced
-    with their de-named genre phrase plus an original-characters guard — the
-    name itself is the strongest character summons there is. Artist and
-    movement names pass through verbatim (no cast to leak)."""
+    with a de-named phrase plus an original-characters guard — the name
+    itself is the strongest character summons there is. The recalled
+    production LINEAGE (see vision_analyzer.style_lineage_recall) is the
+    preferred phrase when known; the hand-written genre phrase is the
+    fallback. Artist and movement names pass through verbatim (no cast to
+    leak)."""
     if not style_source:
         return ''
     phrase = franchise_style_phrase(style_source)
     if phrase:
-        return f"in the style of {phrase}, original character designs"
+        return f"in the style of {(lineage or '').strip() or phrase}, original character designs"
     return f"in the style of {style_source}"
 
 
