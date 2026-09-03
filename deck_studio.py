@@ -1826,7 +1826,7 @@ def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '') -> 
     lead, block = (bits[0], bits[1:]) if bits else ('', [])
     pieces = [lead, first, ', '.join(block), rest, (feedback_text or '').rstrip(' .')]
     out = '. '.join(p for p in pieces if p) + '.'
-    return out + ' No text, no words, no watermark, no card frame, no borders.'
+    return out + ' No text, no words, no signature, no watermark, no card frame, no borders.'
 
 
 def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_override=None,
