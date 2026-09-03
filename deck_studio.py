@@ -1795,6 +1795,21 @@ def _style_reference_images(meta, deck_dir) -> list:
     return paths
 
 
+def _effective_style_source(meta) -> str:
+    """The user's declared style source, else the source the analyst
+    recognized in the references (see vision_analyzer.recognized_style_source).
+    The declaration always wins; recognition only fills silence — a deck whose
+    references were recognized as a show still gets that show's render lead
+    (de-named downstream like any declaration) instead of none at all."""
+    declared = ((meta or {}).get('style_source') or '').strip()
+    if declared:
+        return declared
+    from vision_analyzer import recognized_style_source
+    return recognized_style_source(
+        [im.get('style_description', '') for im in (meta or {}).get('inspiration_images', []) or []
+         if isinstance(im, dict)])
+
+
 def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_override=None,
                     deck_meta=None, deck_dir=None):
     """Generate an image with the local FLUX model (mflux). Returns a PIL Image.
@@ -1853,7 +1868,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     # model often mislabels the medium (e.g. tagging live-action film as "digital
     # painting"), which fights the named style. We keep the accurate descriptive
     # fields — palette, lighting/coloring, mood — for concrete detail.
-    style_source = (_meta.get('style_source') or '').strip()
+    style_source = _effective_style_source(_meta)
     flux_style_prompt = (_meta.get('flux_style_prompt') or '').strip()
     st = style_tokens or {}
 
@@ -3043,7 +3058,7 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
             active_deck_meta['card_subjects'] = {}
         return
 
-    style_source = data.get('style_source', '')
+    style_source = _effective_style_source(data)   # declared, else recognized by the analyst
 
     bcfg = backend_config.load_config()
     llm_backend = 'local'  # MLX-native pipeline is always local
@@ -3967,7 +3982,7 @@ def _execute_prompt_job(job, ctx):
         unit = _face_unit_for(card, job.card_name)
         bcfg = backend_config.load_config()
         data = ctx['meta']
-        style_name = (data.get('style_source') or '').strip()
+        style_name = _effective_style_source(data)
         # The scene writer must not be TOLD the franchise name either — it
         # biases scenes toward the show's trademark settings (labs, portals,
         # garages), which are character attractors at render time.

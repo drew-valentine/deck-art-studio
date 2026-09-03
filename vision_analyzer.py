@@ -1485,6 +1485,24 @@ def _classify_style_medium(style_source: str, text_model: str,
     return ''
 
 
+def recognized_style_source(descriptions) -> str:
+    """The style source the analyst recognized in the references, when the
+    user declared none: the most common non-'Original' value of the
+    per-image 'Source:' lines ('' when nothing was recognized). The user's
+    declaration always outranks this; it is the fallback, not a competitor."""
+    import re as _re
+    from collections import Counter
+    votes = Counter()
+    for desc in (descriptions or []):
+        for ln in (desc or '').splitlines():
+            m = _re.match(r'\s*[-*\s]*source\s*:\s*(.+?)\s*$', ln, _re.IGNORECASE)
+            if m:
+                val = m.group(1).strip().strip('*').strip()
+                if val and not _re.match(r'^(original|unknown|n/?a|none)$', val, _re.IGNORECASE):
+                    votes[val] += 1
+    return votes.most_common(1)[0][0] if votes else ''
+
+
 def _classify_medium_from_evidence(stored_descriptions: str, prose: str,
                                    text_model: str) -> str:
     """Medium for a deck with NO declared style source: a deterministic
@@ -1494,8 +1512,14 @@ def _classify_medium_from_evidence(stored_descriptions: str, prose: str,
     _MEDIUM_ANCHORS key or ''."""
     import re as _re
     text = stored_descriptions or ''
+    # The analyst's own 'Source:' line counts as evidence too: with no user
+    # declaration, a recognized franchise/artist ("Source: Rick and Morty") is
+    # the strongest medium signal there is — a screenshot deck whose analyses
+    # said "typical of the show" was classified PIXEL ART because the vote
+    # only read the Art Style/Medium lines and the LLM fallback guessed.
     lines = [ln for ln in text.splitlines()
-             if _re.match(r'\s*[-*\s]*(art style|medium)\s*:', ln, _re.IGNORECASE)]
+             if _re.match(r'\s*[-*\s]*(art style|medium|source)\s*:', ln, _re.IGNORECASE)
+             and not _re.search(r'source\s*:\s*(original|unknown|n/?a)\s*$', ln, _re.IGNORECASE)]
     evidence = ' '.join(lines) if lines else (text or prose or '')
     tokens = set(_re.findall(r'[a-z0-9-]+', evidence.lower()))
     if tokens:

@@ -248,3 +248,28 @@ class TestBlockMask:
         q = np.zeros((1, 1, 6, 2), dtype=np.float32)
         jb.JointTransformerBlock(7)('x'); au.AttentionUtils.compute_attention(q, q, q, 1, 1, 2)
         assert calls[-1] is None
+
+
+
+class TestRecognizedSourceFallback:
+    """With no declared style source, the analyst's own 'Source:' line fills in
+    (medium classification + render lead); a declaration always wins."""
+
+    DESCS = ["Source: Rick and Morty\nArt Style: Digital illustration with sharp outlines\n- Medium: Digital illustration",
+             "Source: Original\nArt Style: something"]
+
+    def test_recognized_source(self):
+        from vision_analyzer import recognized_style_source
+        assert recognized_style_source(self.DESCS) == 'Rick and Morty'
+        assert recognized_style_source(["Source: Original\nArt Style: x"]) == ''
+        assert recognized_style_source([]) == ''
+
+    def test_source_line_drives_medium_vote(self):
+        from vision_analyzer import _classify_medium_from_evidence
+        assert _classify_medium_from_evidence(self.DESCS[0], '', 'm') == 'cel animation'
+
+    def test_effective_source_prefers_declaration(self):
+        meta = {'style_source': '', 'inspiration_images': [{'style_description': self.DESCS[0]}]}
+        assert ds._effective_style_source(meta) == 'Rick and Morty'
+        assert ds._effective_style_source({**meta, 'style_source': 'Moebius'}) == 'Moebius'
+        assert ds._effective_style_source({}) == ''

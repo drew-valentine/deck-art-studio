@@ -504,3 +504,17 @@ class TestOpeningExampleIsThisCard:
     def test_non_creature_example(self):
         from prompt_generator import _opening_example
         assert _opening_example({'name': 'Maze of Ith', 'type_line': 'Land', 'card_type': 'land'}) == 'Maze of Ith, ...'
+
+
+
+class TestChatPreambleStripped:
+    def test_preamble_removed(self):
+        from prompt_generator import _strip_chat_preamble
+        assert _strip_chat_preamble("Here's a rewritten description for Bountiful Landscape:\n\nA weathered dock juts out.") == 'A weathered dock juts out.'
+        assert _strip_chat_preamble("Sure! Here is the scene:\nKeiga soars.") == 'Keiga soars.'
+        assert _strip_chat_preamble("```\nKeiga soars above the waves.\n```") == 'Keiga soars above the waves.'
+
+    def test_normal_prompt_untouched(self):
+        from prompt_generator import _strip_chat_preamble
+        p = 'Keiga, the Tide Star, a Dragon Spirit, soars above the waves: foam and spray everywhere.'
+        assert _strip_chat_preamble(p) == p

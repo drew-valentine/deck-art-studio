@@ -510,6 +510,25 @@ def _article(word: str) -> str:
     return 'an' if word[:1].lower() in 'aeiou' else 'a'
 
 
+_PREAMBLE_RE = re.compile(
+    r"^\s*(?:(?:sure|certainly|of course|okay|ok)[,!.]?\s*)?"
+    r"(?:here(?:'s| is| are)|below is|this is|i(?:'ve| have) (?:rewritten|written|created))"
+    r"[^\n:]{0,120}:\s*", re.IGNORECASE)
+
+
+def _strip_chat_preamble(text: str) -> str:
+    """Small chat models sometimes answer like a chat turn — "Here is a
+    rewritten description for Bountiful Landscape:" — and that line was
+    landing in the art prompt verbatim. Drop a leading conversational lead-in
+    (anything up to the first colon that reads like an announcement) and any
+    markdown fences."""
+    if not text:
+        return text
+    out = text.strip().strip('`').strip()
+    out = _PREAMBLE_RE.sub('', out, count=1)
+    return out.strip()
+
+
 def _strip_example_leak(text: str, card: dict) -> str:
     """Backstop: if a leaked example name opens the scene and this card is not
     that card, substitute the card's own name."""
@@ -704,6 +723,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                               # degenerate into word-salad tails ("waveform GS cave
                               # events super intend impact"), so keep it lower.
         )
+        out = _strip_chat_preamble(out)
         out = _strip_franchise_sentences(out, style_source_name or style_hint)   # output backstop
         out = _strip_example_leak(out, card)
         return _ensure_creature_type_in_prompt(out, card)
