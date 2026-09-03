@@ -117,6 +117,17 @@
     - Open before ship: the m5 verdict; Blast Zone showed the reference's iconic striped hat — image-channel prop bleed, on the watch list.
     - m5/m6 prompt-order verdict: subject-early kept subjects but dropped colour on ink decks; medium-first kept colour but lost a Seuss elf; default is now lead + colour-coverage clause, subject sentence, full block, rest of scene. Differences between orders on Seuss were within single-roll variance; block content and writer output matter more. Seuss references are white-paper art with sparse fills, so pale renders are partly faithful.
     - Correction: "Aclazotz renders as a skull gate" was the BACK face (Temple of the Dead) picked by the sheet builder; the front face is a fine bat god. Sheet builder fixed; front-face writer unit fix (front name only) kept.
+  - Progress, 2026-09-03 (evening) — fixed-seed hypothesis round:
+    - Tooling: POST `/api/generate` accepts a seed (stamped in the art's `.meta.json`); every A/B below is like-for-like at a fixed seed. Sheet builder now excludes back faces.
+    - H22 (deterministic figure-idiom clause on the creature sentence): near-zero effect at seed 1234 — text barely moves creature design on schnell. Kept, low value.
+    - H24 (artist name vs de-named lineage lead, seed 4321, Seuss): signatures appear with both, so they come from the model's prior for signed picture-book art, not the name; lineage lead loses Seuss colour. Rejected; artist names stay.
+    - H28 (crop the reference token grid's border rings): signatures persist, 2 rings harms the subject. Rejected; plumbing kept off.
+    - H27 (style-block window): CONFIRMED and shipped — creatures/planeswalkers see the references in double blocks 0-14 (Keiga becomes the show's star-eyed noodle serpent, Glissa a grinning Seuss creature, Krark a comic goblin, Aclazotz a bat, Alela a papyrus figure); object/place cards keep 0-9 because at 0-14 they grow people (crowd around the signet, attendants at the tower). Verified on all five decks (m7).
+    - H21 shipped: scene checklist judged by the model with one lower-temperature re-roll (any hand/onlooker on object cards is a failure).
+    - H23 shipped: character-heavy references (vision yes/no per image) default the deck to Medium unless the user set the dial.
+    - H26 shipped: colour coverage measured from reference pixels (paper fraction, saturation); Seuss reads "coloured figures on open white paper".
+    - H25 (pick-of-two with a judge) parked: a vision judge cannot co-reside with FLUX; in-worker similarity rewards copying.
+    - Running: ab5 ("unsigned artwork" wording), then m8 = final five-deck validation on the shipped defaults.
   - Scope:
     - [x] Wire `Flux1Redux` into `flux_worker` with a token-pooling hook
     - [x] Pass each deck's inspiration images as references
@@ -132,7 +143,9 @@
     - [x] Deck-agnostic source classification (source kind + production lineage recalled with an UNKNOWN escape; keyword table demoted to fallback)
     - [x] m5 prompt-order verdict (style-first vs subject-early) — settled: lead + colour coverage, subject sentence, full block; order differences within roll variance
     - [x] Creature faces on Marchesa — the "skull gate" was the back face; front face renders correctly, sheet builder fixed
-    - [ ] Creature design on franchise decks varies with the writer's roll; ring-as-object now reliable on 3 of 4 decks
+    - [x] Creature design — per-type style-block window (creatures 0-14) makes creatures read as the source's own on all five decks (m7)
+    - [ ] m8 final validation on shipped defaults
+    - [ ] Fake signatures on artist-named ink decks (cosmetic; wording test running)
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
