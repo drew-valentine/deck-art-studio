@@ -736,7 +736,9 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                 "'volcanic fury', 'arcane energy', 'swirling vortex', 'blazing', 'exploding'."
                 f"\n\nSTAGING AND REGISTER — stage the scene the way this artist would, and "
                 f"write in their tone: {staging.strip()} Apply this to the setting, props, "
-                "posture and mood ONLY — the card's subject stays exactly what it is."
+                "posture and mood ONLY — the card's subject stays exactly what it is. "
+                "For a LAND the card's own location IS the setting (a landscape, not a "
+                "prop in a room): take only the lighting and tone from the staging."
             )
         else:
             system_msg += (
