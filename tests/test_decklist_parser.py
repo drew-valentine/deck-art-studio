@@ -661,3 +661,23 @@ def test_writer_never_returns_an_empty_prompt(monkeypatch):
     card = {'name': 'Arcane Signet', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'}
     out = pg.generate_subject_with_ai(card, None, backend='local', local_model='m')
     assert len(out.split()) >= 5 and 'signet' in out.lower()
+
+
+def test_scene_check_rerolls_an_invented_subject(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    monkeypatch.setenv('SCENE_CHECK', '1')
+    replies = iter([
+        "A signet ring sits on a desk. A golden chair nestles in the ring's center.",   # draft
+        "Fails: a chair competes for focus.",                                           # check 1
+        "A signet ring sits alone on a desk. Lantern light glints on its band.",         # re-roll
+        "OK",                                                                             # check 2
+    ])
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda messages, **kw: next(replies)))
+    card = {'name': 'Arcane Signet', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'}
+    out = pg.generate_subject_with_ai(card, None, backend='local', local_model='m')
+    assert out.startswith('A signet ring sits alone')
+    # a clean draft passes straight through with a single check
+    replies2 = iter(["A signet ring rests on an altar. Candles flicker.", "OK"])
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda messages, **kw: next(replies2)))
+    assert pg.generate_subject_with_ai(card, None, backend='local', local_model='m').startswith('A signet ring rests')

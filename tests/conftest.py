@@ -197,3 +197,13 @@ def populated_state(sample_cards):
             'has_composite': True,
         }
     return sample_cards
+
+
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _scene_check_off_by_default(monkeypatch):
+    """The writer's H21 checklist pass adds an LLM call; tests that fake a
+    single chat reply opt in explicitly with SCENE_CHECK=1."""
+    monkeypatch.setenv('SCENE_CHECK', '0')

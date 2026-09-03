@@ -7,6 +7,7 @@ type, oracle text, and creature types. Supports both rule-based and
 AI-enhanced prompt generation.
 """
 
+import os
 import re
 
 
@@ -625,6 +626,41 @@ def _limit_scene_sentences(text: str, max_sentences: int = 2, max_words: int = 4
     return out
 
 
+def _scene_problems(draft: str, card: dict, local_model: str) -> str:
+    """Checklist judgement of a scene draft against its card, by the same
+    language model at temperature 0: is the card's subject (with its creature
+    type / object) the single focal thing, with no invented creature, person
+    or prop competing, and no game-zone place? Returns '' when fine, else a
+    short list of problems. Generic — the card's own name and type only."""
+    if not draft:
+        return ''
+    name = card.get('name', '')
+    ctype = card.get('card_type', '')
+    type_line = card.get('type_line', '')
+    try:
+        import mlx_llm
+        reply = mlx_llm.chat(
+            messages=[
+                {'role': 'system', 'content':
+                    "You check card-art scene descriptions. Answer OK if ALL hold, "
+                    "otherwise list the failures in under 20 words. Rules: (1) the "
+                    "first sentence's focal subject is the card's own subject; (2) for "
+                    "a creature the creature itself is described (not only its "
+                    "surroundings); for an artifact the named object is present and "
+                    "central; for a land the location is the whole scene; (3) no "
+                    "invented second creature, person or prop competes for focus; "
+                    "(4) no library, graveyard or battlefield as a place."},
+                {'role': 'user', 'content':
+                    f"Card: {name}\nType: {type_line or ctype}\nDraft: {draft}\nAnswer:"},
+            ],
+            model=local_model, max_tokens=60, temperature=0.0)
+    except Exception as e:
+        print(f"  [prompt_gen] scene check failed: {e}")
+        return ''
+    text = (reply or '').strip()
+    return '' if text.upper().startswith('OK') else text[:160]
+
+
 def _subject_words(card: dict) -> set:
     """Words that identify the card's subject for the opening check: the
     name's own words (minus articles and possessives) plus, for artifacts,
@@ -923,6 +959,28 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         out = _strip_franchise_sentences(out, style_source_name or style_hint)   # output backstop
         out = _strip_example_leak(out, card)
         out = _limit_scene_sentences(out, 2)
+        # H21: writer variance is the dominant failure now (a chair inside a
+        # ring, a bird for a faerie). A cheap checklist pass judges the draft
+        # against the card; one lower-temperature re-roll if it fails.
+        if os.environ.get('SCENE_CHECK', '1') != '0':
+            problems = _scene_problems(out, card, local_model)
+            if problems:
+                print(f"  [prompt_gen] scene check for {name}: {problems}")
+                redo = mlx_llm.chat(
+                    messages=[
+                        {'role': 'system', 'content': system_msg},
+                        {'role': 'user', 'content': user_msg},
+                        {'role': 'assistant', 'content': out},
+                        {'role': 'user', 'content':
+                            f"Problems with that draft: {problems} Rewrite it so the ONLY focal "
+                            f"subject is {name} exactly as the card describes it, nothing invented "
+                            "beside it. Two short sentences."},
+                    ],
+                    model=local_model, max_tokens=140, temperature=0.5)
+                redo = _limit_scene_sentences(_strip_chat_preamble(redo), 2)
+                if len(redo.split()) >= 5 and _opens_with_subject(redo, card) \
+                        and not _scene_problems(redo, card, local_model):
+                    out = redo
         if len(out.split()) < 5:
             # the backstops can strip a draft down to nothing (a franchise
             # sentence, a fragment); never persist an empty prompt
