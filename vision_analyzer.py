@@ -1782,7 +1782,7 @@ def _medium_anchors(medium: str) -> list:
 def build_flux_style_block(image_path, style_source: str = '',
                            vision_model: str = 'llava:7b',
                            text_model: str = 'llama3.1:8b',
-                           max_words: int = 90,
+                           max_words: int = 72,
                            stored_descriptions: str = '') -> str:
     """Procedural style block: deterministic foundation, VLM as enrichment.
 
@@ -1911,10 +1911,13 @@ def build_flux_style_block(image_path, style_source: str = '',
     parts = list(anchors)
     # named-style idiom (see style_idiom_descriptors) sits right after the
     # medium anchors — the earliest, heaviest-weighted tokens after the lead
-    recalled = style_idiom_recall(style_source, text_model) if style_source else []
-    parts.extend(recalled)            # deterministic knowledge: foundation
+    # Palette FIRST after the anchors: colour is the most visible property and
+    # the one the idiom words most easily override — with the idiom ahead of
+    # it a saturated fine-line reference rendered as uncoloured line art.
     if hues:
         parts.append('palette of ' + ', '.join(hues))
+    recalled = style_idiom_recall(style_source, text_model) if style_source else []
+    parts.extend(recalled)            # deterministic knowledge: foundation
     parts.extend(motifs)
     if style_source:                  # a VLM read: enrichment, after the foundation
         parts.extend(style_idiom_seen(image_path, style_source, vision_model, exclude=recalled))

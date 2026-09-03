@@ -437,7 +437,7 @@ def test_block_carries_idiom_after_anchors(monkeypatch):
         stored_descriptions=("Art Style: cel animation, cartoon\nMedium: digital cel animation\n"
                              "Color Palette: teal, orange\nSource: Rick and Morty"))
     assert 'wobbly thin outlines' in block and 'bulging eyes' in block
-    assert block.index('wobbly') < block.index('palette of')
+    assert block.index('palette of') < block.index('wobbly')   # colour first, idiom next
 
 
 def test_style_staging_recall_drops_named_sentences(monkeypatch):
