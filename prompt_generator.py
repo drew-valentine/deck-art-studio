@@ -487,6 +487,46 @@ def generate_prompts_for_deck(cards: list[dict], style_preamble: str = None) -> 
 # ---------------------------------------------------------------------------
 # AI-enhanced prompt generation (uses OpenAI or local Ollama)
 # ---------------------------------------------------------------------------
+# The opening-rule example must be built from THIS card. A fixed example
+# ("Okaun, Eye of Chaos, a Cyclops Berserker, storms...") taught the 3B model
+# to parrot the example's NAME: 'Okaun, Human Soldier' for Palace Jailer,
+# 'Okaun, the labyrinth' for Maze of Ith — twelve prompts across seven decks.
+# With the card's own name in the example, parroting it is exactly right.
+_EXAMPLE_LEAK_NAMES = ('Okaun, Eye of Chaos', 'Okaun')
+
+
+def _opening_example(card: dict) -> str:
+    name = card.get('name', 'The subject').split(' // ')[0]
+    type_line = card.get('type_line', '') or ''
+    subtypes = ''
+    if '—' in type_line or '\u2014' in type_line:
+        subtypes = re.split(r'[—\u2014]', type_line, 1)[1].strip()
+    if card.get('card_type') == 'creature' and subtypes:
+        return f"{name}, {_article(subtypes)} {subtypes}, ..."
+    return f"{name}, ..."
+
+
+def _article(word: str) -> str:
+    return 'an' if word[:1].lower() in 'aeiou' else 'a'
+
+
+def _strip_example_leak(text: str, card: dict) -> str:
+    """Backstop: if a leaked example name opens the scene and this card is not
+    that card, substitute the card's own name."""
+    name = card.get('name', '')
+    if not text or any(n.split(',')[0] in name for n in _EXAMPLE_LEAK_NAMES):
+        return text
+    out = text
+    for leak in _EXAMPLE_LEAK_NAMES:            # longest first
+        if out.lstrip().startswith(leak):
+            out = out.lstrip()
+            rest = out[len(leak):]
+            # drop a grafted "'s" possessive or an appositive that duplicates the type
+            out = name.split(' // ')[0] + rest
+            break
+    return out
+
+
 def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'openai',
                               local_model: str = 'llama3.1:8b',
                               style_hint: str = '', steer: str = '',
@@ -543,8 +583,8 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         "must never replace, crowd out, or upstage the card's subject. "
         "OPENING RULE (critical): the FIRST sentence must open with the subject "
         "itself — name it, and for creatures state its CREATURE TYPE as an "
-        "appositive right after the name (e.g. 'Okaun, Eye of Chaos, a Cyclops "
-        "Berserker, storms...'), then place it in the scene. NEVER open with the "
+        f"appositive right after the name (e.g. '{_opening_example(card)}'), "
+        "then place it in the scene. NEVER open with the "
         "setting, weather, or atmosphere ('In the heart of the swirling mist...') "
         "— the image model paints whatever comes first, and setting-first "
         "openings produce subjectless art. "
@@ -665,6 +705,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                               # events super intend impact"), so keep it lower.
         )
         out = _strip_franchise_sentences(out, style_source_name or style_hint)   # output backstop
+        out = _strip_example_leak(out, card)
         return _ensure_creature_type_in_prompt(out, card)
     except Exception as e:
         print(f"  [prompt_gen] AI failed for {name}: {e}, using rule-based")

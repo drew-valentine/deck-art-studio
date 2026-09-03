@@ -466,3 +466,41 @@ class TestSteerOverridesReference:
         cap = self._capture(monkeypatch, '')
         assert 'USER DIRECTION' not in cap['system']
         assert 'User steer' not in cap['user']
+
+
+
+class TestOpeningExampleIsThisCard:
+    """The opening-rule example must be built from the card itself. A fixed
+    example name ('Okaun, Eye of Chaos') was parroted into other cards'
+    prompts across seven decks."""
+
+    CARD = {'name': 'Palace Jailer', 'type_line': 'Creature — Human Soldier',
+            'oracle_text': '', 'flavor_text': '', 'card_type': 'creature', 'colors': ['W']}
+
+    def test_example_uses_the_cards_own_name(self, monkeypatch):
+        import sys, types
+        from prompt_generator import generate_subject_with_ai
+        captured = {}
+        fake = types.ModuleType('mlx_llm')
+        def _chat(messages=None, **kw):
+            captured['system'] = messages[0]['content']
+            return 'Palace Jailer, a Human Soldier, stands at the gate.'
+        fake.chat = _chat
+        monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
+        generate_subject_with_ai(self.CARD, backend='local', local_model='m')
+        assert "'Palace Jailer, a Human Soldier, ...'" in captured['system']
+        assert 'Okaun' not in captured['system']
+
+    def test_backstop_replaces_a_leaked_example_name(self):
+        from prompt_generator import _strip_example_leak
+        out = _strip_example_leak('Okaun, Human Soldier, stands tall in the throne room.', self.CARD)
+        assert out.startswith('Palace Jailer, Human Soldier')
+        out2 = _strip_example_leak("Okaun, Eye of Chaos's Whispersilk Cloak floats.", {'name': 'Whispersilk Cloak'})
+        assert out2.startswith("Whispersilk Cloak's Whispersilk Cloak") or out2.startswith('Whispersilk Cloak')
+        # the real Okaun keeps his name
+        same = _strip_example_leak('Okaun, Eye of Chaos, a Cyclops Berserker, storms in.', {'name': 'Okaun, Eye of Chaos'})
+        assert same.startswith('Okaun, Eye of Chaos')
+
+    def test_non_creature_example(self):
+        from prompt_generator import _opening_example
+        assert _opening_example({'name': 'Maze of Ith', 'type_line': 'Land', 'card_type': 'land'}) == 'Maze of Ith, ...'
