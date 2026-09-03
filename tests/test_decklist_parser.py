@@ -518,3 +518,20 @@ class TestChatPreambleStripped:
         from prompt_generator import _strip_chat_preamble
         p = 'Keiga, the Tide Star, a Dragon Spirit, soars above the waves: foam and spray everywhere.'
         assert _strip_chat_preamble(p) == p
+
+
+# ── H11: composition discipline ─────────────────────────────────────────────
+
+def test_limit_scene_sentences_keeps_two():
+    from prompt_generator import _limit_scene_sentences
+    txt = ("A dragon rears over the waves. Lightning splits the sky behind it. "
+           "A shark leaps beside it! Fish scatter.")
+    assert _limit_scene_sentences(txt) == "A dragon rears over the waves. Lightning splits the sky behind it."
+    assert _limit_scene_sentences("One sentence only.") == "One sentence only."
+    assert _limit_scene_sentences("") == ""
+
+
+def test_scene_writer_prompt_has_composition_rule():
+    import inspect, prompt_generator as pg
+    src = inspect.getsource(pg)
+    assert 'ONE focal subject, ONE setting, ONE action' in src

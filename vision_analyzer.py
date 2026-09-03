@@ -1,3 +1,4 @@
+import re
 #!/usr/bin/env python3
 """
 Vision-based style analysis for inspiration images.
@@ -1534,6 +1535,57 @@ def _classify_medium_from_evidence(stored_descriptions: str, prose: str,
                                   text_model, img_desc=(prose or text)[:400])
 
 
+def style_idiom_descriptors(style_source: str, text_model: str, max_words: int = 24) -> list:
+    """Drawing-idiom descriptors for a NAMED style the language model knows
+    ("Rick and Morty" -> wobbly thin outlines, bulging eyes with pinprick
+    pupils, drooling deadpan faces, lumpy anatomy, acid-green palette ...).
+    Medium anchors are generic by design ('cel animation, cartoonish'); the
+    idiom is what makes a named style recognizable, and the render lead may
+    not carry the name (franchises are de-named to keep their cast out). Runs
+    once per distillation at temperature 0 and is stored with the block, so
+    re-analyzing reproduces it. Never names characters. [] on failure."""
+    src = (style_source or '').strip().replace('&', 'and')
+    if not src:
+        return []
+    try:
+        import mlx_llm
+        reply = mlx_llm.chat(
+            messages=[
+                {'role': 'system', 'content':
+                    "You are an art director. Given the name of an art style, artist, "
+                    "show or movement, list the VISUAL DRAWING IDIOM that makes it "
+                    "recognizable: line quality, how eyes/faces/anatomy are drawn, "
+                    "shading, color tendencies, recurring textures or motifs. Output "
+                    "ONLY a comma-separated list of 6-8 short concrete phrases. NEVER "
+                    "name characters, people, places or the style itself."},
+                {'role': 'user', 'content': "Style: Dr. Seuss"},
+                {'role': 'assistant', 'content':
+                    "loose wobbly pen line, curved architecture with no straight lines, "
+                    "tufted trees and fur, sparse white backgrounds, flat pastel fills, "
+                    "long bendy limbs, whimsical impossible contraptions"},
+                {'role': 'user', 'content': f"Style: {src}"},
+            ],
+            model=text_model, max_tokens=90, temperature=0.0,
+        )
+    except Exception as e:
+        print(f"  [style] idiom expansion failed: {e}")
+        return []
+    line = _clean_descriptors(reply or '', style_source, max_descriptors=8, reorder=False)
+    src_words = {w.lower() for w in re.findall(r'[A-Za-z]{3,}', src)}
+    out, count = [], 0
+    for phrase in [p.strip() for p in line.split(',') if p.strip()]:
+        toks = phrase.split()
+        # idiom phrases are common nouns; a Capitalized token or a word from
+        # the source name is a character/creator leaking through
+        if any(t[:1].isupper() for t in toks) or any(t.lower().strip('.,') in src_words for t in toks):
+            continue
+        n = len(toks)
+        if count + n > max_words:
+            break
+        out.append(phrase); count += n
+    return out
+
+
 def _medium_anchors(medium: str) -> list:
     """Canonical anchor descriptors for a classified medium ([] if unknown)."""
     return list(_MEDIUM_ANCHORS.get(medium, []))
@@ -1546,7 +1598,7 @@ def _medium_anchors(medium: str) -> list:
 def build_flux_style_block(image_path, style_source: str = '',
                            vision_model: str = 'llava:7b',
                            text_model: str = 'llama3.1:8b',
-                           max_words: int = 40,
+                           max_words: int = 64,
                            stored_descriptions: str = '') -> str:
     """Procedural style block: deterministic foundation, VLM as enrichment.
 
@@ -1673,6 +1725,10 @@ def build_flux_style_block(image_path, style_source: str = '',
     motifs = motifs[:2]
 
     parts = list(anchors)
+    # named-style idiom (see style_idiom_descriptors) sits right after the
+    # medium anchors — the earliest, heaviest-weighted tokens after the lead
+    if style_source:
+        parts.extend(style_idiom_descriptors(style_source, text_model))
     if hues:
         parts.append('palette of ' + ', '.join(hues))
     parts.extend(motifs)

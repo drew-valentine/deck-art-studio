@@ -516,6 +516,17 @@ _PREAMBLE_RE = re.compile(
     r"[^\n:]{0,120}:\s*", re.IGNORECASE)
 
 
+def _limit_scene_sentences(text: str, max_sentences: int = 2) -> str:
+    """Composition backstop: keep the first ``max_sentences`` sentences. The
+    scene writer is asked for two; a third almost always introduces a second
+    focal element (a shark beside the dragon, a gravestone beside the dock)."""
+    import re as _re
+    if not text:
+        return text
+    parts = _re.split(r'(?<=[.!?])\s+', text.strip())
+    return ' '.join(parts[:max_sentences]).strip()
+
+
 def _strip_chat_preamble(text: str) -> str:
     """Small chat models sometimes answer like a chat turn — "Here is a
     rewritten description for Bountiful Landscape:" — and that line was
@@ -607,6 +618,10 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         "setting, weather, or atmosphere ('In the heart of the swirling mist...') "
         "— the image model paints whatever comes first, and setting-first "
         "openings produce subjectless art. "
+        "COMPOSITION RULE (critical): ONE focal subject, ONE setting, ONE action. "
+        "Do not add secondary creatures, characters, or props unless the card's own "
+        "text names them — a 4-step image model cannot resolve competing focal points, "
+        "so every extra element muddies the picture. Two sentences maximum. "
         "Be inventive and VARY it each time: choose a fresh setting, camera angle, "
         "distance, time of day, weather, and composition so re-rolls feel distinct "
         "rather than repeating the same scene — but always keep the same focal subject. "
@@ -703,6 +718,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         f"Card: {name}\nType: {type_line}\nRules: {oracle}\n"
         + (f"Flavor text (use this as the THEMATIC ANCHOR for the scene): {safe_flavor}\n" if safe_flavor else "")
         + f"Direction: {guidance}\n"
+        + "Keep it simple: one subject, one setting, one action, two sentences.\n"
         + (f"User steer (OVERRIDES the reference description wherever they "
            f"conflict): {steer.strip()}\n" if steer and steer.strip() else "")
         + f"Reference description: {base_desc}\n"
@@ -718,7 +734,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                 {'role': 'user', 'content': user_msg},
             ],
             model=local_model,
-            max_tokens=200,
+            max_tokens=140,
             temperature=0.8,  # varied between re-rolls; 0.95 made the 3B model
                               # degenerate into word-salad tails ("waveform GS cave
                               # events super intend impact"), so keep it lower.
@@ -726,6 +742,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         out = _strip_chat_preamble(out)
         out = _strip_franchise_sentences(out, style_source_name or style_hint)   # output backstop
         out = _strip_example_leak(out, card)
+        out = _limit_scene_sentences(out, 2)
         return _ensure_creature_type_in_prompt(out, card)
     except Exception as e:
         print(f"  [prompt_gen] AI failed for {name}: {e}, using rule-based")
