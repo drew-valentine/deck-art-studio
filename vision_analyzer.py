@@ -1573,8 +1573,17 @@ def _idiom_phrases(text: str, style_source: str, max_words: int) -> list:
     from the evidence pass, not from recall — recall gets it wrong)."""
     src_words = {w.lower() for w in re.findall(r'[A-Za-z]{3,}', style_source or '')} - {'and', 'the', 'von', 'van', 'der'}
     out, seen, count = [], set(), 0
-    for phrase in re.split(r'[,\n]+', (text or '').strip().split('\n')[0]):
-        phrase = re.sub(r'^(and|or)\s+', '', phrase.strip().strip('.;:"\'')).strip()
+    raw = [re.sub(r'^(and|or)\s+', '', p.strip().strip('.;:"\'')).strip()
+           for p in re.split(r'[,\n]+', (text or '').strip().split('\n')[0])]
+    # a lone adjective is a comma inside a phrase ("exaggerated, distorted
+    # body proportions") — rejoin it with what follows
+    merged = []
+    for p in raw:
+        if merged and len(merged[-1].split()) == 1 and p:
+            merged[-1] = merged[-1] + ' ' + p
+        else:
+            merged.append(p)
+    for phrase in merged:
         toks = phrase.split()
         if not toks or len(toks) > 8:
             continue

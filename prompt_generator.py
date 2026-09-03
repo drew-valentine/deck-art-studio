@@ -276,10 +276,15 @@ def _describe_enchantment(name, oracle, keywords, atmosphere, flavor=''):
     # symbols. Strip stray '{...}' tokens defensively.
     story = re.sub(r'\{[^}]*\}', '', flavor or '').strip()
     story_line = f" The scene is drawn from its story: {story}" if story else ''
+    # With no flavor text the name is the strongest imagery cue: a card called
+    # "Breaching Dragonstorm" is a storm of dragons breaking through, not "a
+    # familiar over a library". Say so, or the writer invents a subject.
+    name_line = ('' if story else
+                 f" Its name is the scene: depict what '{name}' literally evokes.")
     return (
         f"A concrete illustrated scene representing the enchantment {name} — "
         f"depict the people, creatures, place, or event it embodies (not abstract "
-        f"energy), set in an atmosphere of {atmosphere}.{story_line}{coin_desc}"
+        f"energy), set in an atmosphere of {atmosphere}.{story_line}{name_line}{coin_desc}"
     )
 
 
@@ -524,6 +529,10 @@ def _limit_scene_sentences(text: str, max_sentences: int = 2, max_words: int = 4
     if not text:
         return text
     parts = _re.split(r'(?<=[.!?])\s+', text.strip())
+    # drop a trailing fragment (max_tokens cut mid-sentence: "..., a small")
+    if len(parts) > 1 and (not parts[-1].rstrip().endswith(('.', '!', '?'))
+                           or len(parts[-1].split()) < 4):
+        parts = parts[:-1]
     out = ' '.join(parts[:max_sentences]).strip()
     # word cap: the writer front-loads the focal subject, so trailing clauses
     # are where the second turtle / cat pile / soldier crowd arrives — cut at
