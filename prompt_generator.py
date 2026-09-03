@@ -940,6 +940,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                               # events super intend impact"), so keep it lower.
         )
         out = _strip_chat_preamble(out)
+        print(f"  [prompt_gen] draft for {name}: {out[:200]}")
         if not _opens_with_subject(out, card):
             # one strict retry: the draft buried the subject; ask for the
             # same scene opening on it (generic check — the name's own words)
