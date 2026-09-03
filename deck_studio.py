@@ -1852,7 +1852,7 @@ def _effective_style_source(meta) -> str:
 # other card types keep the tight one. STYLE_BLOCKS_DOUBLE="a-b" overrides
 # both (experiment hook).
 STYLE_BLOCKS_DEFAULT = (0, 9)
-STYLE_BLOCKS_CREATURE = (0, 9)      # flipped to (0, 14) once the m7 leak check passes
+STYLE_BLOCKS_CREATURE = (0, 14)     # creatures: figure design lives in the middle double blocks
 
 
 def _style_block_window(card_type):
