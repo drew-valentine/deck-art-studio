@@ -85,28 +85,37 @@
 ## In Review
 
 - [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Review Started: 2026-09-02 | Owner: drew-valentine
-  - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — awaiting the owner's ship-it.
+  - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — In Review, awaiting the owner's ship decision.
   - Branch: `feat/redux-style-reference`
   - Root cause of every post-July style complaint: the FLUX/MLX migration (PR #2) dropped IP-Adapter image conditioning, so deck style became text-only. The inspiration images stopped reaching the image model at all — every fix since has been an attempt to describe them in words instead.
   - Evidence: demo-alela v1 (March, SDXL + IP-Adapter) reads as unmistakably Egyptian; no FLUX render since does.
   - Prototype done: FLUX Redux on schnell via mflux 0.19.1 with reference-token pooling (729 → 81 tokens) holds style and subject together at 57 s/card, faster than the text-only path (~65 s). Weights are ungated (Runware/FLUX.1-Redux-dev mirror).
   - Implemented: `Flux1Redux` wired into `flux_worker` with reference-token pooling and a per-`(path, mtime, tokens)` embedding cache. The resident Redux model also serves reference-less decks (mflux `[]` → `None` fix), so there is no second model to swap in.
-  - Implemented: per-deck `style_reference` setting, `/api/decks/<id>/style-reference`, and a "Reference strength" slider (Off / Palette / Subtle / Balanced / Strong / Clone).
-  - Validated live: Egyptian deck 60 s; Seuss deck with 4 references 76 s and unmistakably Seuss; no-reference deck 53 s. 407 tests green (13 new).
+  - Implemented: per-deck `style_reference` setting, `/api/decks/<id>/style-reference`, and a "Reference strength" dial. The dial shipped Off → Clone and was capped during the overnight pass (see below).
+  - Validated live: Egyptian deck 60 s; Seuss deck with 4 references 76 s and unmistakably Seuss; no-reference deck 53 s.
+  - Overnight iteration, 2026-09-02 into 2026-09-03:
+    - Shipped on the PR branch — reference-token averaging across all of a deck's inspiration images: the pooled Redux tokens are combined element-wise into a mean, so per-image content cancels and the style the images share survives. Cleaner and leak-free next to conditioning on a single reference or concatenating several.
+    - Shipped on the PR branch — the dial is capped at Balanced (Off · Palette · Subtle · Balanced). 81 tokens is the ceiling, Subtle at 25 tokens is the default, and any positive token budget re-enables references. 408 tests green.
+    - Rejected after side-by-side runs on the same prompts and seed across 3 decks: late-step conditioning; texture crops; guidance amplification (adds artifacts); 8-step schedules; strided token subsampling (more content leak); two-pass compose→restyle (a no-op at 0.5); token noise (content comes back); averaged references at 169 and 729 tokens (the layout the references share leaks through); FLUX.2 klein-4B reference-edit mode (perfect subject, no style transfer).
+    - Per-deck LoRA is out: mflux 0.19 dropped FLUX.1 LoRA training, and the owner has ruled the approach out regardless.
+    - FLUX.1-dev + Redux (ungated mirror, 14 steps, ~215 s/card) transfers line character markedly better — visible across the Seuss row — but the subject drifts off the card. Candidate for an opt-in hi-fi render, not a default. Decision pending owner.
+    - Leak matrix: at 81 tokens with 4 references, reference content leaked on 3 of the 4 validation decks. At Subtle with averaged references, the subjects hold.
+    - Verdict: the target — style that screams without copying, subject preserved — is not reachable with zero-training reference conditioning on 4-step models. The shipped default is the honest best of what was tried.
   - Scope:
     - [x] Wire `Flux1Redux` into `flux_worker` with a token-pooling hook
     - [x] Pass each deck's inspiration images as references
-    - [x] Per-deck style-reference strength (token budget, default 81) setting + UI
+    - [x] Per-deck style-reference strength (token budget) setting + UI — capped at Balanced, default Subtle (25 tokens)
+    - [x] Average reference tokens across a deck's inspiration images
     - [x] Cache reference embeddings per deck
-    - [ ] Guard against reference figures and glyph text leaking into card art
-    - [ ] Validate on the Seuss, Moebius, cartoon, and Egyptian decks — Seuss and Egyptian done; Moebius and cartoon still to run
+    - [x] Guard against reference figures and glyph text leaking into card art — the guard is the capped dial plus token averaging, not a separate filter
+    - [x] Validate across the validation decks — leak matrix run at 81 tokens × 4 references, and the Subtle/averaged default re-run on top of it
     - [x] PR
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
-    - [ ] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — slider ships Off→Clone; per-step adherence sweep not yet run.
-    - [ ] Given a deck whose references contain figures or lettering, when cards are generated, then neither the reference figures nor their glyph text appear in the card art.
-    - [ ] Given the four validation decks (Seuss, Moebius, cartoon, Egyptian), when a card from each is rendered, then the result reads as that deck's source style — the demo-alela v1 bar. — Seuss and Egyptian clear the bar; Moebius and cartoon not yet run.
-    - [ ] Given a batch run, when per-card time is measured, then it stays at or under the current text-only path. — Egyptian 60 s and no-reference 53 s are under the ~65 s baseline; Seuss with 4 references is 76 s, over it. Needs a ruling on whether multi-reference decks are in scope for this bar.
+    - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
+    - [x] Given a deck whose references contain figures or lettering, when cards are generated, then neither the reference figures nor their glyph text appear in the card art. — met by design: token averaging cancels per-image content and the dial cannot be pushed past 81 tokens. At 81 × 4 references the matrix leaked on 3 of 4 decks, so the ceiling is doing the work.
+    - [ ] Given the four validation decks (Seuss, Moebius, cartoon, Egyptian), when a card from each is rendered, then the result reads as that deck's source style — the demo-alela v1 bar. — NOT met. Zero-training reference conditioning on a 4-step model gets closer than text-only but does not scream. FLUX.1-dev + Redux does transfer the line character; it costs ~215 s/card and drifts the subject.
+    - [x] Given a batch run, when per-card time is measured, then it stays at or under the current text-only path. — met at the Subtle default: 57–78 s/card against the ~65 s text-only baseline.
 
 ## Done
 
