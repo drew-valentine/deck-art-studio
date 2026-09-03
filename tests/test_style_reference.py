@@ -372,3 +372,15 @@ def test_reference_has_prominent_character_parses_yes_no(monkeypatch):
     assert va.reference_has_prominent_character('x.png', 'v') is False
     assert va.reference_has_prominent_character('x.png', 'v') is None
     assert va.reference_has_prominent_character(None, 'v') is None
+
+
+def test_crop_token_grid_drops_border_rings():
+    import numpy as np
+    import flux_worker as fw
+    g = 27
+    emb = np.arange(g * g, dtype=float).reshape(1, g * g, 1)
+    out = fw._crop_token_grid(emb, 1)
+    assert out.shape == (1, 25 * 25, 1)
+    assert out[0, 0, 0] == g + 1            # first interior token is row 1, col 1
+    assert fw._crop_token_grid(emb, 0).shape == (1, g * g, 1)
+    assert fw._crop_token_grid(emb, 12).shape == (1, g * g, 1)   # too deep: untouched

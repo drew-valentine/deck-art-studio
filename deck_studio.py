@@ -2066,6 +2066,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
         reference_strength=ref_cfg['strength'],
         reference_average=ref_cfg['average'],
         reference_blocks=ref_blocks,
+        reference_edge_crop=int(os.environ.get('REDUX_EDGE_CROP', '0') or 0),   # experiment hook (H28)
     )
 
 

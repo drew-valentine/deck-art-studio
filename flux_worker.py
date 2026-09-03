@@ -77,7 +77,23 @@ def _pool_token_grid(emb, k):
     return grid.reshape(b, k * k, d)
 
 
-_REDUX_STATE = {"k": 0, "cache": {}, "average": True,
+def _crop_token_grid(emb, rings):
+    """Drop the outer ``rings`` of a (B, N, D) g*g reference-token grid. The
+    border tokens carry what sits at a reference's edges — signatures,
+    copyright marks, frames — which then re-appear on the card art through
+    the image channel ("@Dr.Seuss" scrawled in a corner). Style statistics
+    are everywhere in the grid; the border is the cheapest place to lose."""
+    b, n, d = emb.shape
+    g = int(round(n ** 0.5))
+    r = int(rings or 0)
+    if r <= 0 or g * g != n or g - 2 * r < 4:
+        return emb
+    grid = emb.reshape(b, g, g, d)[:, r:g - r, r:g - r, :]
+    m = g - 2 * r
+    return grid.reshape(b, m * m, d)
+
+
+_REDUX_STATE = {"k": 0, "cache": {}, "average": True, "edge_crop": 0,
                 # block-selective injection (see _install_block_mask)
                 "n_ref_tokens": 0, "txt_tokens": 0,
                 "allow_double": None, "allow_single": None, "cur": None}
@@ -158,13 +174,15 @@ def _install_redux_pooling():
 
     def _embed_pooled(image_path, image_encoder, image_embedder, strength=1.0):
         k = _REDUX_STATE["k"]
+        rings = int(_REDUX_STATE.get("edge_crop") or 0)
         try:
-            key = (str(image_path), os.path.getmtime(image_path), k)
+            key = (str(image_path), os.path.getmtime(image_path), k, rings)
         except OSError:
-            key = (str(image_path), 0, k)
+            key = (str(image_path), 0, k, rings)
         emb = _REDUX_STATE["cache"].get(key)
         if emb is None:
-            emb = _pool_token_grid(original(image_path, image_encoder, image_embedder, 1.0), k)
+            emb = original(image_path, image_encoder, image_embedder, 1.0)
+            emb = _pool_token_grid(_crop_token_grid(emb, rings), k)
             if len(_REDUX_STATE["cache"]) > 32:
                 _REDUX_STATE["cache"].clear()
             _REDUX_STATE["cache"][key] = emb
@@ -320,6 +338,7 @@ class _Engine:
             tokens = int(redux.get("tokens") or 729)
             strength = float(redux.get("strength") or 1.0)
             _REDUX_STATE["average"] = bool(redux.get("average", True))
+            _REDUX_STATE["edge_crop"] = int(redux.get("edge_crop") or 0)
             blocks = redux.get("blocks") or {}
             _REDUX_STATE["allow_double"] = (set(blocks["double"]) if blocks.get("double") is not None
                                             else set(STYLE_BLOCKS_DOUBLE))

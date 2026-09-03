@@ -388,6 +388,7 @@ class LocalImageGenerator:
                  reference_strength: float = 1.0,
                  reference_average: bool = True,
                  reference_blocks: Optional[dict] = None,
+                 reference_edge_crop: int = 0,
                  **_ignored):
         """Generate an image with FLUX (in the worker subprocess). Returns a PIL.Image.
 
@@ -433,6 +434,8 @@ class LocalImageGenerator:
                                 "average": bool(reference_average)}
                 if reference_blocks:
                     req["redux"]["blocks"] = reference_blocks   # {double: [...], single: [...]}
+                if reference_edge_crop:
+                    req["redux"]["edge_crop"] = int(reference_edge_crop)
             print(f"[flux] -> worker {'redux' if refs else 'txt2img'} {w}x{h}, steps={n_steps}"
                   f"{f', refs={len(refs)} tokens/ref={int(reference_tokens or 729)}' if refs else ''}: {prompt[:80]}")
             try:
