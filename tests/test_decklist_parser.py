@@ -466,3 +466,121 @@ class TestSteerOverridesReference:
         cap = self._capture(monkeypatch, '')
         assert 'USER DIRECTION' not in cap['system']
         assert 'User steer' not in cap['user']
+
+
+
+class TestOpeningExampleIsThisCard:
+    """The opening-rule example must be built from the card itself. A fixed
+    example name ('Okaun, Eye of Chaos') was parroted into other cards'
+    prompts across seven decks."""
+
+    CARD = {'name': 'Palace Jailer', 'type_line': 'Creature — Human Soldier',
+            'oracle_text': '', 'flavor_text': '', 'card_type': 'creature', 'colors': ['W']}
+
+    def test_example_uses_the_cards_own_name(self, monkeypatch):
+        import sys, types
+        from prompt_generator import generate_subject_with_ai
+        captured = {}
+        fake = types.ModuleType('mlx_llm')
+        def _chat(messages=None, **kw):
+            captured['system'] = messages[0]['content']
+            return 'Palace Jailer, a Human Soldier, stands at the gate.'
+        fake.chat = _chat
+        monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
+        generate_subject_with_ai(self.CARD, backend='local', local_model='m')
+        assert "'Palace Jailer, a Human Soldier, ...'" in captured['system']
+        assert 'Okaun' not in captured['system']
+
+    def test_backstop_replaces_a_leaked_example_name(self):
+        from prompt_generator import _strip_example_leak
+        out = _strip_example_leak('Okaun, Human Soldier, stands tall in the throne room.', self.CARD)
+        assert out.startswith('Palace Jailer, Human Soldier')
+        out2 = _strip_example_leak("Okaun, Eye of Chaos's Whispersilk Cloak floats.", {'name': 'Whispersilk Cloak'})
+        assert out2.startswith("Whispersilk Cloak's Whispersilk Cloak") or out2.startswith('Whispersilk Cloak')
+        # the real Okaun keeps his name
+        same = _strip_example_leak('Okaun, Eye of Chaos, a Cyclops Berserker, storms in.', {'name': 'Okaun, Eye of Chaos'})
+        assert same.startswith('Okaun, Eye of Chaos')
+
+    def test_non_creature_example(self):
+        from prompt_generator import _opening_example
+        assert _opening_example({'name': 'Maze of Ith', 'type_line': 'Land', 'card_type': 'land'}) == 'Maze of Ith, ...'
+
+
+
+class TestChatPreambleStripped:
+    def test_preamble_removed(self):
+        from prompt_generator import _strip_chat_preamble
+        assert _strip_chat_preamble("Here's a rewritten description for Bountiful Landscape:\n\nA weathered dock juts out.") == 'A weathered dock juts out.'
+        assert _strip_chat_preamble("Sure! Here is the scene:\nKeiga soars.") == 'Keiga soars.'
+        assert _strip_chat_preamble("```\nKeiga soars above the waves.\n```") == 'Keiga soars above the waves.'
+
+    def test_normal_prompt_untouched(self):
+        from prompt_generator import _strip_chat_preamble
+        p = 'Keiga, the Tide Star, a Dragon Spirit, soars above the waves: foam and spray everywhere.'
+        assert _strip_chat_preamble(p) == p
+
+
+# ── H11: composition discipline ─────────────────────────────────────────────
+
+def test_limit_scene_sentences_keeps_two():
+    from prompt_generator import _limit_scene_sentences
+    txt = ("A dragon rears over the waves. Lightning splits the sky behind it. "
+           "A shark leaps beside it! Fish scatter.")
+    assert _limit_scene_sentences(txt) == "A dragon rears over the waves. Lightning splits the sky behind it."
+    assert _limit_scene_sentences("One sentence only.") == "One sentence only."
+    assert _limit_scene_sentences("") == ""
+
+
+def test_scene_writer_prompt_has_composition_rule():
+    import inspect, prompt_generator as pg
+    src = inspect.getsource(pg)
+    assert 'ONE focal subject, ONE setting, ONE action' in src
+
+
+def test_hint_without_palette_strips_hue_list():
+    from prompt_generator import hint_without_palette
+    blk = ("cel animation, thick black outlines, palette of bright yellow, vivid orange, "
+           "desaturated green, dusty coral, bold lines, wobbly eyes, flat shading")
+    out = hint_without_palette(blk)
+    assert 'palette' not in out and 'coral' not in out and 'yellow' not in out
+    assert out.startswith('cel animation, thick black outlines')
+    assert 'wobbly eyes' in out and 'flat shading' in out
+    assert hint_without_palette('') == ''
+
+
+def test_writer_system_prompt_carries_staging(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    seen = {}
+    def chat(messages, **kw):
+        seen['sys'] = messages[0]['content']; return "A signet ring sits on a bench. It glows."
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    card = {'name': 'Arcane Signet', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'}
+    pg.generate_subject_with_ai(card, None, backend='local', local_model='m',
+                                style_hint='an adult animated sci-fi cartoon series — cel animation',
+                                staging='Scenes are staged in cluttered garages. The register is deadpan absurd.')
+    assert 'STAGING AND REGISTER' in seen['sys'] and 'deadpan absurd' in seen['sys']
+    assert 'calm, artful film still' not in seen['sys']
+
+
+def test_scene_writer_prompt_treats_zones_as_game_terms():
+    import inspect, prompt_generator as pg
+    src = inspect.getsource(pg.generate_subject_with_ai)
+    assert "game ZONES, not places" in src
+
+
+def test_writer_omits_rules_text_for_noncreatures(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    seen = {}
+    def chat(messages, **kw):
+        seen['user'] = messages[1]['content']; return "A storm of dragons breaks the gate. Sunlight."
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    ench = {'name': 'Breaching Dragonstorm', 'type_line': 'Enchantment', 'card_type': 'enchantment',
+            'oracle_text': 'exile cards from the top of your library until you exile a nonland card.'}
+    pg.generate_subject_with_ai(ench, None, backend='local', local_model='m')
+    assert 'library' not in seen['user']
+    crt = {'name': 'Keiga, the Tide Star', 'type_line': 'Legendary Creature — Dragon Spirit',
+           'card_type': 'creature', 'oracle_text': 'Flying', 'subtypes': ['Dragon', 'Spirit']}
+    pg.generate_subject_with_ai(crt, None, backend='local', local_model='m')
+    assert 'Rules: Flying' in seen['user']

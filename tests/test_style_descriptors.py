@@ -394,3 +394,61 @@ class TestUndeclaredSourceMedium:
     def test_no_evidence_no_anchors(self):
         from vision_analyzer import _classify_medium_from_evidence
         assert _classify_medium_from_evidence('', '', 'm') == ''
+
+
+# ── H12: named-style idiom expansion ────────────────────────────────────────
+
+def test_style_idiom_descriptors_uses_llm_and_caps_words(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    monkeypatch.setattr(va, '_preferred_idiom_model', lambda m: m)
+    fake = types.SimpleNamespace(
+        chat=lambda **kw: (
+            "wobbly thin outlines, bulging eyes with pinprick pupils, drooling deadpan faces, "
+            "lumpy simplified anatomy, muted and dark color palette, scribbly line detail, "
+            "flat cel shading, Rick Sanchez"),
+        vision=lambda *a, **kw: "wobbly thin outlines, vibrant colors, sci-fi gadgetry and machinery")
+    monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
+    out = va.style_idiom_descriptors('Rick & Morty', 'm', image_path='x.png', vision_model='v', max_words=40)
+    assert out[0] == 'wobbly thin outlines'
+    assert 'sci-fi gadgetry and machinery' in out          # merged from the vision read
+    assert out.count('wobbly thin outlines') == 1          # de-duplicated
+    assert sum(len(p.split()) for p in out) <= 40
+    assert not any(w.lower() in ('rick', 'sanchez', 'morty') for p in out for w in p.split())
+    assert not any('palette' in p or 'colors' in p for p in out)   # palette is evidence work
+
+
+def test_style_idiom_descriptors_empty_source_or_failure(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    assert va.style_idiom_descriptors('', 'm') == []
+    def boom(**kw): raise RuntimeError('no model')
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=boom))
+    assert va.style_idiom_descriptors('Moebius', 'm') == []
+
+
+def test_block_carries_idiom_after_anchors(monkeypatch):
+    import vision_analyzer as va
+    monkeypatch.setattr(va, 'style_idiom_recall', lambda src, model, **kw: ['wobbly thin outlines', 'bulging eyes'])
+    monkeypatch.setattr(va, 'style_idiom_seen', lambda *a, **kw: [])
+    monkeypatch.setattr(va, 'analyze_inspiration_style', lambda *a, **k: {})
+    block = va.build_flux_style_block(
+        'unused.png', style_source='Rick & Morty', text_model='m',
+        stored_descriptions=("Art Style: cel animation, cartoon\nMedium: digital cel animation\n"
+                             "Color Palette: teal, orange\nSource: Rick and Morty"))
+    assert 'wobbly thin outlines' in block and 'bulging eyes' in block
+    assert block.index('wobbly') < block.index('palette of')
+
+
+def test_style_staging_recall_drops_named_sentences(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    monkeypatch.setattr(va, '_preferred_idiom_model', lambda m: m)
+    fake = types.SimpleNamespace(chat=lambda **kw: (
+        "Scenes are staged in cluttered garages and alien bazaars with figures slouching mid-argument, "
+        "seen at medium distance. Rick usually stands to the left. The register is deadpan absurd."))
+    monkeypatch.setitem(sys.modules, 'mlx_llm', fake)
+    out = va.style_staging_recall('Rick & Morty', 'm')
+    assert out.startswith('Scenes are staged') and 'deadpan absurd' in out
+    assert 'Rick' not in out
+    assert va.style_staging_recall('', 'm') == ''

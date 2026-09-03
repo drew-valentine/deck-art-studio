@@ -222,3 +222,48 @@ class TestAnalysisJobs:
             params={'mode': 'reanalyze'}))
         ds.gen_queue.cancel_deck('doomed-deck')
         assert ds.gen_queue.get(job.id).status == 'cancelled'
+
+
+class TestRegistryReconcile:
+    """decks.json is a cache of the filesystem: decks on disk that it does not
+    list are re-added on load (14 decks once vanished from the dropdown with
+    every file intact)."""
+
+    def test_missing_disk_decks_are_readded(self, tmp_path, monkeypatch):
+        decks = tmp_path / 'decks'
+        for did, name in (('reg-deck', 'Registered'), ('lost-deck', 'Lost Deck')):
+            (decks / did).mkdir(parents=True)
+            (decks / did / 'deck.json').write_text(json.dumps({'name': name, 'cards': []}))
+        (decks / 'junk').mkdir()                          # no deck.json -> ignored
+        (decks / 'decks.json').write_text(json.dumps({'decks': [{'id': 'reg-deck', 'name': 'Registered', 'created': 'x'}], 'active': 'reg-deck'}))
+        monkeypatch.setattr(ds, 'DECKS_DIR', decks)
+        monkeypatch.setattr(ds, 'DECK_REGISTRY_PATH', decks / 'decks.json')
+        reg = ds._load_deck_registry()
+        ids = [d['id'] for d in reg['decks']]
+        assert ids == ['reg-deck', 'lost-deck']
+        assert next(d for d in reg['decks'] if d['id'] == 'lost-deck')['name'] == 'Lost Deck'
+        assert reg['active'] == 'reg-deck'
+        # persisted, so the next load is a no-op
+        saved = json.loads((decks / 'decks.json').read_text())
+        assert [d['id'] for d in saved['decks']] == ['reg-deck', 'lost-deck']
+
+    def test_entries_without_a_directory_are_pruned(self, tmp_path, monkeypatch):
+        decks = tmp_path / 'decks'; (decks / 'real').mkdir(parents=True)
+        (decks / 'real' / 'deck.json').write_text(json.dumps({'name': 'Real', 'cards': []}))
+        (decks / 'decks.json').write_text(json.dumps({'decks': [
+            {'id': 'real', 'name': 'Real', 'created': 'x'}, {'id': 'ghost', 'name': 'Ghost', 'created': 'x'}],
+            'active': 'ghost'}))
+        monkeypatch.setattr(ds, 'DECKS_DIR', decks)
+        monkeypatch.setattr(ds, 'DECK_REGISTRY_PATH', decks / 'decks.json')
+        reg = ds._load_deck_registry()
+        assert [d['id'] for d in reg['decks']] == ['real']
+        assert reg['active'] == 'real'              # active moved off the ghost
+
+    def test_corrupt_registry_rebuilt_from_disk(self, tmp_path, monkeypatch):
+        decks = tmp_path / 'decks'; (decks / 'only').mkdir(parents=True)
+        (decks / 'only' / 'deck.json').write_text(json.dumps({'name': 'Only', 'cards': []}))
+        (decks / 'decks.json').write_text('{not json')
+        monkeypatch.setattr(ds, 'DECKS_DIR', decks)
+        monkeypatch.setattr(ds, 'DECK_REGISTRY_PATH', decks / 'decks.json')
+        reg = ds._load_deck_registry()
+        assert [d['id'] for d in reg['decks']] == ['only']

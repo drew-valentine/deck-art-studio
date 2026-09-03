@@ -931,11 +931,59 @@ def deck_id_from_name(name: str) -> str:
 
 
 def _load_deck_registry() -> dict:
-    """Load the deck registry from disk."""
+    """Load the deck registry from disk, reconciled with what is actually on
+    disk: any deck directory holding a valid deck.json that the registry does
+    not list is added back (name from deck.json, created from the directory
+    mtime). The registry is a cache of the filesystem, not the source of truth
+    — fourteen decks (temur-roar, riders-of-rohan-2, ...) once vanished from
+    the dropdown while every file sat intact under decks/."""
+    registry = {'decks': [], 'active': None}
     if DECK_REGISTRY_PATH.exists():
-        with open(DECK_REGISTRY_PATH) as f:
-            return json.load(f)
-    return {'decks': [], 'active': None}
+        try:
+            with open(DECK_REGISTRY_PATH) as f:
+                registry = json.load(f)
+        except (OSError, ValueError):
+            registry = {'decks': [], 'active': None}
+    registry.setdefault('decks', [])
+    registry.setdefault('active', None)
+    added, pruned = _reconcile_registry_with_disk(registry)
+    if added or pruned:
+        print(f"[decks] registry reconciled: re-added {added or 'none'}; pruned {pruned or 'none'}")
+        _save_deck_registry(registry)
+    return registry
+
+
+def _reconcile_registry_with_disk(registry: dict) -> tuple:
+    """Add on-disk decks missing from ``registry`` and drop entries whose
+    directory no longer holds a deck.json (in place). Returns (added, pruned)."""
+    if not DECKS_DIR.exists():
+        return [], []
+    pruned = [d.get('id') for d in registry.get('decks', [])
+              if not (DECKS_DIR / str(d.get('id') or '') / 'deck.json').exists()]
+    if pruned:
+        registry['decks'] = [d for d in registry['decks'] if d.get('id') not in pruned]
+        if registry.get('active') in pruned:
+            registry['active'] = registry['decks'][0]['id'] if registry['decks'] else None
+    known = {d.get('id') for d in registry.get('decks', [])}
+    added = []
+    for entry in sorted(DECKS_DIR.iterdir()):
+        deck_json = entry / 'deck.json'
+        if not entry.is_dir() or entry.name in known or not deck_json.exists():
+            continue
+        if not _is_safe_deck_id(entry.name):
+            continue
+        try:
+            with open(deck_json) as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(meta, dict):
+            continue
+        created = meta.get('created') or datetime.fromtimestamp(entry.stat().st_mtime).isoformat()
+        registry['decks'].append({'id': entry.name, 'name': meta.get('name') or entry.name,
+                                  'created': created})
+        added.append(entry.name)
+    return added, pruned
 
 
 def _save_deck_registry(registry: dict):
@@ -1694,8 +1742,76 @@ def _build_negative_fallback(style_tokens: dict, deck_meta: dict) -> str:
     return ', '.join(neg_parts)
 
 
+# Style reference (FLUX Redux) — the deck's inspiration IMAGES steer every
+# render, restoring the IP-Adapter role the SDXL pipeline had before the MLX
+# migration (a papyrus deck's March render screamed Egypt with a feeble text
+# prompt; every text-only FLUX render since was generic fantasy).
+#
+# The worker injects the reference tokens into FLUX's EARLY DOUBLE BLOCKS only
+# (flux_worker.STYLE_BLOCKS_DOUBLE). That block split is what makes this work:
+# injected everywhere, a full-strength reference is cloned (its figures and
+# layout replace the card's subject); restricted to the style blocks, the same
+# reference carries its medium, palette and stroke while the card keeps its own
+# subject — measured on the Moebius, Seuss and Egyptian decks at the full
+# 729-token grid. `tokens` is therefore a pure strength dial (9 palette-only …
+# 729 full), and references are AVERAGED (element-wise mean over up to
+# STYLE_REFERENCE_MAX_IMAGES images) so what they share dominates.
+STYLE_REFERENCE_DEFAULT = {'enabled': True, 'tokens': 729, 'strength': 1.0, 'max_images': 4, 'average': True}
+STYLE_REFERENCE_MAX_IMAGES = 4   # hard cap; the per-deck default is ONE reference
+STYLE_REFERENCE_MAX_TOKENS = 729  # full Redux grid; safe at any budget now that references are injected into style blocks only
+
+
+def _style_reference_settings(meta) -> dict:
+    """The deck's style-reference settings with defaults filled in."""
+    cfg = dict(STYLE_REFERENCE_DEFAULT)
+    cfg.update({k: v for k, v in ((meta or {}).get('style_reference') or {}).items()
+                if k in cfg})
+    try:
+        cfg['tokens'] = max(0, min(STYLE_REFERENCE_MAX_TOKENS, int(cfg['tokens'])))
+        cfg['strength'] = float(cfg['strength'])
+        cfg['max_images'] = max(1, min(STYLE_REFERENCE_MAX_IMAGES, int(cfg['max_images'])))
+        cfg['average'] = bool(cfg['average'])
+    except (TypeError, ValueError):
+        cfg['tokens'], cfg['strength'] = STYLE_REFERENCE_DEFAULT['tokens'], 1.0
+        cfg['max_images'] = STYLE_REFERENCE_DEFAULT['max_images']
+        cfg['average'] = True
+    cfg['enabled'] = bool(cfg['enabled']) and cfg['tokens'] > 0
+    return cfg
+
+
+def _style_reference_images(meta, deck_dir) -> list:
+    """Absolute paths of the inspiration images to send as references
+    ([] when disabled or the deck has none)."""
+    cfg = _style_reference_settings(meta)
+    if not cfg['enabled'] or not deck_dir:
+        return []
+    paths = []
+    for img in (meta or {}).get('inspiration_images', []) or []:
+        fn = img.get('filename') if isinstance(img, dict) else None
+        if fn and (Path(deck_dir) / fn).exists():
+            paths.append(str(Path(deck_dir) / fn))
+        if len(paths) >= cfg['max_images']:
+            break
+    return paths
+
+
+def _effective_style_source(meta) -> str:
+    """The user's declared style source, else the source the analyst
+    recognized in the references (see vision_analyzer.recognized_style_source).
+    The declaration always wins; recognition only fills silence — a deck whose
+    references were recognized as a show still gets that show's render lead
+    (de-named downstream like any declaration) instead of none at all."""
+    declared = ((meta or {}).get('style_source') or '').strip()
+    if declared:
+        return declared
+    from vision_analyzer import recognized_style_source
+    return recognized_style_source(
+        [im.get('style_description', '') for im in (meta or {}).get('inspiration_images', []) or []
+         if isinstance(im, dict)])
+
+
 def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_override=None,
-                    deck_meta=None):
+                    deck_meta=None, deck_dir=None):
     """Generate an image with the local FLUX model (mflux). Returns a PIL Image.
 
     Style always rides in the text prompt (the style source name + distilled
@@ -1706,6 +1822,8 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     deck_meta: the deck's metadata to draw style from. Defaults to the active
     deck's meta, but the queue worker passes the JOB's deck meta so a job runs
     with its own deck's style regardless of which deck the UI shows.
+    deck_dir: the deck directory, to resolve its inspiration images as Redux
+    style references (see STYLE_REFERENCE_DEFAULT).
     """
     _status = status_dict if status_dict is not None else generation_status
     _meta = deck_meta if deck_meta is not None else active_deck_meta
@@ -1750,7 +1868,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     # model often mislabels the medium (e.g. tagging live-action film as "digital
     # painting"), which fights the named style. We keep the accurate descriptive
     # fields — palette, lighting/coloring, mood — for concrete detail.
-    style_source = (_meta.get('style_source') or '').strip()
+    style_source = _effective_style_source(_meta)
     flux_style_prompt = (_meta.get('flux_style_prompt') or '').strip()
     st = style_tokens or {}
 
@@ -1805,12 +1923,23 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
                 s['message'] = f'Step {step}/{total}...'
 
     print(f"[local_img] FLUX prompt ({len(flux_prompt.split())} words): {flux_prompt}")
+    ref_cfg = _style_reference_settings(_meta)
+    ref_images = _style_reference_images(_meta, deck_dir)
+    if ref_images:
+        print(f"[local_img] style references: {len(ref_images)} image(s)"
+              f"{' averaged' if ref_cfg['average'] and len(ref_images) > 1 else ''}, "
+              f"{ref_cfg['tokens']} tokens, strength {ref_cfg['strength']}")
     with generation_lock:
-        _status[card_name]['message'] = 'Generating from text prompt...'
+        _status[card_name]['message'] = ('Generating with style references...'
+                                         if ref_images else 'Generating from text prompt...')
     return gen.generate(
         prompt=flux_prompt,
         width=w, height=h,
         progress_callback=on_step,
+        reference_images=ref_images,
+        reference_tokens=ref_cfg['tokens'],
+        reference_strength=ref_cfg['strength'],
+        reference_average=ref_cfg['average'],
     )
 
 
@@ -2057,7 +2186,8 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
             result_image = _generate_local(card_name, model_cfg, full_prompt,
                                            status_dict=_status,
                                            size_override=actual_size,
-                                           deck_meta=_meta)
+                                           deck_meta=_meta,
+                                           deck_dir=_raw_art_dir.parent)
         else:
             result_image = _generate_openai(card_name, model_cfg, full_prompt,
                                             status_dict=_status,
@@ -2093,6 +2223,10 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                 'card_prompt': base_prompt,
                 'distilled_subject': _meta.get('card_subjects', {}).get(card_name, ''),
                 'feedback': feedback,
+                'style_reference': ({**_style_reference_settings(_meta),
+                                     'images': [Path(p).name for p in
+                                                _style_reference_images(_meta, _raw_art_dir.parent)]}
+                                    if backend == 'local' else None),
                 'timestamp': datetime.now().isoformat(),
             }, f, indent=2)
 
@@ -2924,7 +3058,7 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
             active_deck_meta['card_subjects'] = {}
         return
 
-    style_source = data.get('style_source', '')
+    style_source = _effective_style_source(data)   # declared, else recognized by the analyst
 
     bcfg = backend_config.load_config()
     llm_backend = 'local'  # MLX-native pipeline is always local
@@ -2992,6 +3126,11 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         if flux_style_prompt:
             print(f"  [distill] FLUX style descriptors ({'named: '+style_source if style_source else 'image-only'}): {flux_style_prompt}")
     data['flux_style_prompt'] = flux_style_prompt
+    # How the named style stages scenes + its register: the scene writer's
+    # share of the idiom (the block above is the image model's share).
+    from vision_analyzer import style_staging_recall
+    data['style_staging'] = (style_staging_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
+                             if style_source else '')
 
     with open(deck_json_path, 'w') as f:
         json.dump(data, f, indent=2)
@@ -3000,6 +3139,7 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         active_deck_meta['style_tokens'] = tokens
         active_deck_meta['clip_directives'] = clip_dirs
         active_deck_meta['flux_style_prompt'] = flux_style_prompt
+        active_deck_meta['style_staging'] = data['style_staging']
 
     if tokens:
         print(f"  [distill] Style tokens saved for {deck_id}: {list(tokens.keys())}")
@@ -3530,6 +3670,7 @@ def get_deck_info(deck_id):
         'inspiration_style_description': data.get('inspiration_style_description', ''),
         'style_preamble': data.get('style_preamble'),
         'style_source': data.get('style_source', ''),
+        'style_reference': _style_reference_settings(data),
         'card_count': len(data.get('cards', [])),
         'oversized_generation': data.get('oversized_generation', False),
     })
@@ -3546,6 +3687,52 @@ def set_style_source(deck_id):
     # Re-distill style tokens with new source context
     _enqueue_analysis(deck_id, 'distill', label='Re-distill style')
     return jsonify({'success': True, 'style_source': style_source})
+
+
+@app.route('/api/decks/<deck_id>/style-reference', methods=['GET', 'POST'])
+def api_style_reference(deck_id):
+    """Get/set how strongly the deck's inspiration images steer renders (Redux).
+    POST {enabled?, tokens?, strength?, max_images?} — tokens is the per-image
+    budget (0 = off, 81 light, 256 medium, 729 strong — the full grid);
+    max_images how many inspiration images are sent (default 1, cap 4)."""
+    deck_dir = DECKS_DIR / deck_id
+    deck_json = deck_dir / "deck.json"
+    if not deck_json.exists():
+        return jsonify({'error': 'Deck not found'}), 404
+    with open(deck_json) as f:
+        data = json.load(f)
+    if request.method == 'GET':
+        return jsonify({'success': True, 'style_reference': _style_reference_settings(data),
+                        'reference_count': len(_style_reference_images(data, deck_dir))})
+    body = request.json or {}
+    cfg = _style_reference_settings(data)
+    if 'tokens' in body:
+        try:
+            cfg['tokens'] = max(0, min(STYLE_REFERENCE_MAX_TOKENS, int(body['tokens'])))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'tokens must be an integer'}), 400
+        # A positive budget IS the intent to use references: setting the dial
+        # above Off re-enables without a separate flag (Off = tokens 0).
+        if 'enabled' not in body:
+            cfg['enabled'] = cfg['tokens'] > 0
+    if 'strength' in body:
+        try:
+            cfg['strength'] = max(0.0, min(2.0, float(body['strength'])))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'strength must be a number'}), 400
+    if 'enabled' in body:
+        cfg['enabled'] = bool(body['enabled'])
+    if 'max_images' in body:
+        try:
+            cfg['max_images'] = max(1, min(STYLE_REFERENCE_MAX_IMAGES, int(body['max_images'])))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'max_images must be an integer'}), 400
+    if 'average' in body:
+        cfg['average'] = bool(body['average'])
+    _save_deck_meta_field(deck_id, style_reference=cfg)
+    if deck_id == active_deck_id:
+        active_deck_meta['style_reference'] = cfg
+    return jsonify({'success': True, 'style_reference': _style_reference_settings({'style_reference': cfg})})
 
 
 @app.route('/api/decks/<deck_id>/distill-style', methods=['POST'])
@@ -3801,15 +3988,19 @@ def _execute_prompt_job(job, ctx):
         unit = _face_unit_for(card, job.card_name)
         bcfg = backend_config.load_config()
         data = ctx['meta']
-        style_name = (data.get('style_source') or '').strip()
+        style_name = _effective_style_source(data)
         # The scene writer must not be TOLD the franchise name either — it
         # biases scenes toward the show's trademark settings (labs, portals,
         # garages), which are character attractors at render time.
         from prompt_generator import franchise_style_phrase
         style_hint = franchise_style_phrase(style_name) or style_name
-        flux_style = (data.get('flux_style_prompt') or '').strip()
+        # The block's palette clause is for the image model; in the writer's
+        # hint it turns into scene content ("coral-colored stone").
+        from prompt_generator import hint_without_palette
+        flux_style = hint_without_palette(data.get('flux_style_prompt') or '')
         if flux_style:
             style_hint = f"{style_hint} — {flux_style}" if style_hint else flux_style
+        staging = (data.get('style_staging') or '').strip()
         can_ai = (bcfg['llm_backend'] == 'local') or openai_client
         if job.use_ai and can_ai:
             # Retry on transient rate limits (429) with backoff before falling
@@ -3823,7 +4014,7 @@ def _execute_prompt_job(job, ctx):
                         unit, openai_client, backend=bcfg['llm_backend'],
                         local_model=bcfg['ollama_model'], style_hint=style_hint,
                         steer=(job.feedback or ''),
-                        style_source_name=style_name)
+                        style_source_name=style_name, staging=staging)
                     break
                 except Exception as e:
                     err_str = str(e)
@@ -7427,6 +7618,8 @@ header .separator {
   font-style: italic;
 }
 .style-source-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.style-ref-slider { flex: 1; min-width: 80px; accent-color: var(--accent, #e8b73a); }
+.style-ref-label { min-width: 64px; font-size: 12px; color: var(--text-secondary, #9aa4b2); text-align: right; }
 .style-source-label { font-size: 0.75em; color: var(--text-muted); white-space: nowrap; }
 .style-source-input {
   flex: 1; min-width: 0;
@@ -8067,6 +8260,13 @@ header .separator {
           <input type="text" id="styleSourceInput" class="style-source-input"
                  placeholder='e.g. "Studio Ghibli", "Borderlands"'
                  onchange="saveStyleSource(this.value)">
+        </div>
+        <div class="style-source-row style-ref-row">
+          <label for="styleRefSlider" class="style-source-label"
+                 title="How strongly the inspiration images themselves steer each render (FLUX Redux, injected into the model's style blocks only — the card keeps its own subject at every setting). Off = text only · Light · Medium · Strong (default) = the references' full medium, palette and stroke.">Reference strength</label>
+          <input type="range" id="styleRefSlider" class="style-ref-slider" min="0" max="3" step="1" value="3"
+                 oninput="previewStyleReference(this.value)" onchange="saveStyleReference(this.value)">
+          <span id="styleRefLabel" class="style-ref-label">Strong</span>
         </div>
         <div class="overview-btn-row">
           <button class="btn btn-secondary btn-sm" id="btnReanalyzeStyle" onclick="reanalyzeStyle()"
@@ -8722,8 +8922,21 @@ async function openQueueJob(deckId, cardName) {
     }
   }
   if (!base) { switchPanelTab('inspiration'); return; }   // style-analysis job
-  const card = allCards.find(c => c.name === base);
-  if (!card) { showToast('Card not found in this deck', 'warning'); return; }
+  let card = allCards.find(c => c.name === base);
+  if (!card) {
+    // The grid can be stale relative to the job (a deck edited or imported
+    // since the last load): refresh the card list once before giving up.
+    try {
+      const resp = await fetch('/api/cards');
+      if (resp.ok) { allCards = await resp.json(); renderGrid(); }
+    } catch (e) { /* fall through to the message below */ }
+    card = allCards.find(c => c.name === base);
+  }
+  if (!card) {
+    const deckLabel = document.getElementById('deckSelect')?.selectedOptions?.[0]?.textContent || deckId || 'this deck';
+    showToast(`"${base}" is no longer in ${deckLabel.replace(/ \(\d+\/\d+\)$/, '')}`, 'warning');
+    return;
+  }
   selectCard(base);
   if (isBack && (card.is_dfc || card.is_split_halves)) setFace('back');
   switchPanelTab('card');
@@ -12162,6 +12375,8 @@ async function loadDeckSettings() {
     // Populate style source input
     const sourceInput = document.getElementById('styleSourceInput');
     if (sourceInput) sourceInput.value = deckInfo.style_source || '';
+    // Style reference strength (Redux token budget) slider
+    loadStyleReference(deckInfo.style_reference);
 
     // Load art orientation toggle state
     loadArtOrientation();
@@ -12288,6 +12503,54 @@ async function saveStyleSource(value) {
     if (deckInfo) deckInfo.style_source = value;
   } catch (e) {
     console.error('Failed to save style source:', e);
+  }
+}
+
+// Style reference strength: slider levels -> per-image Redux token budget.
+// 729 = Redux's native 27x27 grid (a variation of the reference); pooled
+// budgets keep the style statistics and drop the reference's layout.
+// References are injected into FLUX's style blocks only (see flux_worker),
+// so the dial is pure strength: the full 729-token grid ('Strong', default)
+// carries the reference's medium, palette and stroke without its figures.
+const STYLE_REF_LEVELS = [
+  { label: 'Off',    tokens: 0 },
+  { label: 'Light',  tokens: 81 },
+  { label: 'Medium', tokens: 256 },
+  { label: 'Strong', tokens: 729 },
+];
+function _styleRefLevelFor(tokens) {
+  let best = 0;
+  STYLE_REF_LEVELS.forEach((l, i) => {
+    if (Math.abs(l.tokens - tokens) < Math.abs(STYLE_REF_LEVELS[best].tokens - tokens)) best = i;
+  });
+  return best;
+}
+function previewStyleReference(level) {
+  const lbl = document.getElementById('styleRefLabel');
+  if (lbl) lbl.textContent = STYLE_REF_LEVELS[parseInt(level, 10)]?.label || '';
+}
+function loadStyleReference(cfg) {
+  const slider = document.getElementById('styleRefSlider');
+  if (!slider) return;
+  const tokens = (cfg && cfg.enabled !== false) ? (cfg.tokens ?? 729) : 0;
+  slider.value = _styleRefLevelFor(tokens);
+  previewStyleReference(slider.value);
+}
+async function saveStyleReference(level) {
+  const deckId = document.getElementById('deckSelect').value;
+  if (!deckId) return;
+  const lv = STYLE_REF_LEVELS[parseInt(level, 10)] || STYLE_REF_LEVELS[3];
+  previewStyleReference(level);
+  try {
+    const r = await fetch(`/api/decks/${deckId}/style-reference`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tokens: lv.tokens, enabled: lv.tokens > 0 }),
+    });
+    const d = await r.json();
+    if (!d.success) { showToast(d.error || 'Failed to save reference strength', 'error'); return; }
+    showToast(`Reference strength: ${lv.label} — applies to new renders`, 'info');
+  } catch (e) {
+    showToast('Network error: ' + e.message, 'error');
   }
 }
 

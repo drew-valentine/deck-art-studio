@@ -276,10 +276,15 @@ def _describe_enchantment(name, oracle, keywords, atmosphere, flavor=''):
     # symbols. Strip stray '{...}' tokens defensively.
     story = re.sub(r'\{[^}]*\}', '', flavor or '').strip()
     story_line = f" The scene is drawn from its story: {story}" if story else ''
+    # With no flavor text the name is the strongest imagery cue: a card called
+    # "Breaching Dragonstorm" is a storm of dragons breaking through, not "a
+    # familiar over a library". Say so, or the writer invents a subject.
+    name_line = (f" Its name is the scene: depict what '{name}' literally evokes"
+                 + ("; the story sets the mood, not the subject." if story else "."))
     return (
         f"A concrete illustrated scene representing the enchantment {name} — "
         f"depict the people, creatures, place, or event it embodies (not abstract "
-        f"energy), set in an atmosphere of {atmosphere}.{story_line}{coin_desc}"
+        f"energy), set in an atmosphere of {atmosphere}.{story_line}{name_line}{coin_desc}"
     )
 
 
@@ -487,10 +492,121 @@ def generate_prompts_for_deck(cards: list[dict], style_preamble: str = None) -> 
 # ---------------------------------------------------------------------------
 # AI-enhanced prompt generation (uses OpenAI or local Ollama)
 # ---------------------------------------------------------------------------
+# The opening-rule example must be built from THIS card. A fixed example
+# ("Okaun, Eye of Chaos, a Cyclops Berserker, storms...") taught the 3B model
+# to parrot the example's NAME: 'Okaun, Human Soldier' for Palace Jailer,
+# 'Okaun, the labyrinth' for Maze of Ith — twelve prompts across seven decks.
+# With the card's own name in the example, parroting it is exactly right.
+_EXAMPLE_LEAK_NAMES = ('Okaun, Eye of Chaos', 'Okaun')
+
+
+def _opening_example(card: dict) -> str:
+    name = card.get('name', 'The subject').split(' // ')[0]
+    type_line = card.get('type_line', '') or ''
+    subtypes = ''
+    if '—' in type_line or '\u2014' in type_line:
+        subtypes = re.split(r'[—\u2014]', type_line, 1)[1].strip()
+    if card.get('card_type') == 'creature' and subtypes:
+        return f"{name}, {_article(subtypes)} {subtypes}, ..."
+    return f"{name}, ..."
+
+
+def _article(word: str) -> str:
+    return 'an' if word[:1].lower() in 'aeiou' else 'a'
+
+
+_PREAMBLE_RE = re.compile(
+    r"^\s*(?:(?:sure|certainly|of course|okay|ok)[,!.]?\s*)?"
+    r"(?:here(?:'s| is| are)|below is|this is|i(?:'ve| have) (?:rewritten|written|created))"
+    r"[^\n:]{0,120}:\s*", re.IGNORECASE)
+
+
+def hint_without_palette(block: str) -> str:
+    """The style block minus its 'palette of ...' clause. Hue names are for
+    the image model; handed to the scene writer they become scene content
+    ('dusty coral background', 'coral-colored stone')."""
+    import re as _re
+    if not block:
+        return ''
+    parts = [p.strip() for p in block.split(',')]
+    out, skipping = [], False
+    for p in parts:
+        if p.lower().startswith('palette of'):
+            skipping = True          # the clause runs across several commas
+            continue
+        if skipping and p and p == p.lower() and len(p.split()) <= 3 and not _re.search(r'\b(lines?|ink|shading|outlines?|textures?|brush|pen|strokes?|detail|anatomy|eyes|faces|forms|hair)\b', p):
+            continue                 # still inside the hue list
+        skipping = False
+        out.append(p)
+    return ', '.join(x for x in out if x)
+
+
+def _limit_scene_sentences(text: str, max_sentences: int = 2, max_words: int = 45) -> str:
+    """Composition backstop: keep the first ``max_sentences`` sentences. The
+    scene writer is asked for two; a third almost always introduces a second
+    focal element (a shark beside the dragon, a gravestone beside the dock)."""
+    import re as _re
+    if not text:
+        return text
+    parts = _re.split(r'(?<=[.!?])\s+', text.strip())
+    # drop a trailing fragment (max_tokens cut mid-sentence: "..., a small")
+    if len(parts) > 1 and (not parts[-1].rstrip().endswith(('.', '!', '?'))
+                           or len(parts[-1].split()) < 4):
+        parts = parts[:-1]
+    out = ' '.join(parts[:max_sentences]).strip()
+    # word cap: the writer front-loads the focal subject, so trailing clauses
+    # are where the second turtle / cat pile / soldier crowd arrives — cut at
+    # the last clause boundary before the cap
+    words = out.split()
+    if len(words) > max_words:
+        # prefer whole sentences: drop the second sentence rather than cutting
+        # it mid-clause ("winding towards a distant."); only a lone over-long
+        # sentence gets a clause-boundary cut
+        sents = _re.split(r'(?<=[.!?])\s+', out)
+        if len(sents) > 1 and len(sents[0].split()) >= 12:
+            out = sents[0].strip()
+        else:
+            head = ' '.join(words[:max_words])
+            cut = max(head.rfind(', '), head.rfind('; '), head.rfind('. '))
+            head = head[:cut] if cut > len(head) // 2 else head
+            out = head.rstrip(' ,;.') + '.'
+    return out
+
+
+def _strip_chat_preamble(text: str) -> str:
+    """Small chat models sometimes answer like a chat turn — "Here is a
+    rewritten description for Bountiful Landscape:" — and that line was
+    landing in the art prompt verbatim. Drop a leading conversational lead-in
+    (anything up to the first colon that reads like an announcement) and any
+    markdown fences."""
+    if not text:
+        return text
+    out = text.strip().strip('`').strip()
+    out = _PREAMBLE_RE.sub('', out, count=1)
+    return out.strip()
+
+
+def _strip_example_leak(text: str, card: dict) -> str:
+    """Backstop: if a leaked example name opens the scene and this card is not
+    that card, substitute the card's own name."""
+    name = card.get('name', '')
+    if not text or any(n.split(',')[0] in name for n in _EXAMPLE_LEAK_NAMES):
+        return text
+    out = text
+    for leak in _EXAMPLE_LEAK_NAMES:            # longest first
+        if out.lstrip().startswith(leak):
+            out = out.lstrip()
+            rest = out[len(leak):]
+            # drop a grafted "'s" possessive or an appositive that duplicates the type
+            out = name.split(' // ')[0] + rest
+            break
+    return out
+
+
 def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'openai',
                               local_model: str = 'llama3.1:8b',
                               style_hint: str = '', steer: str = '',
-                              style_source_name: str = '') -> str:
+                              style_source_name: str = '', staging: str = '') -> str:
     """Use an LLM to generate a subject description tailored to the deck's style.
 
     Sends the LLM a rule-based description as a reference anchor plus
@@ -522,7 +638,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     # the deck theme (e.g. sci-fi → android faces) otherwise hijacks the subject.
     _no_character = card_type in ('artifact', 'enchantment', 'land', 'instant', 'sorcery')
     type_guidance = {
-        'artifact': 'Depict the artifact OBJECT itself, filling the frame. If the card NAME literally names a physical thing or body part (e.g. "Krark\'s Thumb" = a thumb, "Sol Ring" = a ring, "Sword of X" = a sword), depict THAT literal object as the relic — do NOT substitute a generic glowing disc, amulet, or runed orb. NOT a landscape, NOT a person.',
+        'artifact': 'Depict the artifact OBJECT itself, filling the frame. If the card NAME literally names a physical thing or body part (e.g. "Krark\'s Thumb" = a thumb, "Sol Ring" = a ring, "Sword of X" = a sword), depict THAT literal object as the relic — do NOT substitute a generic glowing disc, amulet, or runed orb. In the FIRST sentence say what physical object it is in plain everyday words the image model knows (a signet is "a signet ring", a phylactery is "a small ornate box", a bauble is "a glass trinket"), then describe it. NOT a landscape, NOT a person.',
         'enchantment': 'Depict the SCENE the enchantment represents — the people, creatures, place, ritual, or event drawn from its flavor and rules text (e.g. an army of warriors growing stronger under a hopeful dawn, a blessing settling over a battlefield). Do NOT default to abstract swirling energy, a glowing aura, or a magical vortex — give it concrete subject matter.',
         'instant': 'Depict the dramatic moment of the spell being cast — the action and energy itself.',
         'sorcery': 'Depict the spell being cast — the ritual, the gathering of power.',
@@ -535,7 +651,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     system_msg = (
         "You write art descriptions for card illustrations. "
         "Given an MTG card and a reference description, rewrite it into a more "
-        "creative and evocative 2-3 sentence scene. "
+        "creative and evocative two-sentence scene. "
         "THE #1 RULE: the card's own subject (from the reference description) MUST "
         "be the single, unmistakable, dominant focal point that fills the frame. "
         "Enhance the imagery; do NOT change WHAT is depicted and do NOT introduce a "
@@ -543,11 +659,20 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         "must never replace, crowd out, or upstage the card's subject. "
         "OPENING RULE (critical): the FIRST sentence must open with the subject "
         "itself — name it, and for creatures state its CREATURE TYPE as an "
-        "appositive right after the name (e.g. 'Okaun, Eye of Chaos, a Cyclops "
-        "Berserker, storms...'), then place it in the scene. NEVER open with the "
+        f"appositive right after the name (e.g. '{_opening_example(card)}'), "
+        "then place it in the scene. NEVER open with the "
         "setting, weather, or atmosphere ('In the heart of the swirling mist...') "
         "— the image model paints whatever comes first, and setting-first "
         "openings produce subjectless art. "
+        "GAME TERMS: in rules text, 'library', 'graveyard', 'hand', 'exile', "
+        "'battlefield', 'stack' and 'deck' are game ZONES, not places — NEVER depict "
+        "a library, a graveyard or a battlefield because the rules mention one. "
+        "COMPOSITION RULE (critical): ONE focal subject, ONE setting, ONE action. The "
+        "focal subject is the largest thing in the frame, in the foreground, clearly "
+        "visible — never buried behind props or scenery. "
+        "Do not add secondary creatures, characters, or props unless the card's own "
+        "text names them — a 4-step image model cannot resolve competing focal points, "
+        "so every extra element muddies the picture. Two SHORT sentences, under 40 words total. "
         "Be inventive and VARY it each time: choose a fresh setting, camera angle, "
         "distance, time of day, weather, and composition so re-rolls feel distinct "
         "rather than repeating the same scene — but always keep the same focal subject. "
@@ -597,6 +722,18 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                     "NOT become the focal point or replace the card's own subject. Keep the "
                     "card's subject dominant and clearly readable; the themes are set dressing."
                 )
+        elif staging and staging.strip():
+            # the register comes from the style itself (see style_staging_recall),
+            # not from the calm-film-still default below
+            system_msg += (
+                f"\n\nCRITICAL — The art style is: {style_hint}. "
+                "Describe specific, concrete visual details — composition, posture, "
+                "objects, lighting. NEVER use dramatic fantasy language like 'maelstrom', "
+                "'volcanic fury', 'arcane energy', 'swirling vortex', 'blazing', 'exploding'."
+                f"\n\nSTAGING AND REGISTER — stage the scene the way this artist would, and "
+                f"write in their tone: {staging.strip()} Apply this to the setting, props, "
+                "posture and mood ONLY — the card's subject stays exactly what it is."
+            )
         else:
             system_msg += (
                 f"\n\nCRITICAL — The art style is: {style_hint}. "
@@ -640,15 +777,20 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     safe_flavor = _strip_franchise_sentences(flavor,
                                              style_source_name or style_hint)
 
+    # Rules text is game mechanics, not imagery: "exile cards from the top of
+    # your library" made an enchantment a library twice. Only creatures and
+    # planeswalkers get it (keywords like flying / menace are visual).
+    rules_line = f"Rules: {oracle}\n" if card_type in ('creature', 'planeswalker') and oracle else ""
     user_msg = (
-        f"Card: {name}\nType: {type_line}\nRules: {oracle}\n"
+        f"Card: {name}\nType: {type_line}\n{rules_line}"
         + (f"Flavor text (use this as the THEMATIC ANCHOR for the scene): {safe_flavor}\n" if safe_flavor else "")
         + f"Direction: {guidance}\n"
+        + "Keep it simple: one subject, one setting, one action, two sentences.\n"
         + (f"User steer (OVERRIDES the reference description wherever they "
            f"conflict): {steer.strip()}\n" if steer and steer.strip() else "")
         + f"Reference description: {base_desc}\n"
-        f"Ground the scene in this card's flavor and rules — concrete subjects, not "
-        f"abstract energy. Rewrite into a detailed scene description (2-3 sentences):"
+        f"Ground the scene in this card's name and flavor — concrete subjects, not "
+        f"abstract energy. Rewrite into a scene description (two short sentences):"
     )
 
     try:
@@ -659,12 +801,15 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                 {'role': 'user', 'content': user_msg},
             ],
             model=local_model,
-            max_tokens=200,
+            max_tokens=140,
             temperature=0.8,  # varied between re-rolls; 0.95 made the 3B model
                               # degenerate into word-salad tails ("waveform GS cave
                               # events super intend impact"), so keep it lower.
         )
+        out = _strip_chat_preamble(out)
         out = _strip_franchise_sentences(out, style_source_name or style_hint)   # output backstop
+        out = _strip_example_leak(out, card)
+        out = _limit_scene_sentences(out, 2)
         return _ensure_creature_type_in_prompt(out, card)
     except Exception as e:
         print(f"  [prompt_gen] AI failed for {name}: {e}, using rule-based")
