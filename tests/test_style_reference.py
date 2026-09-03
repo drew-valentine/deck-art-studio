@@ -50,6 +50,11 @@ class TestSettings:
         cfg = ds._style_reference_settings({'style_reference': {'tokens': 0}})
         assert cfg['enabled'] is False
 
+    def test_tokens_capped_at_balanced(self):
+        # Balanced (81) is the ceiling: stored or posted values above it clamp.
+        cfg = ds._style_reference_settings({'style_reference': {'tokens': 729}})
+        assert cfg['tokens'] == 81
+
     def test_bad_values_fall_back(self):
         cfg = ds._style_reference_settings({'style_reference': {'tokens': 'lots', 'strength': 'x'}})
         assert cfg['tokens'] == 25 and cfg['strength'] == 1.0
@@ -117,6 +122,8 @@ class TestApi:
         assert p['success'] and p['style_reference']['tokens'] == 9
         saved = json.loads((d / 'deck.json').read_text())['style_reference']
         assert saved['tokens'] == 9
+        high = client.post('/api/decks/deckR/style-reference', json={'tokens': 729}).get_json()
+        assert high['style_reference']['tokens'] == 81          # clamped to Balanced
         off = client.post('/api/decks/deckR/style-reference', json={'tokens': 0}).get_json()
         assert off['style_reference']['enabled'] is False
         assert client.get('/api/decks/deckR/deck-info').get_json()['style_reference']['tokens'] == 0

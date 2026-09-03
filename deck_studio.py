@@ -1710,6 +1710,7 @@ def _build_negative_fallback(style_tokens: dict, deck_meta: dict) -> str:
 # `max_images` raises that (hard cap STYLE_REFERENCE_MAX_IMAGES).
 STYLE_REFERENCE_DEFAULT = {'enabled': True, 'tokens': 25, 'strength': 1.0, 'max_images': 1}
 STYLE_REFERENCE_MAX_IMAGES = 4   # hard cap; the per-deck default is ONE reference
+STYLE_REFERENCE_MAX_TOKENS = 81  # 'Balanced' is the ceiling — above it the reference's content displaces the subject
 
 
 def _style_reference_settings(meta) -> dict:
@@ -1718,7 +1719,7 @@ def _style_reference_settings(meta) -> dict:
     cfg.update({k: v for k, v in ((meta or {}).get('style_reference') or {}).items()
                 if k in cfg})
     try:
-        cfg['tokens'] = max(0, int(cfg['tokens']))
+        cfg['tokens'] = max(0, min(STYLE_REFERENCE_MAX_TOKENS, int(cfg['tokens'])))
         cfg['strength'] = float(cfg['strength'])
         cfg['max_images'] = max(1, min(STYLE_REFERENCE_MAX_IMAGES, int(cfg['max_images'])))
     except (TypeError, ValueError):
@@ -3619,7 +3620,7 @@ def set_style_source(deck_id):
 def api_style_reference(deck_id):
     """Get/set how strongly the deck's inspiration images steer renders (Redux).
     POST {enabled?, tokens?, strength?, max_images?} — tokens is the per-image
-    budget (0 = off, 9 palette-only, 25 subtle, 81 balanced, 729 clone);
+    budget (0 = off, 9 palette-only, 25 subtle, 81 balanced — the ceiling);
     max_images how many inspiration images are sent (default 1, cap 4)."""
     deck_dir = DECKS_DIR / deck_id
     deck_json = deck_dir / "deck.json"
@@ -3634,7 +3635,7 @@ def api_style_reference(deck_id):
     cfg = _style_reference_settings(data)
     if 'tokens' in body:
         try:
-            cfg['tokens'] = max(0, min(729, int(body['tokens'])))
+            cfg['tokens'] = max(0, min(STYLE_REFERENCE_MAX_TOKENS, int(body['tokens'])))
         except (TypeError, ValueError):
             return jsonify({'error': 'tokens must be an integer'}), 400
     if 'strength' in body:
@@ -8179,8 +8180,8 @@ header .separator {
         </div>
         <div class="style-source-row style-ref-row">
           <label for="styleRefSlider" class="style-source-label"
-                 title="How strongly the inspiration images themselves steer each render (FLUX Redux). Off = text only · Palette = colors only · Subtle (default) = the reference's medium and palette, each card keeps its own subject · Balanced/Strong = more of the reference's idiom, but its figures start to displace the card's subject (references with prominent characters leak them) · Clone = a variation of the reference.">Reference strength</label>
-          <input type="range" id="styleRefSlider" class="style-ref-slider" min="0" max="5" step="1" value="2"
+                 title="How strongly the inspiration images themselves steer each render (FLUX Redux). Off = text only · Palette = colors only · Subtle (default) = the reference's medium and palette, each card keeps its own subject · Balanced = the reference's full idiom (references with prominent characters may leak them).">Reference strength</label>
+          <input type="range" id="styleRefSlider" class="style-ref-slider" min="0" max="3" step="1" value="2"
                  oninput="previewStyleReference(this.value)" onchange="saveStyleReference(this.value)">
           <span id="styleRefLabel" class="style-ref-label">Subtle</span>
         </div>
@@ -12412,13 +12413,14 @@ async function saveStyleSource(value) {
 // Style reference strength: slider levels -> per-image Redux token budget.
 // 729 = Redux's native 27x27 grid (a variation of the reference); pooled
 // budgets keep the style statistics and drop the reference's layout.
+// Balanced (81 pooled tokens) is the ceiling: above it the reference's own
+// figures and layout displace the card's subject, which is never what a deck
+// wants — so the dial simply doesn't go there.
 const STYLE_REF_LEVELS = [
   { label: 'Off',      tokens: 0 },
   { label: 'Palette',  tokens: 9 },
   { label: 'Subtle',   tokens: 25 },
   { label: 'Balanced', tokens: 81 },
-  { label: 'Strong',   tokens: 169 },
-  { label: 'Clone',    tokens: 729 },
 ];
 function _styleRefLevelFor(tokens) {
   let best = 0;
