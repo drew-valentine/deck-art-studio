@@ -94,6 +94,13 @@ decks/<deck-slug>/
   (franchise / artist / movement — the franchise gate for de-naming; the `_FRANCHISE_PHRASES`
   table is only the offline fallback), `style_lineage` (a de-named production lineage for the
   render lead), `style_idiom` (list; the writer puts it on creatures as a figure idiom).
+  Render-side (deck_studio): `_style_block_window(card_type)` — creatures/planeswalkers show the
+  references to double blocks 0-14 (figure design), other types 0-9; `_assemble_flux_prompt` order =
+  lead + colour-coverage clause, subject sentence, full block, rest of scene; `/api/generate` takes
+  `seed` for like-for-like A/Bs (experiment hooks: FLUX_PROMPT_ORDER, STYLE_BLOCKS_DOUBLE,
+  FIGURE_IDIOM, SCENE_CHECK, REDUX_EDGE_CROP, FLUX_LEAD_OVERRIDE, FLUX_GUARD_EXTRA). Colour coverage
+  is measured from reference pixels (`pixel_palette`); character-heavy references (VLM yes/no,
+  `prominent_character`) default the deck to Medium unless `style_reference.user_set`.
   STANDING RULE: deck-agnostic and style-agnostic — a new style must work with zero code
   changes; derive facts from the declaration, model knowledge and vision reads, never tables.
 - **18 GB memory rule**: FLUX and the LLM/VLM cannot be co-resident. `mlx_llm.unload()` is
