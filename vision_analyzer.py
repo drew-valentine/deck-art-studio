@@ -1981,7 +1981,7 @@ def pixel_palette(image_path, n_bins: int = 12):
         import colorsys
         im = Image.open(image_path).convert('RGB')
         im.thumbnail((192, 192))
-        px = list(im.getdata())
+        px = list(im.get_flattened_data()) if hasattr(im, 'get_flattened_data') else list(im.getdata())
         total = float(len(px)) or 1.0
         bins = {}
         sat_sum = 0.0
