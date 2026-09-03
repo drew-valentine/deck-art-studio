@@ -931,11 +931,52 @@ def deck_id_from_name(name: str) -> str:
 
 
 def _load_deck_registry() -> dict:
-    """Load the deck registry from disk."""
+    """Load the deck registry from disk, reconciled with what is actually on
+    disk: any deck directory holding a valid deck.json that the registry does
+    not list is added back (name from deck.json, created from the directory
+    mtime). The registry is a cache of the filesystem, not the source of truth
+    — fourteen decks (temur-roar, riders-of-rohan-2, ...) once vanished from
+    the dropdown while every file sat intact under decks/."""
+    registry = {'decks': [], 'active': None}
     if DECK_REGISTRY_PATH.exists():
-        with open(DECK_REGISTRY_PATH) as f:
-            return json.load(f)
-    return {'decks': [], 'active': None}
+        try:
+            with open(DECK_REGISTRY_PATH) as f:
+                registry = json.load(f)
+        except (OSError, ValueError):
+            registry = {'decks': [], 'active': None}
+    registry.setdefault('decks', [])
+    registry.setdefault('active', None)
+    added = _reconcile_registry_with_disk(registry)
+    if added:
+        print(f"[decks] registry reconciled: re-added {', '.join(added)}")
+        _save_deck_registry(registry)
+    return registry
+
+
+def _reconcile_registry_with_disk(registry: dict) -> list:
+    """Add on-disk decks missing from ``registry`` (in place); returns their ids."""
+    known = {d.get('id') for d in registry.get('decks', [])}
+    added = []
+    if not DECKS_DIR.exists():
+        return added
+    for entry in sorted(DECKS_DIR.iterdir()):
+        deck_json = entry / 'deck.json'
+        if not entry.is_dir() or entry.name in known or not deck_json.exists():
+            continue
+        if not _is_safe_deck_id(entry.name):
+            continue
+        try:
+            with open(deck_json) as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(meta, dict):
+            continue
+        created = meta.get('created') or datetime.fromtimestamp(entry.stat().st_mtime).isoformat()
+        registry['decks'].append({'id': entry.name, 'name': meta.get('name') or entry.name,
+                                  'created': created})
+        added.append(entry.name)
+    return added
 
 
 def _save_deck_registry(registry: dict):
