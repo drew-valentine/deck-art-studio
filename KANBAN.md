@@ -84,7 +84,60 @@
 
 ## In Review
 
+- [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Review Started: 2026-09-02 | Owner: drew-valentine
+  - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — In Review, awaiting the owner's ship decision.
+  - Branch: `feat/redux-style-reference`
+  - Root cause of every post-July style complaint: the FLUX/MLX migration (PR #2) dropped IP-Adapter image conditioning, so deck style became text-only. The inspiration images stopped reaching the image model at all — every fix since has been an attempt to describe them in words instead.
+  - Evidence: demo-alela v1 (March, SDXL + IP-Adapter) reads as unmistakably Egyptian; no FLUX render since does.
+  - Prototype done: FLUX Redux on schnell via mflux 0.19.1 with reference-token pooling (729 → 81 tokens) holds style and subject together at 57 s/card, faster than the text-only path (~65 s). Weights are ungated (Runware/FLUX.1-Redux-dev mirror).
+  - Implemented: `Flux1Redux` wired into `flux_worker` with reference-token pooling and a per-`(path, mtime, tokens)` embedding cache. The resident Redux model also serves reference-less decks (mflux `[]` → `None` fix), so there is no second model to swap in.
+  - Implemented: per-deck `style_reference` setting, `/api/decks/<id>/style-reference`, and a "Reference strength" dial. The dial shipped Off → Clone and was capped during the overnight pass (see below).
+  - Validated live: Egyptian deck 60 s; Seuss deck with 4 references 76 s and unmistakably Seuss; no-reference deck 53 s.
+  - Overnight iteration, 2026-09-02 into 2026-09-03:
+    - Shipped on the PR branch — reference-token averaging across all of a deck's inspiration images: the pooled Redux tokens are combined element-wise into a mean, so per-image content cancels and the style the images share survives. Cleaner and leak-free next to conditioning on a single reference or concatenating several.
+    - Shipped on the PR branch — the dial is capped at Balanced (Off · Palette · Subtle · Balanced). 81 tokens is the ceiling, Subtle at 25 tokens is the default, and any positive token budget re-enables references. 408 tests green.
+    - Rejected after side-by-side runs on the same prompts and seed across 3 decks: late-step conditioning; texture crops; guidance amplification (adds artifacts); 8-step schedules; strided token subsampling (more content leak); two-pass compose→restyle (a no-op at 0.5); token noise (content comes back); averaged references at 169 and 729 tokens (the layout the references share leaks through); FLUX.2 klein-4B reference-edit mode (perfect subject, no style transfer).
+    - Per-deck LoRA is out: mflux 0.19 dropped FLUX.1 LoRA training, and the owner has ruled the approach out regardless.
+    - FLUX.1-dev + Redux (ungated mirror, 14 steps, ~215 s/card) transfers line character markedly better — visible across the Seuss row — but the subject drifts off the card. Candidate for an opt-in hi-fi render, not a default. Decision pending owner.
+    - Leak matrix: at 81 tokens with 4 references, reference content leaked on 3 of the 4 validation decks. At Subtle with averaged references, the subjects hold.
+    - Verdict: the target — style that screams without copying, subject preserved — is not reachable with zero-training reference conditioning on 4-step models. The shipped default is the honest best of what was tried.
+  - Progress, 2026-09-03 (supersedes the verdict above: the remaining gap was on the text side, and moving it moved the renders):
+    - Hypothesis ledger shipped. H4 (soft per-block reference scaling) REJECTED — it leaks the reference's cast even at 30%. The hard mask on DOUBLE blocks 0-9 stays the definition of "Strong".
+    - Text-side idiom work shipped, all committed on the branch: named-style idiom recall (8B Llama when cached) plus a vision read of the reference to say whose work it is, palette excluded; staging and tonal register recalled for the scene writer (`deck.json.style_staging`) — settings, props, camera and tone only, never the cast; the writer hint no longer carries the block's hue list; the scene writer defaults to the 8B model (7.6 s/card vs 4.4 s); composition backstops (one subject in the foreground, two sentences, 45-word whole-sentence cap, stub-sentence drop); an enchantment's name always sets the scene; rules text reaches the writer only for creatures and planeswalkers (game zones like "library" were becoming scenery); artifacts state their object in plain words.
+    - Result: Temur Roar (Rick and Morty references) went from generic Pokémon-style cartoon to show-plausible on 3 of 4 representative cards, with sensible composition on 4 of 4 in the latest completed round.
+    - Open before ship: cross-deck regression matrix (Marchesa, Heads-I-Win, Glissa/Seuss, Alela — legendary creature, land, artifact and enchantment each) under the new block builder, running now; creature faces (Keiga) still lean generic; ring-as-object clarity.
+    - Finishing bar (Drew): every fresh sheet must SCREAM the inspiration aesthetic AND compose sensibly for the card. Generic medium is a fail.
+  - Scope:
+    - [x] Wire `Flux1Redux` into `flux_worker` with a token-pooling hook
+    - [x] Pass each deck's inspiration images as references
+    - [x] Per-deck style-reference strength (token budget) setting + UI — capped at Balanced, default Subtle (25 tokens)
+    - [x] Average reference tokens across a deck's inspiration images
+    - [x] Cache reference embeddings per deck
+    - [x] Guard against reference figures and glyph text leaking into card art — the guard is the capped dial plus token averaging, not a separate filter
+    - [x] Validate across the validation decks — leak matrix run at 81 tokens × 4 references, and the Subtle/averaged default re-run on top of it
+    - [x] PR
+    - [x] Hypothesis ledger for the image channel — H4 (soft per-block reference scaling) run and rejected
+    - [x] Text-side idiom recall: named-style idiom + vision read, staging and tonal register, composition backstops, type-aware rules-text gating
+    - [ ] Cross-deck regression matrix under the new block builder (Marchesa, Heads-I-Win, Glissa/Seuss, Alela × 4 card types) — running
+    - [ ] Creature faces (Keiga) still generic; ring-as-object clarity
+  - Acceptance criteria (Given/When/Then):
+    - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
+    - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
+    - [x] Given a deck whose references contain figures or lettering, when cards are generated, then neither the reference figures nor their glyph text appear in the card art. — met by design: token averaging cancels per-image content and the dial cannot be pushed past 81 tokens. At 81 × 4 references the matrix leaked on 3 of 4 decks, so the ceiling is doing the work.
+    - [ ] Given the four validation decks (Seuss, Moebius, cartoon, Egyptian), when a card from each is rendered, then the result reads as that deck's source style — the demo-alela v1 bar. — OPEN, moving as of 2026-09-03. The image channel alone did not clear the bar; the text-side idiom work cleared it on 3 of 4 representative Temur Roar cards. The cross-deck regression matrix now running is the deciding evidence. FLUX.1-dev + Redux does transfer the line character; it costs ~215 s/card and drifts the subject.
+    - [x] Given a batch run, when per-card time is measured, then it stays at or under the current text-only path. — met at the Subtle default: 57–78 s/card against the ~65 s text-only baseline.
+
 ## Done
+
+- [x] Style authority: the user's declared style source outranks the model's interpretation | Priority: P1 | Completed: 2026-09-02 | Owner: drew-valentine
+  - Shipped as v1.49.0 (minor, released 2026-09-02) — four squash-merged PRs: #41 (commit 321ca79), #42 (ca9dcbc), #43 + #45 (merged as #45, commit 146953c), and #44 (f888827).
+  - Principle: when a user declares a style source, that declaration wins over whatever the vision model inferred, in every model-facing prompt.
+  - #41 — the declared source overrides the model's interpretation everywhere a prompt is built. Root case: the Dr. Seuss deck, declared "hand drawn", kept being described to FLUX as digital/vector art.
+  - #42 — Steer & Render overrides the reference anchor, appearance included. Root case: a Glissa steer was silently discarded because the reference anchor outranked it.
+  - #43 — evidence-derived ink axes: line weight, line character, and density are decoupled instead of moving together; the source-name stripper no longer eats medium words along with the franchise name.
+  - #45 — per-deck analysis progress (switching decks no longer leaves a stale entry behind) and an evidence-derived medium for decks with no declared source. Root case: demo-alela showed stuck progress and a palette-only style block.
+  - #44 — DFC front composites title only the front face's name. Root case: Darkbore Pathway rendered both face names in the title.
+  - Also fixed: a latent `NameError` in motif extraction.
 
 - [x] Ship README refresh: engaging README with fresh screenshots reflecting major features | Priority: P1 | Completed: 2026-07-21 | Owner: drew-valentine
   - Squash-merged to main via PR #37 (commit 3f390e2); tagged v1.48.1 (patch, released 2026-07-21).

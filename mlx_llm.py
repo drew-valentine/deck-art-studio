@@ -177,12 +177,28 @@ def _ensure_worker():
     print(f"[mlx] Spawned MLX worker subprocess (pid {_proc.pid})")
 
 
-def _request(req: dict) -> str:
+def _request(req: dict, _retry: bool = True) -> str:
     """Send one request to the worker and return its text reply.
 
     Raises RuntimeError if the worker errors or dies. Resets the worker on death
-    so the next call respawns a fresh process.
+    so the next call respawns a fresh process. A worker that DIES mid-request
+    (a Metal "GPU Hang" under memory pressure kills it with code -6) is retried
+    once in a fresh process before the error reaches the caller — otherwise a
+    transient hang silently degrades a whole prompt job to the rule-based
+    fallback.
     """
+    try:
+        return _request_once(req)
+    except RuntimeError as e:
+        if _retry and 'exited unexpectedly' in str(e):
+            import time as _time
+            print(f"[mlx] worker died mid-request ({e}); retrying once in a fresh worker")
+            _time.sleep(3)
+            return _request_once(req)
+        raise
+
+
+def _request_once(req: dict) -> str:
     global _proc
     import json as _json
     import mlx_worker

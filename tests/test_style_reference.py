@@ -273,3 +273,22 @@ class TestRecognizedSourceFallback:
         assert ds._effective_style_source(meta) == 'Rick and Morty'
         assert ds._effective_style_source({**meta, 'style_source': 'Moebius'}) == 'Moebius'
         assert ds._effective_style_source({}) == ''
+
+
+def test_mlx_request_retries_once_on_worker_death(monkeypatch):
+    import mlx_llm
+    calls = []
+    def once(req):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError('MLX worker exited unexpectedly (code -6)')
+        return 'ok'
+    monkeypatch.setattr(mlx_llm, '_request_once', once)
+    monkeypatch.setattr('time.sleep', lambda s: None)
+    assert mlx_llm._request({'cmd': 'chat'}) == 'ok' and len(calls) == 2
+    def always(req):
+        raise RuntimeError('MLX worker error: bad prompt')
+    monkeypatch.setattr(mlx_llm, '_request_once', always)
+    import pytest
+    with pytest.raises(RuntimeError):
+        mlx_llm._request({'cmd': 'chat'})
