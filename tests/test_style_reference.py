@@ -294,8 +294,9 @@ def test_mlx_request_retries_once_on_worker_death(monkeypatch):
         mlx_llm._request({'cmd': 'chat'})
 
 
-def test_flux_prompt_puts_the_subject_right_after_the_style_lead():
+def test_flux_prompt_puts_the_subject_right_after_the_style_lead(monkeypatch):
     import deck_studio as ds
+    monkeypatch.setenv('FLUX_PROMPT_ORDER', 'subject-early')
     bits = ['in the style of a 2010s adult animated sitcom, original character designs',
             'cel animation, thick outlines, palette of yellow, orange']
     out = ds._assemble_flux_prompt(bits, 'Aclazotz, a Bat God, unfurls her wings over the temple. Moonlight below.', 'more teeth')
@@ -304,3 +305,13 @@ def test_flux_prompt_puts_the_subject_right_after_the_style_lead():
     assert out.rstrip().endswith('no card frame, no borders.') and 'more teeth' in out
     # no style at all: scene, then guard
     assert ds._assemble_flux_prompt([], 'A ring on a table.').startswith('A ring on a table.')
+
+
+def test_flux_prompt_medium_subject_idiom_order(monkeypatch):
+    import deck_studio as ds
+    monkeypatch.setenv('FLUX_PROMPT_ORDER', 'medium-subject-idiom')
+    bits = ['in the style of X, original character designs',
+            'cel animation, fully coloured with saturated flat colour fills, no bare white paper, '
+            'palette of bright yellow, dusty coral, exaggerated body proportions, wobbly eyes']
+    out = ds._assemble_flux_prompt(bits, 'Keiga, a Dragon Spirit, bursts from the sea. Mist below.')
+    assert out.startswith('in the style of X, original character designs, cel animation, fully coloured with saturated flat colour fills, no bare white paper, palette of bright yellow, dusty coral. Keiga, a Dragon Spirit, bursts from the sea. exaggerated body proportions, wobbly eyes. Mist below.')

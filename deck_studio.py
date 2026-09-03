@@ -1824,7 +1824,36 @@ def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '') -> 
     rest = ' '.join(sents[1:]).rstrip(' .') if len(sents) > 1 else ''
     bits = [b for b in (style_bits or []) if b]
     lead, block = (bits[0], bits[1:]) if bits else ('', [])
-    pieces = [lead, first, ', '.join(block), rest, (feedback_text or '').rstrip(' .')]
+    order = os.environ.get('FLUX_PROMPT_ORDER', 'subject-early')
+    if order == 'style-first':
+        pieces = [', '.join(bits), subject]
+    elif order == 'subject-early':
+        pieces = [lead, first, ', '.join(block), rest]
+    else:
+        # medium anchors (through the palette clause) stay in front with the
+        # lead; the subject follows; the idiom, motifs and reference read
+        # come after it, then the rest of the scene
+        items = [x.strip() for x in ', '.join(block).split(',') if x.strip()]
+        front, back, in_palette = [], [], False
+        try:
+            from vision_analyzer import _COLOR_WORDS
+        except Exception:
+            _COLOR_WORDS = frozenset()
+        for it in items:
+            low = it.lower()
+            if back:
+                back.append(it); continue
+            if low.startswith('palette of'):
+                front.append(it); in_palette = True; continue
+            is_hue = any(w.rstrip('s') in _COLOR_WORDS for w in _re.findall(r'[a-z]+', low))
+            if in_palette and is_hue and len(low.split()) <= 3:
+                front.append(it); continue
+            if in_palette:
+                back.append(it)           # first non-hue item after the palette
+            else:
+                front.append(it)          # medium anchors / colour coverage
+        pieces = [', '.join(x for x in [lead] + front if x), first, ', '.join(back), rest]
+    pieces.append((feedback_text or '').rstrip(' .'))
     out = '. '.join(p for p in pieces if p) + '.'
     return out + ' No text, no words, no signature, no watermark, no card frame, no borders.'
 
