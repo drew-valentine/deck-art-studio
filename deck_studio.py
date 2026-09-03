@@ -946,19 +946,26 @@ def _load_deck_registry() -> dict:
             registry = {'decks': [], 'active': None}
     registry.setdefault('decks', [])
     registry.setdefault('active', None)
-    added = _reconcile_registry_with_disk(registry)
-    if added:
-        print(f"[decks] registry reconciled: re-added {', '.join(added)}")
+    added, pruned = _reconcile_registry_with_disk(registry)
+    if added or pruned:
+        print(f"[decks] registry reconciled: re-added {added or 'none'}; pruned {pruned or 'none'}")
         _save_deck_registry(registry)
     return registry
 
 
-def _reconcile_registry_with_disk(registry: dict) -> list:
-    """Add on-disk decks missing from ``registry`` (in place); returns their ids."""
+def _reconcile_registry_with_disk(registry: dict) -> tuple:
+    """Add on-disk decks missing from ``registry`` and drop entries whose
+    directory no longer holds a deck.json (in place). Returns (added, pruned)."""
+    if not DECKS_DIR.exists():
+        return [], []
+    pruned = [d.get('id') for d in registry.get('decks', [])
+              if not (DECKS_DIR / str(d.get('id') or '') / 'deck.json').exists()]
+    if pruned:
+        registry['decks'] = [d for d in registry['decks'] if d.get('id') not in pruned]
+        if registry.get('active') in pruned:
+            registry['active'] = registry['decks'][0]['id'] if registry['decks'] else None
     known = {d.get('id') for d in registry.get('decks', [])}
     added = []
-    if not DECKS_DIR.exists():
-        return added
     for entry in sorted(DECKS_DIR.iterdir()):
         deck_json = entry / 'deck.json'
         if not entry.is_dir() or entry.name in known or not deck_json.exists():
@@ -976,7 +983,7 @@ def _reconcile_registry_with_disk(registry: dict) -> list:
         registry['decks'].append({'id': entry.name, 'name': meta.get('name') or entry.name,
                                   'created': created})
         added.append(entry.name)
-    return added
+    return added, pruned
 
 
 def _save_deck_registry(registry: dict):

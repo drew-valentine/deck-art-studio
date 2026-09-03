@@ -247,6 +247,18 @@ class TestRegistryReconcile:
         saved = json.loads((decks / 'decks.json').read_text())
         assert [d['id'] for d in saved['decks']] == ['reg-deck', 'lost-deck']
 
+    def test_entries_without_a_directory_are_pruned(self, tmp_path, monkeypatch):
+        decks = tmp_path / 'decks'; (decks / 'real').mkdir(parents=True)
+        (decks / 'real' / 'deck.json').write_text(json.dumps({'name': 'Real', 'cards': []}))
+        (decks / 'decks.json').write_text(json.dumps({'decks': [
+            {'id': 'real', 'name': 'Real', 'created': 'x'}, {'id': 'ghost', 'name': 'Ghost', 'created': 'x'}],
+            'active': 'ghost'}))
+        monkeypatch.setattr(ds, 'DECKS_DIR', decks)
+        monkeypatch.setattr(ds, 'DECK_REGISTRY_PATH', decks / 'decks.json')
+        reg = ds._load_deck_registry()
+        assert [d['id'] for d in reg['decks']] == ['real']
+        assert reg['active'] == 'real'              # active moved off the ghost
+
     def test_corrupt_registry_rebuilt_from_disk(self, tmp_path, monkeypatch):
         decks = tmp_path / 'decks'; (decks / 'only').mkdir(parents=True)
         (decks / 'only' / 'deck.json').write_text(json.dumps({'name': 'Only', 'cards': []}))
