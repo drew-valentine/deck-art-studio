@@ -128,6 +128,11 @@
     - H26 shipped: colour coverage measured from reference pixels (paper fraction, saturation); Seuss reads "coloured figures on open white paper".
     - H25 (pick-of-two with a judge) parked: a vision judge cannot co-reside with FLUX; in-worker similarity rewards copying.
     - Running: ab5 ("unsigned artwork" wording), then m8 = final five-deck validation on the shipped defaults.
+    - m8 (five decks, shipped defaults, fresh rolls): style plausibility Heads-I-Win 4/4, Alela 4/4, Marchesa 3/4, Temur 2/4, Glissa 2/4 (a weak roll; m7 at the same settings was 4/4). Defects found at full size: a three-armed Krark, a two-headed Keiga, fake signatures including a declared artist's real name, pseudo-hieroglyph text, clock numerals, Sol Ring as a chalice.
+    - Drew's third scoring question added: defect-free (no extra fingers, mirrored hands, doubled heads, duplicated creatures). Judging procedure: count limbs at full resolution; never pass from a thumbnail.
+    - H29 shipped: end-of-batch render inspection (vision model, defect checklist, verdict in `.meta.json`, one auto re-roll, final record-only pass; POST `/api/decks/<id>/inspect`). Trial on the m8 renders running.
+    - "Two takes per card" batch option shipped (each take archived as a version; user picks).
+    - Signatures escalated from cosmetic to public-materials: the model printed the declared reference artist's real name on a card. Text/lead/crop mitigations all failed; the inspection pass treats any text or signature as a defect.
   - Scope:
     - [x] Wire `Flux1Redux` into `flux_worker` with a token-pooling hook
     - [x] Pass each deck's inspiration images as references
@@ -144,13 +149,14 @@
     - [x] m5 prompt-order verdict (style-first vs subject-early) — settled: lead + colour coverage, subject sentence, full block; order differences within roll variance
     - [x] Creature faces on Marchesa — the "skull gate" was the back face; front face renders correctly, sheet builder fixed
     - [x] Creature design — per-type style-block window (creatures 0-14) makes creatures read as the source's own on all five decks (m7)
-    - [ ] m8 final validation on shipped defaults
-    - [ ] Fake signatures on artist-named ink decks (cosmetic; wording test running)
+    - [x] m8 final validation on shipped defaults — see verdict; criterion stays open
+    - [ ] Inspection trial catches the three-armed Krark / signatures (in progress)
+    - [ ] Fake signatures on artist-named ink decks — PUBLIC-MATERIALS issue (a real artist name was rendered); text/lead/crop mitigations failed; the inspection pass flags them
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
     - [x] Given a deck whose references contain figures or lettering, when cards are generated, then neither the reference figures nor their glyph text appear in the card art. — met by design: token averaging cancels per-image content and the dial cannot be pushed past 81 tokens. At 81 × 4 references the matrix leaked on 3 of 4 decks, so the ceiling is doing the work.
-    - [ ] Given the four validation decks (Seuss, Moebius, cartoon, Egyptian), when a card from each is rendered, then the result reads as that deck's source style — the demo-alela v1 bar. — OPEN, moving as of 2026-09-03. The image channel alone did not clear the bar; the text-side idiom work cleared it on 3 of 4 representative Temur Roar cards. The m3 cross-deck matrix (final block builder) reads as the source style on 4 of 4 representative cards for the cartoon, comic, Egyptian and Seuss decks and 3 to 4 of 4 for the fine-line deck; composition misses were prompt-side and are backstopped. Awaiting Drew's eye on the m3 sheets before ticking. FLUX.1-dev + Redux does transfer the line character; it costs ~215 s/card and drifts the subject.
+    - [ ] Given the four validation decks (Seuss, Moebius, cartoon, Egyptian), when a card from each is rendered, then the result reads as that deck's source style — the demo-alela v1 bar. — OPEN as of 2026-09-03 night. Style plausibility is high across the five validation decks (m7/m8), but roll-to-roll variance and anatomy/text defects (three-armed Krark, two-headed Keiga, signatures with a real artist name) keep it below the bar on any single roll. Deciding evidence next: the end-of-batch inspection trial (does the vision model catch those defects?) and a two-takes batch. FLUX.1-dev + Redux transfers line character at ~215 s/card and drifts the subject — parked.
     - [x] Given a batch run, when per-card time is measured, then it stays at or under the current text-only path. — met at the Subtle default: 57–78 s/card against the ~65 s text-only baseline.
 
 ## Done
