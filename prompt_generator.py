@@ -559,13 +559,17 @@ def _limit_scene_sentences(text: str, max_sentences: int = 2, max_words: int = 4
     # the last clause boundary before the cap
     words = out.split()
     if len(words) > max_words:
-        head = ' '.join(words[:max_words])
-        cut = max(head.rfind(', '), head.rfind('; '), head.rfind('. '))
-        head = head[:cut] if cut > len(head) // 2 else head
-        out = head.rstrip(' ,;.') + '.'
-        tail = _re.split(r'(?<=[.!?])\s+', out)
-        if len(tail) > 1 and len(tail[-1].split()) < 6:
-            out = ' '.join(tail[:-1]).strip()
+        # prefer whole sentences: drop the second sentence rather than cutting
+        # it mid-clause ("winding towards a distant."); only a lone over-long
+        # sentence gets a clause-boundary cut
+        sents = _re.split(r'(?<=[.!?])\s+', out)
+        if len(sents) > 1 and len(sents[0].split()) >= 12:
+            out = sents[0].strip()
+        else:
+            head = ' '.join(words[:max_words])
+            cut = max(head.rfind(', '), head.rfind('; '), head.rfind('. '))
+            head = head[:cut] if cut > len(head) // 2 else head
+            out = head.rstrip(' ,;.') + '.'
     return out
 
 
@@ -660,6 +664,9 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         "setting, weather, or atmosphere ('In the heart of the swirling mist...') "
         "— the image model paints whatever comes first, and setting-first "
         "openings produce subjectless art. "
+        "GAME TERMS: in rules text, 'library', 'graveyard', 'hand', 'exile', "
+        "'battlefield', 'stack' and 'deck' are game ZONES, not places — NEVER depict "
+        "a library, a graveyard or a battlefield because the rules mention one. "
         "COMPOSITION RULE (critical): ONE focal subject, ONE setting, ONE action. The "
         "focal subject is the largest thing in the frame, in the foreground, clearly "
         "visible — never buried behind props or scenery. "

@@ -561,3 +561,9 @@ def test_writer_system_prompt_carries_staging(monkeypatch):
                                 staging='Scenes are staged in cluttered garages. The register is deadpan absurd.')
     assert 'STAGING AND REGISTER' in seen['sys'] and 'deadpan absurd' in seen['sys']
     assert 'calm, artful film still' not in seen['sys']
+
+
+def test_scene_writer_prompt_treats_zones_as_game_terms():
+    import inspect, prompt_generator as pg
+    src = inspect.getsource(pg.generate_subject_with_ai)
+    assert "game ZONES, not places" in src

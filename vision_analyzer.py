@@ -1672,8 +1672,9 @@ def style_staging_recall(style_source: str, text_model: str) -> str:
                     "STAGES a scene — typical settings and props, how figures act and "
                     "pose, camera distance. Sentence 2: its TONAL REGISTER (for example "
                     "deadpan absurd, gentle whimsy, grim gothic, serene wonder). Plain "
-                    "concrete language. NEVER name characters, people, places or the "
-                    "style itself."},
+                    "concrete language. Describe props and settings GENERICALLY (a ray "
+                    "gun, a garage workbench), never a trademark item. NEVER name "
+                    "characters, people, places or the style itself."},
                 {'role': 'user', 'content': "Style: Moebius"},
                 {'role': 'assistant', 'content':
                     "Scenes are staged in vast empty deserts or crystalline cities with a "
