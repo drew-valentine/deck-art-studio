@@ -1731,17 +1731,20 @@ def style_staging_seen(image_path, vision_model: str) -> str:
         import mlx_llm
         reply = mlx_llm.vision(
             str(image_path),
-            "Write exactly two sentences about how this picture STAGES its scene. "
-            "Sentence 1: the kind of setting, the props and objects, the lighting and "
-            "the camera distance. Sentence 2: its TONAL REGISTER (for example deadpan "
-            "absurd, gentle whimsy, grim gothic, serene wonder). Describe the setting "
-            "and props generically; do NOT describe the people or creatures in it, "
-            "and never name anyone.",
+            "Write exactly two sentences about how this picture STAGES its scene, "
+            "stated as fact (no 'appears to be', no 'possibly'). Sentence 1 begins "
+            "'Scenes are staged in' and gives the kind of setting, the props, the "
+            "lighting and the camera distance. Sentence 2 begins 'The register is' and "
+            "names the tone (for example deadpan absurd, gentle whimsy, grim gothic, "
+            "serene wonder). Describe setting and props generically; do NOT describe "
+            "the people or creatures in it, and never name anyone.",
             model=vision_model, max_tokens=120, temperature=0.0)
     except Exception as e:
         print(f"  [style] staging read failed: {e}")
         return ''
     text = ' '.join((reply or '').split())
+    text = re.sub(r'\b(appears?|seems?) to be\b', 'is', text)
+    text = re.sub(r'\b(possibly|perhaps|likely|probably)\s+', '', text)
     sents = [x.strip() for x in re.split(r'(?<=[.!?])\s+', text) if x.strip()]
     out = ' '.join(sents[:2])
     if out:
