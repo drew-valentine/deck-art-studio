@@ -150,7 +150,7 @@
     - [x] Creature faces on Marchesa — the "skull gate" was the back face; front face renders correctly, sheet builder fixed
     - [x] Creature design — per-type style-block window (creatures 0-14) makes creatures read as the source's own on all five decks (m7)
     - [x] m8 final validation on shipped defaults — see verdict; criterion stays open
-    - [ ] Inspection trial catches the three-armed Krark / signatures (in progress)
+    - [x] Inspection trial catches the three-armed Krark / signatures — count protocol + edge-strip confirmation: 6/16 flagged, all true positives (Krark hands, Keiga doubled head, four signatures/text); 10 clean cards silent
     - [ ] Fake signatures on artist-named ink decks — PUBLIC-MATERIALS issue (a real artist name was rendered); text/lead/crop mitigations failed; the inspection pass flags them
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
