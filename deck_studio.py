@@ -1780,7 +1780,8 @@ def _build_negative_fallback(style_tokens: dict, deck_meta: dict) -> str:
 # STYLE_REFERENCE_MAX_IMAGES images) so what they share dominates.
 STYLE_REFERENCE_DEFAULT = {'enabled': True, 'tokens': 729, 'strength': 1.0, 'max_images': 4, 'average': True}
 STYLE_REFERENCE_MAX_IMAGES = 4   # hard cap; the per-deck default is ONE reference
-STYLE_REFERENCE_MAX_TOKENS = 729  # full Redux grid; safe at any budget now that references are injected into style blocks only
+STYLE_REFERENCE_MAX_TOKENS = 729
+STYLE_REFERENCE_MEDIUM_TOKENS = 256   # the auto default for character-heavy references  # full Redux grid; safe at any budget now that references are injected into style blocks only
 
 
 def _style_reference_settings(meta) -> dict:
@@ -1798,6 +1799,17 @@ def _style_reference_settings(meta) -> dict:
         cfg['max_images'] = STYLE_REFERENCE_DEFAULT['max_images']
         cfg['average'] = True
     cfg['enabled'] = bool(cfg['enabled']) and cfg['tokens'] > 0
+    # Default strength is decided by the references themselves: a deck whose
+    # references are character-heavy (a cast screenshot, a portrait) leaks
+    # the cast and its iconic props above Medium, so it defaults to Medium
+    # (256 tokens); scenery / pattern references keep Strong. A setting the
+    # user has touched (user_set) is never overridden.
+    stored = (meta or {}).get('style_reference') or {}
+    if not stored.get('user_set') and cfg['enabled'] and cfg['tokens'] > STYLE_REFERENCE_MEDIUM_TOKENS:
+        imgs = (meta or {}).get('inspiration_images') or []
+        if any(im.get('prominent_character') is True for im in imgs):
+            cfg['tokens'] = STYLE_REFERENCE_MEDIUM_TOKENS
+            cfg['auto_medium'] = True
     return cfg
 
 
@@ -3846,6 +3858,7 @@ def api_style_reference(deck_id):
             return jsonify({'error': 'max_images must be an integer'}), 400
     if 'average' in body:
         cfg['average'] = bool(body['average'])
+    cfg['user_set'] = True          # the user's choice outranks the auto default
     _save_deck_meta_field(deck_id, style_reference=cfg)
     if deck_id == active_deck_id:
         active_deck_meta['style_reference'] = cfg
@@ -4249,6 +4262,9 @@ def _analyze_new_image(deck_id, filename, new_index):
             imgs = d.get('inspiration_images', [])
             if new_index < len(imgs):
                 imgs[new_index]['style_description'] = desc
+                from vision_analyzer import reference_has_prominent_character
+                imgs[new_index]['prominent_character'] = reference_has_prominent_character(
+                    dest, bcfg['ollama_vision_model'])
                 d['inspiration_images'] = imgs
                 with open(deck_json_path, 'w') as f:
                     json.dump(d, f, indent=2)
@@ -4322,6 +4338,9 @@ def _reanalyze_all_images(deck_id):
                                    f'Image {step_num}/{n_images} analyzed')
             if desc and idx < len(imgs):
                 imgs[idx]['style_description'] = desc
+                from vision_analyzer import reference_has_prominent_character
+                imgs[idx]['prominent_character'] = reference_has_prominent_character(
+                    insp_path, bcfg['ollama_vision_model'])
 
         d['inspiration_images'] = imgs
         with open(deck_json, 'w') as f:

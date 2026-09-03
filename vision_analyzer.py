@@ -1790,6 +1790,32 @@ def style_lineage_recall(style_source: str, text_model: str) -> str:
     return text
 
 
+def reference_has_prominent_character(image_path, vision_model: str):
+    """True when a person or creature dominates the reference (a screenshot
+    of the cast, a portrait), False for scenery / pattern / object studies,
+    None when unreadable. Character-heavy references leak their cast and
+    iconic props through the image channel above Medium strength, so the
+    deck's default reference strength depends on this."""
+    if image_path is None or not vision_model:
+        return None
+    try:
+        import mlx_llm
+        reply = mlx_llm.vision(
+            str(image_path),
+            "Is a person, character or creature the dominant subject of this image "
+            "(large, central, in focus)? Answer exactly YES or NO.",
+            model=vision_model, max_tokens=4, temperature=0.0)
+    except Exception as e:
+        print(f"  [style] character read failed: {e}")
+        return None
+    word = (reply or '').strip().upper()[:3]
+    if word.startswith('YES'):
+        return True
+    if word.startswith('NO'):
+        return False
+    return None
+
+
 def style_staging_seen(image_path, vision_model: str) -> str:
     """Staging + register READ from the reference itself: how THIS picture
     stages its scene (setting, props, lighting, camera) and its tone. The

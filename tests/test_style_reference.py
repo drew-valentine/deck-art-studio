@@ -346,3 +346,29 @@ def test_enqueue_art_stores_seed_in_params(monkeypatch):
     assert captured['job'].params == {'seed': 1234}
     ds._enqueue_art('deck-a', 'Sol Ring')
     assert captured['job'].params == {}
+
+
+def test_character_heavy_references_default_to_medium_unless_user_set():
+    import deck_studio as ds
+    meta = {'inspiration_images': [{'filename': 'a.png', 'prominent_character': True},
+                                   {'filename': 'b.png', 'prominent_character': False}]}
+    cfg = ds._style_reference_settings(meta)
+    assert cfg['tokens'] == ds.STYLE_REFERENCE_MEDIUM_TOKENS and cfg.get('auto_medium') is True
+    # scenery-only references keep Strong
+    assert ds._style_reference_settings({'inspiration_images': [{'prominent_character': False}]})['tokens'] == 729
+    # the user's explicit choice wins
+    meta['style_reference'] = {'enabled': True, 'tokens': 729, 'user_set': True}
+    assert ds._style_reference_settings(meta)['tokens'] == 729
+    # an unanalysed deck (no flags) is untouched
+    assert ds._style_reference_settings({'inspiration_images': [{'filename': 'a.png'}]})['tokens'] == 729
+
+
+def test_reference_has_prominent_character_parses_yes_no(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    answers = iter(['YES.', 'no', 'maybe'])
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: next(answers)))
+    assert va.reference_has_prominent_character('x.png', 'v') is True
+    assert va.reference_has_prominent_character('x.png', 'v') is False
+    assert va.reference_has_prominent_character('x.png', 'v') is None
+    assert va.reference_has_prominent_character(None, 'v') is None
