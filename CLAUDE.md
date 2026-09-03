@@ -89,7 +89,7 @@ decks/<deck-slug>/
   stores how the style STAGES scenes + its tonal register in `deck.json.style_staging`; the scene
   writer gets that plus the block minus hues (`prompt_generator.hint_without_palette`) — hues
   in the writer's hint become scene content. Writer rules: one subject in the foreground, two
-  sentences (45-word whole-sentence cap), rules-text zones (library/graveyard) are never scenery.
+  sentences of ~60 words (cap 64, whole sentences) following the scene grammar — subject at a moment, camera + scale + one named light, one atmospheric detail; rules-text zones (library/graveyard) are never scenery.
   Also recalled at distillation, each with an UNKNOWN escape: `style_source_kind`
   (franchise / artist / movement — the franchise gate for de-naming; the `_FRANCHISE_PHRASES`
   table is only the offline fallback), `style_lineage` (a de-named production lineage for the
