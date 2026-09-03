@@ -1816,6 +1816,43 @@ def reference_has_prominent_character(image_path, vision_model: str):
     return None
 
 
+_DEFECT_KEYS = ('extra limbs', 'extra fingers', 'missing limbs', 'doubled head', 'duplicated subject',
+                'text', 'signature', 'watermark', 'subject missing', 'malformed hands', 'malformed face')
+
+
+def inspect_render(image_path, card_name: str, card_type: str, vision_model: str) -> list:
+    """Defect checklist over a finished render, by the vision model: anatomy
+    (extra or missing limbs/fingers, doubled heads, malformed hands or
+    faces), duplicated subject, text / signature / watermark, and — for
+    creatures — the subject missing. Returns a list of defect labels ([] =
+    clean, None = unreadable). The scene checklist judges the prompt; this
+    judges the picture."""
+    if image_path is None or not vision_model:
+        return None
+    subj = 'a creature or character' if card_type in ('creature', 'planeswalker') else 'an object, place or scene'
+    try:
+        import mlx_llm
+        reply = mlx_llm.vision(
+            str(image_path),
+            f"This is card art for '{card_name}', whose subject is {subj}. Inspect it "
+            "strictly. Answer OK if it has NONE of these, otherwise list ONLY the "
+            "applicable labels from this set, comma-separated: extra limbs, extra "
+            "fingers, missing limbs, doubled head, duplicated subject, malformed hands, "
+            "malformed face, text, signature, watermark, subject missing. A single "
+            "creature or character should have one head, two arms, two legs and five "
+            "fingers per hand; any letters, handwriting, signature or logo counts as "
+            "text/signature.",
+            model=vision_model, max_tokens=40, temperature=0.0)
+    except Exception as e:
+        print(f"  [inspect] vision read failed: {e}")
+        return None
+    text = (reply or '').strip().lower()
+    if text.startswith('ok'):
+        return []
+    found = [k for k in _DEFECT_KEYS if k in text]
+    return found if found else ([] if 'none' in text else [text[:60]])
+
+
 def style_staging_seen(image_path, vision_model: str) -> str:
     """Staging + register READ from the reference itself: how THIS picture
     stages its scene (setting, props, lighting, camera) and its tone. The

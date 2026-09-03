@@ -285,3 +285,45 @@ def test_front_face_unit_drops_the_back_face_name():
     # single-faced cards pass through untouched
     plain = {'name': 'Sol Ring', 'type_line': 'Artifact', 'card_type': 'artifact'}
     assert ds._face_unit_for(plain, 'Sol Ring') is plain
+
+
+def test_inspect_render_parses_checklist(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    answers = iter(['OK', 'extra fingers, signature', 'None found.', 'garbage answer'])
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: next(answers)))
+    assert va.inspect_render('x.png', 'Sol Ring', 'artifact', 'v') == []
+    assert va.inspect_render('x.png', 'Keiga', 'creature', 'v') == ['extra fingers', 'signature']
+    assert va.inspect_render('x.png', 'Keiga', 'creature', 'v') == []
+    assert va.inspect_render('x.png', 'Keiga', 'creature', 'v') == ['garbage answer']
+    assert va.inspect_render(None, 'x', 'creature', 'v') is None
+
+
+def test_inspect_job_rerolls_defective_cards_once(monkeypatch, tmp_path):
+    import json
+    import deck_studio as ds
+    import vision_analyzer as va
+    raw = tmp_path / 'raw_art'; raw.mkdir()
+    for slug in ('keiga_the_tide_star', 'sol_ring'):
+        (raw / f'{slug}.png').write_bytes(b'x')
+    cards = [{'name': 'Keiga, the Tide Star', 'card_type': 'creature'}, {'name': 'Sol Ring', 'card_type': 'artifact'}]
+    ctx = {'cards': cards, 'raw_art_dir': raw, 'deck_name': 'D'}
+    verdicts = {'Keiga, the Tide Star': ['doubled head'], 'Sol Ring': []}
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm: verdicts[name])
+    monkeypatch.setattr(ds, 'has_second_art_face', lambda c: False)
+    monkeypatch.setattr(ds, '_ollama_work_start', lambda: None)
+    monkeypatch.setattr(ds, '_ollama_work_done', lambda: None)
+    monkeypatch.setattr(ds.backend_config, 'load_config', lambda: {'ollama_vision_model': 'v'})
+    queued = []
+    monkeypatch.setattr(ds, '_enqueue_art', lambda deck_id, name, **kw: queued.append(('art', name)))
+    monkeypatch.setattr(ds, '_enqueue_inspection', lambda deck_id, names, final=False, label=None: queued.append(('inspect', tuple(names), final)))
+    job = ds.Job(type=ds.INSPECT, deck_id='d', card_name='', params={'card_names': [c['name'] for c in cards], 'final': False})
+    ds._execute_inspect_job(job, ctx)
+    assert queued == [('art', 'Keiga, the Tide Star'), ('inspect', ('Keiga, the Tide Star',), True)]
+    meta = json.load(open(raw / 'keiga_the_tide_star.meta.json'))
+    assert meta['inspection']['defects'] == ['doubled head']
+    # the final pass records but never re-queues
+    queued.clear()
+    job2 = ds.Job(type=ds.INSPECT, deck_id='d', card_name='', params={'card_names': ['Keiga, the Tide Star'], 'final': True})
+    ds._execute_inspect_job(job2, ctx)
+    assert queued == []

@@ -48,7 +48,7 @@ from card_frame_renderer import (
     FRAME_LAYER_ORDER,
 )
 import generation_queue
-from generation_queue import Job, ART, PROMPT, FLAVOR, ANALYZE
+from generation_queue import Job, ART, PROMPT, FLAVOR, ANALYZE, INSPECT
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -4251,6 +4251,82 @@ def _execute_flavor_job(job, ctx):
         _ollama_work_done()
 
 
+def _enqueue_inspection(deck_id, card_names, final=False, label=None):
+    """Enqueue an end-of-batch render inspection for these cards. It runs
+    after the batch's art jobs (FIFO), evicts FLUX once for the vision model,
+    and re-queues each defective card at most once; the re-rolls are followed
+    by a FINAL inspection that only records."""
+    names = [n for n in (card_names or []) if n]
+    if not names:
+        return None
+    job = Job(type=INSPECT, deck_id=deck_id, deck_name=_deck_display_name(deck_id),
+              card_name='', label=label or ('Final inspection' if final else f'Inspect {len(names)} render(s)'),
+              params={'card_names': names, 'final': bool(final)})
+    return gen_queue.enqueue(job)
+
+
+def _inspect_faces_for(card, raw_art_dir):
+    """(face_label, raw_path) pairs that exist for a card's front/back."""
+    out = []
+    front = raw_art_dir / f"{name_to_slug(card['name'])}.png"
+    if front.exists():
+        out.append(('front', front))
+    if has_second_art_face(card):
+        back = raw_art_dir / f"{name_to_slug(face_key(card['name'], 'back'))}.png"
+        if back.exists():
+            out.append(('back', back))
+    return out
+
+
+def _execute_inspect_job(job, ctx):
+    """Vision-model defect pass over a batch's renders (see inspect_render).
+    Writes the verdict into each render's .meta.json ('inspection') and, unless
+    this is the final pass, re-queues defective cards once."""
+    names = list((job.params or {}).get('card_names') or [])
+    final = bool((job.params or {}).get('final'))
+    bcfg = backend_config.load_config()
+    vmodel = bcfg.get('ollama_vision_model', 'llava:7b')
+    from vision_analyzer import inspect_render
+    cards_by_name = {c['name']: c for c in ctx['cards']}
+    raw_dir = ctx['raw_art_dir']
+    rerolls = []
+    _ollama_work_start()
+    try:
+        for i, name in enumerate(names):
+            job.progress = {'message': f'Inspecting {name} ({i + 1}/{len(names)})...',
+                            'pct': int(100 * i / max(1, len(names)))}
+            card = cards_by_name.get(name)
+            if not card:
+                continue
+            faces = _inspect_faces_for(card, raw_dir)
+            bad = []
+            for face_label, path in faces:
+                defects = inspect_render(path, name, card.get('card_type', ''), vmodel)
+                meta_path = path.with_suffix('.meta.json')
+                try:
+                    meta = json.load(open(meta_path)) if meta_path.exists() else {}
+                    meta['inspection'] = {'defects': defects, 'final': final,
+                                          'at': datetime.now().isoformat()}
+                    with open(meta_path, 'w') as f:
+                        json.dump(meta, f, indent=2)
+                except Exception as e:
+                    print(f"  [inspect] could not stamp {meta_path.name}: {e}")
+                if defects:
+                    bad.append((face_label, defects))
+                    print(f"  [inspect] {name} ({face_label}): {', '.join(defects)}")
+            if bad and not final:
+                rerolls.append(name)
+    finally:
+        _ollama_work_done()
+    if rerolls:
+        for name in rerolls:
+            _enqueue_art(job.deck_id, name, face='all', deck_name=job.deck_name,
+                         label=f'{name} (re-roll)')
+        _enqueue_inspection(job.deck_id, rerolls, final=True)
+        print(f"  [inspect] re-queued {len(rerolls)} card(s): {', '.join(rerolls)}")
+    job.progress = {'message': f'Inspected {len(names)}; {len(rerolls)} re-queued', 'pct': 100}
+
+
 def _enqueue_analysis(deck_id, mode, label='Style analysis', **params):
     """Enqueue an inspiration/style analysis job. Analysis is a first-class
     queue citizen: it survives deck switches (the job carries its deck_id and
@@ -4446,6 +4522,8 @@ def _execute_job(job):
             _execute_flavor_job(job, ctx)
         elif job.type == ANALYZE:
             _execute_analyze_job(job, ctx)
+        elif job.type == INSPECT:
+            _execute_inspect_job(job, ctx)
         else:
             raise RuntimeError(f'Unknown job type: {job.type}')
     finally:
@@ -5223,9 +5301,29 @@ def generate_batch():
         job = _enqueue_art(active_deck_id, n, face=face_map.get(n, 'all'),
                            feedback=(feedback or None), deck_name=dname)
         job_ids.append(job.id)
+    # End-of-batch inspection: the vision model checks every render for
+    # anatomy / duplication / text defects and re-queues failures once.
+    if os.environ.get('RENDER_INSPECT', '1') != '0':
+        _enqueue_inspection(active_deck_id, card_names)
     return jsonify({'success': True, 'queued': len(job_ids), 'job_ids': job_ids,
                     'count': len(job_ids),
                     'message': f'Queued {len(job_ids)} cards for generation'})
+
+
+@app.route('/api/decks/<deck_id>/inspect', methods=['POST'])
+def inspect_deck_renders(deck_id):
+    """Queue a render inspection for the given cards (default: every card with
+    art). Defective renders are re-rolled once, then inspected again."""
+    if not (DECKS_DIR / deck_id).exists():
+        return jsonify({'error': 'Deck not found'}), 404
+    data = request.json or {}
+    names = data.get('card_names')
+    ctx = _load_deck_ctx(deck_id)
+    if not names:
+        names = [c['name'] for c in ctx['cards']
+                 if (ctx['raw_art_dir'] / f"{name_to_slug(c['name'])}.png").exists()]
+    job = _enqueue_inspection(deck_id, names, final=bool(data.get('final')))
+    return jsonify({'success': True, 'queued': len(names), 'job_id': job.id if job else None})
 
 
 @app.route('/api/stop-batch', methods=['POST'])
