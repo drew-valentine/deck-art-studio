@@ -279,10 +279,12 @@ def _describe_enchantment(name, oracle, keywords, atmosphere, flavor=''):
     # With no flavor text the name is the strongest imagery cue: a card called
     # "Breaching Dragonstorm" is a storm of dragons breaking through, not "a
     # familiar over a library". Say so, or the writer invents a subject.
-    name_line = (f" Its name is the scene: read '{name}' LITERALLY and depict every "
-                 f"concrete noun in it as the subject (a compound word is read as its "
-                 f"parts: a 'wolfstorm' is a storm of wolves; a verb like 'breaching' or "
-                 f"'rising' is the action shown)"
+    # no illustrative example here: with nothing concrete in the card, the
+    # writer parrots the example ("a whirlwind of wolves" for Chance Encounter)
+    name_line = (f" Its name is the scene: read '{name}' LITERALLY — every concrete "
+                 f"noun in it is depicted, a compound word is split into its parts, and "
+                 f"a verb in it is the action shown; if the name is abstract, depict "
+                 f"the moment it describes happening to real people or creatures"
                  + ("; the story sets the mood, not the subject." if story else "."))
     return (
         f"A concrete illustrated scene representing the enchantment {name} — "
