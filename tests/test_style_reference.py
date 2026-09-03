@@ -384,3 +384,13 @@ def test_crop_token_grid_drops_border_rings():
     assert out[0, 0, 0] == g + 1            # first interior token is row 1, col 1
     assert fw._crop_token_grid(emb, 0).shape == (1, g * g, 1)
     assert fw._crop_token_grid(emb, 12).shape == (1, g * g, 1)   # too deep: untouched
+
+
+def test_style_block_window_by_card_type(monkeypatch):
+    import deck_studio as ds
+    monkeypatch.delenv('STYLE_BLOCKS_DOUBLE', raising=False)
+    monkeypatch.setattr(ds, 'STYLE_BLOCKS_CREATURE', (0, 14))
+    assert ds._style_block_window('creature') == {'double': list(range(0, 15)), 'single': []}
+    assert ds._style_block_window('artifact') is None          # worker default (0-9)
+    monkeypatch.setenv('STYLE_BLOCKS_DOUBLE', '0-12')
+    assert ds._style_block_window('land') == {'double': list(range(0, 13)), 'single': []}

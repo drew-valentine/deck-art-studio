@@ -1844,6 +1844,31 @@ def _effective_style_source(meta) -> str:
          if isinstance(im, dict)])
 
 
+# Which FLUX double blocks the references are shown to, by card type. Blocks
+# 0-9 carry medium / palette / stroke and never leak a reference's cast; the
+# middle double blocks (~10-14) carry FIGURE DESIGN — with them open a dragon
+# becomes the show's noodle-necked deadpan creature and an elf a spindly Seuss
+# creature (fixed-seed A/B, 2026-09-03). Creatures get the wider window;
+# other card types keep the tight one. STYLE_BLOCKS_DOUBLE="a-b" overrides
+# both (experiment hook).
+STYLE_BLOCKS_DEFAULT = (0, 9)
+STYLE_BLOCKS_CREATURE = (0, 9)      # flipped to (0, 14) once the m7 leak check passes
+
+
+def _style_block_window(card_type):
+    rng = os.environ.get('STYLE_BLOCKS_DOUBLE', '').strip()
+    if rng and '-' in rng:
+        try:
+            a, b = (int(x) for x in rng.split('-', 1))
+            return {'double': list(range(a, b + 1)), 'single': []}
+        except ValueError:
+            pass
+    a, b = STYLE_BLOCKS_CREATURE if card_type in ('creature', 'planeswalker') else STYLE_BLOCKS_DEFAULT
+    if (a, b) == (0, 9):
+        return None                  # the worker's own default; nothing to send
+    return {'double': list(range(a, b + 1)), 'single': []}
+
+
 def _with_figure_idiom(subject: str, idiom, max_phrases: int = 3) -> str:
     """Append the style's drawing idiom to the subject's FIRST sentence
     ("Keiga, a Dragon Spirit, rises from the sea, drawn with wobbly eyes,
@@ -2046,16 +2071,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     with generation_lock:
         _status[card_name]['message'] = ('Generating with style references...'
                                          if ref_images else 'Generating from text prompt...')
-    # experiment hook (block-range A/B): STYLE_BLOCKS_DOUBLE="0-12" widens the
-    # style-block window the references are shown to; unset = the worker default
-    ref_blocks = None
-    _rng = os.environ.get('STYLE_BLOCKS_DOUBLE', '').strip()
-    if _rng and '-' in _rng:
-        try:
-            a, b = (int(x) for x in _rng.split('-', 1))
-            ref_blocks = {'double': list(range(a, b + 1)), 'single': []}
-        except ValueError:
-            ref_blocks = None
+    ref_blocks = _style_block_window(card_type)
     return gen.generate(
         prompt=flux_prompt,
         width=w, height=h,
