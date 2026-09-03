@@ -125,7 +125,10 @@ class TestApi:
         assert high['style_reference']['tokens'] == 81          # clamped to Balanced
         off = client.post('/api/decks/deckR/style-reference', json={'tokens': 0}).get_json()
         assert off['style_reference']['enabled'] is False
-        assert client.get('/api/decks/deckR/deck-info').get_json()['style_reference']['tokens'] == 0
+        # raising the dial from Off re-enables without an explicit flag
+        back = client.post('/api/decks/deckR/style-reference', json={'tokens': 25}).get_json()
+        assert back['style_reference']['enabled'] is True and back['style_reference']['tokens'] == 25
+        assert client.get('/api/decks/deckR/deck-info').get_json()['style_reference']['tokens'] == 25
 
     def test_rejects_garbage(self, client, tmp_path, monkeypatch):
         decks = tmp_path / 'decks'

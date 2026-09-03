@@ -3643,6 +3643,10 @@ def api_style_reference(deck_id):
             cfg['tokens'] = max(0, min(STYLE_REFERENCE_MAX_TOKENS, int(body['tokens'])))
         except (TypeError, ValueError):
             return jsonify({'error': 'tokens must be an integer'}), 400
+        # A positive budget IS the intent to use references: setting the dial
+        # above Off re-enables without a separate flag (Off = tokens 0).
+        if 'enabled' not in body:
+            cfg['enabled'] = cfg['tokens'] > 0
     if 'strength' in body:
         try:
             cfg['strength'] = max(0.0, min(2.0, float(body['strength'])))
