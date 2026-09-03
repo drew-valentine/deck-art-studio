@@ -292,3 +292,15 @@ def test_mlx_request_retries_once_on_worker_death(monkeypatch):
     import pytest
     with pytest.raises(RuntimeError):
         mlx_llm._request({'cmd': 'chat'})
+
+
+def test_flux_prompt_puts_the_subject_right_after_the_style_lead():
+    import deck_studio as ds
+    bits = ['in the style of a 2010s adult animated sitcom, original character designs',
+            'cel animation, thick outlines, palette of yellow, orange']
+    out = ds._assemble_flux_prompt(bits, 'Aclazotz, a Bat God, unfurls her wings over the temple. Moonlight below.', 'more teeth')
+    assert out.startswith('in the style of a 2010s adult animated sitcom, original character designs. Aclazotz, a Bat God, unfurls her wings over the temple. cel animation')
+    assert out.index('Moonlight below') > out.index('cel animation')
+    assert out.rstrip().endswith('no card frame, no borders.') and 'more teeth' in out
+    # no style at all: scene, then guard
+    assert ds._assemble_flux_prompt([], 'A ring on a table.').startswith('A ring on a table.')

@@ -1810,6 +1810,25 @@ def _effective_style_source(meta) -> str:
          if isinstance(im, dict)])
 
 
+def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '') -> str:
+    """Order: style lead, the scene's FIRST sentence (the subject), the rest of
+    the style block, the rest of the scene, feedback. FLUX weights early
+    tokens most: style-first alone gave the block ~70 words of head start
+    and a bat god rendered as a temple gate; subject-first alone gave zero
+    style transfer. The lead keeps the style in front, the subject sits
+    right behind it, the idiom follows."""
+    import re as _re
+    subject = (subject or '').strip().rstrip(' .')
+    sents = _re.split(r'(?<=[.!?])\s+', subject) if subject else []
+    first = sents[0].rstrip(' .') if sents else ''
+    rest = ' '.join(sents[1:]).rstrip(' .') if len(sents) > 1 else ''
+    bits = [b for b in (style_bits or []) if b]
+    lead, block = (bits[0], bits[1:]) if bits else ('', [])
+    pieces = [lead, first, ', '.join(block), rest, (feedback_text or '').rstrip(' .')]
+    out = '. '.join(p for p in pieces if p) + '.'
+    return out + ' No text, no words, no watermark, no card frame, no borders.'
+
+
 def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_override=None,
                     deck_meta=None, deck_dir=None):
     """Generate an image with the local FLUX model (mflux). Returns a PIL Image.
@@ -1905,14 +1924,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     # burying it after a long scene) stops a rich scene from drowning it. Validated
     # empirically — the same style words buried at the tail gave ZERO style transfer;
     # front-loaded they come through. (Kept well under the 256-token T5 budget.)
-    pieces = []
-    if style_bits:
-        pieces.append(", ".join(style_bits))
-    pieces.append(subject.rstrip(' .'))
-    if feedback_text:
-        pieces.append(feedback_text.rstrip(' .'))
-    flux_prompt = '. '.join(p for p in pieces if p) + '.'
-    flux_prompt += ' No text, no words, no watermark, no card frame, no borders.'
+    flux_prompt = _assemble_flux_prompt(style_bits, subject, feedback_text)
 
     # --- Progress callback — updates status per inference step ---
     def on_step(step, total):

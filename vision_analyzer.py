@@ -1805,8 +1805,8 @@ def style_staging_seen(image_path, vision_model: str) -> str:
             "Write exactly two sentences about how this picture STAGES its scene, "
             "stated as fact (no 'appears to be', no 'possibly'). Sentence 1 begins "
             "'Scenes are staged in' and gives the kind of setting, the props, the "
-            "lighting and the camera distance. Sentence 2 begins 'The register is' and "
-            "names the tone (for example deadpan absurd, gentle whimsy, grim gothic, "
+            "lighting and the camera distance. Sentence 2 begins 'The tone is' and "
+            "names the mood (for example deadpan absurd, gentle whimsy, grim gothic, "
             "serene wonder). Describe setting and props generically; do NOT describe "
             "the people or creatures in it, and never name anyone.",
             model=vision_model, max_tokens=120, temperature=0.0)
