@@ -3128,9 +3128,13 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
     data['flux_style_prompt'] = flux_style_prompt
     # How the named style stages scenes + its register: the scene writer's
     # share of the idiom (the block above is the image model's share).
-    from vision_analyzer import style_staging_recall
+    from vision_analyzer import style_staging_recall, style_idiom_recall
     data['style_staging'] = (style_staging_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
                              if style_source else '')
+    # the drawing idiom as a list, for the scene writer's creature clause
+    # (memoized — the block builder above already asked)
+    data['style_idiom'] = (style_idiom_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
+                           if style_source else [])
 
     with open(deck_json_path, 'w') as f:
         json.dump(data, f, indent=2)
@@ -3140,6 +3144,7 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         active_deck_meta['clip_directives'] = clip_dirs
         active_deck_meta['flux_style_prompt'] = flux_style_prompt
         active_deck_meta['style_staging'] = data['style_staging']
+        active_deck_meta['style_idiom'] = data['style_idiom']
 
     if tokens:
         print(f"  [distill] Style tokens saved for {deck_id}: {list(tokens.keys())}")
@@ -4001,6 +4006,7 @@ def _execute_prompt_job(job, ctx):
         if flux_style:
             style_hint = f"{style_hint} — {flux_style}" if style_hint else flux_style
         staging = (data.get('style_staging') or '').strip()
+        figure_idiom = ', '.join(data.get('style_idiom') or [])
         can_ai = (bcfg['llm_backend'] == 'local') or openai_client
         if job.use_ai and can_ai:
             # Retry on transient rate limits (429) with backoff before falling
@@ -4014,7 +4020,8 @@ def _execute_prompt_job(job, ctx):
                         unit, openai_client, backend=bcfg['llm_backend'],
                         local_model=bcfg['ollama_model'], style_hint=style_hint,
                         steer=(job.feedback or ''),
-                        style_source_name=style_name, staging=staging)
+                        style_source_name=style_name, staging=staging,
+                        figure_idiom=figure_idiom)
                     break
                 except Exception as e:
                     err_str = str(e)

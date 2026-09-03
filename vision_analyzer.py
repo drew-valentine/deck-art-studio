@@ -1599,6 +1599,9 @@ def _idiom_phrases(text: str, style_source: str, max_words: int) -> list:
     return out
 
 
+_IDIOM_RECALL_CACHE = {}
+
+
 def style_idiom_recall(style_source: str, text_model: str,
                        max_words: int = _IDIOM_MAX_WORDS) -> list:
     """What the language model KNOWS about a named style's drawing idiom
@@ -1607,6 +1610,9 @@ def style_idiom_recall(style_source: str, text_model: str,
     src = (style_source or '').strip().replace('&', 'and')
     if not src:
         return []
+    key = (src.lower(), text_model, max_words)
+    if key in _IDIOM_RECALL_CACHE:           # deterministic; distillation asks twice
+        return list(_IDIOM_RECALL_CACHE[key])
     try:
         import mlx_llm
         reply = mlx_llm.chat(
@@ -1619,6 +1625,7 @@ def style_idiom_recall(style_source: str, text_model: str,
     phrases = _idiom_phrases(reply, src, max_words)
     if phrases:
         print(f"  [style] idiom recalled for '{src}': {', '.join(phrases)}")
+        _IDIOM_RECALL_CACHE[key] = list(phrases)
     return phrases
 
 

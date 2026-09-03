@@ -609,7 +609,8 @@ def _strip_example_leak(text: str, card: dict) -> str:
 def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'openai',
                               local_model: str = 'llama3.1:8b',
                               style_hint: str = '', steer: str = '',
-                              style_source_name: str = '', staging: str = '') -> str:
+                              style_source_name: str = '', staging: str = '',
+                              figure_idiom: str = '') -> str:
     """Use an LLM to generate a subject description tailored to the deck's style.
 
     Sends the LLM a rule-based description as a reference anchor plus
@@ -752,6 +753,16 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                     "Let these motifs appear only in the BACKGROUND and atmosphere so cards "
                     "feel cohesive — never let them replace or upstage the card's own subject."
                 )
+
+    if figure_idiom and figure_idiom.strip() and card_type in ('creature', 'planeswalker'):
+        # The image model renders "a dragon" as ITS default dragon unless the
+        # prompt says how this artist draws one; the block's idiom words are
+        # global, this puts them on the creature itself.
+        system_msg += (
+            f"\n\nFIGURE IDIOM — draw the creature the way this artist draws figures: "
+            f"{figure_idiom.strip()}. In the FIRST sentence describe its eyes, face and "
+            "body in those terms (its identity and creature type stay exactly as given)."
+        )
 
     if steer and steer.strip():
         # The steer OVERRIDES the rules and the reference anchor wherever they

@@ -452,3 +452,17 @@ def test_style_staging_recall_drops_named_sentences(monkeypatch):
     assert out.startswith('Scenes are staged') and 'deadpan absurd' in out
     assert 'Rick' not in out
     assert va.style_staging_recall('', 'm') == ''
+
+
+def test_style_idiom_recall_is_memoized(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    monkeypatch.setattr(va, '_preferred_idiom_model', lambda m: m)
+    calls = []
+    def chat(**kw):
+        calls.append(1); return "thin wobbly outlines, bulging eyes"
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    va._IDIOM_RECALL_CACHE.clear()
+    a = va.style_idiom_recall('Some Artist Nobody Knows', 'm')
+    b = va.style_idiom_recall('some artist nobody knows', 'm')
+    assert a == b == ['thin wobbly outlines', 'bulging eyes'] and len(calls) == 1
