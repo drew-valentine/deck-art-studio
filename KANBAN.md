@@ -107,6 +107,14 @@
     - Result: Temur Roar (Rick and Morty references) went from generic Pokémon-style cartoon to show-plausible on 3 of 4 representative cards, with sensible composition on 4 of 4 in the latest completed round.
     - Open before ship: cross-deck regression matrix (Marchesa, Heads-I-Win, Glissa/Seuss, Alela — legendary creature, land, artifact and enchantment each) under the new block builder, running now; creature faces (Keiga) still lean generic; ring-as-object clarity.
     - Finishing bar (Drew): every fresh sheet must SCREAM the inspiration aesthetic AND compose sensibly for the card. Generic medium is a fail.
+  - Progress, 2026-09-03 (afternoon) — regression matrix run, and the fixes it forced:
+    - Matrices m2/m3 ran across five decks (Temur Roar, Marchesa, Heads-I-Win, Glissa/Seuss, demo-alela), one legendary creature, land, artifact and enchantment each. m3 style-plausibility verdict: 4/4 on Temur Roar, Heads-I-Win, Glissa and Alela; 3/4 on Marchesa.
+    - Regressions the matrix caught and fixed: colour loss when the idiom sat ahead of the palette clause (the palette clause now comes first and the block is capped at 72 words); a colour-coverage evidence axis; declared-source medium now resolves declaration → stored evidence → model (Alela's hieroglyphs had been turning into "cinematic photograph"); a "painted illustration" medium bucket.
+    - Deck-agnostic gates, per Drew's standing rule against per-deck special cases: source kind (franchise / artist / movement) is recalled with an UNKNOWN escape, replacing the keyword table (now fallback only); production-lineage recall supplies the de-named render lead; staging is read from the reference first with name recall as fallback only; reference reads run for unnamed decks too.
+    - Scene-writer fixes: rules text withheld for non-creatures (game zones were becoming scenery); enchantment names read literally with dictionary compound splitting (Dragonstorm → dragon, storm); an opening-rule check with one strict retry; an empty prompt is never persisted; the figure idiom moved into the user message for creatures; two-faced cards hand the writer the front face only (Aclazotz had been staged inside its own back-face temple for three rounds).
+    - Render: the FLUX prompt order is now lead + medium anchors + colour coverage + palette, then the subject sentence, then idiom/motifs/reference read, then the rest of the scene — style-first buried the subject, subject-early lost the colour. "no signature" added to the guard. The MLX worker retries once after a Metal GPU hang.
+    - m4 (subject-early) confirmed subjects recover (Arcane Signet, Glissa) but colour drops; m5 on the new default order is running as the deciding evidence.
+    - Open before ship: the m5 verdict; Blast Zone showed the reference's iconic striped hat — image-channel prop bleed, on the watch list.
   - Scope:
     - [x] Wire `Flux1Redux` into `flux_worker` with a token-pooling hook
     - [x] Pass each deck's inspiration images as references
@@ -118,7 +126,10 @@
     - [x] PR
     - [x] Hypothesis ledger for the image channel — H4 (soft per-block reference scaling) run and rejected
     - [x] Text-side idiom recall: named-style idiom + vision read, staging and tonal register, composition backstops, type-aware rules-text gating
-    - [ ] Cross-deck regression matrix under the new block builder (Marchesa, Heads-I-Win, Glissa/Seuss, Alela × 4 card types) — running
+    - [x] Cross-deck regression matrix under the new block builder (m2/m3 across Temur Roar, Marchesa, Heads-I-Win, Glissa/Seuss, Alela × 4 card types)
+    - [x] Deck-agnostic source classification (source kind + production lineage recalled with an UNKNOWN escape; keyword table demoted to fallback)
+    - [ ] m5 prompt-order verdict (style-first vs subject-early)
+    - [ ] Creature faces on Marchesa — front-face fix landed, render pending
     - [ ] Creature faces (Keiga) still generic; ring-as-object clarity
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
