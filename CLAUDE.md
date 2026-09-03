@@ -78,6 +78,10 @@ decks/<deck-slug>/
   (element-wise mean of the pooled tokens across up to `STYLE_REFERENCE_MAX_IMAGES`=4 refs): content
   differs per image and cancels, shared style stays — cleaner and leak-free vs any single reference
   and vs concatenation (4 refs concatenated leaked figures). `average: false` = concatenate.
+- **Effective style source**: `_effective_style_source(meta)` = the user's declaration, else the source
+  the analyst recognized in the references (`vision_analyzer.recognized_style_source`, majority of the
+  per-image `Source:` lines, ignoring 'Original'). Used for the render lead, scene-writer hint,
+  medium classification and distillation — de-named like any declaration. Declaration always wins.
 - **18 GB memory rule**: FLUX and the LLM/VLM cannot be co-resident. `mlx_llm.unload()` is
   called before loading FLUX; the in-process guard (`_ollama_work_*`/`_wait_for_ollama_idle`,
   historical names) waits for in-flight LLM work to finish before generating.
