@@ -1941,7 +1941,9 @@ def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '') -> 
         pieces = [', '.join(x for x in [lead] + front if x), first, ', '.join(back), rest]
     pieces.append((feedback_text or '').rstrip(' .'))
     out = '. '.join(p for p in pieces if p) + '.'
-    return out + ' No text, no words, no signature, no watermark, no card frame, no borders.'
+    extra = os.environ.get('FLUX_GUARD_EXTRA', '').strip()      # experiment hook
+    tail = ' No text, no words, no signature, no watermark, no card frame, no borders.'
+    return out + (f' {extra}.' if extra else '') + tail
 
 
 def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_override=None,
