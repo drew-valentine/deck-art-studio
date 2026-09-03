@@ -923,6 +923,11 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         out = _strip_franchise_sentences(out, style_source_name or style_hint)   # output backstop
         out = _strip_example_leak(out, card)
         out = _limit_scene_sentences(out, 2)
+        if len(out.split()) < 5:
+            # the backstops can strip a draft down to nothing (a franchise
+            # sentence, a fragment); never persist an empty prompt
+            print(f"  [prompt_gen] AI draft for {name} emptied by backstops, using rule-based")
+            return generate_subject_description(card)
         return _ensure_creature_type_in_prompt(out, card)
     except Exception as e:
         print(f"  [prompt_gen] AI failed for {name}: {e}, using rule-based")

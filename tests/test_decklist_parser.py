@@ -652,3 +652,12 @@ def test_literal_name_words_splits_coined_compounds():
     assert literal_name_words('Chance Encounter', d) == ['chance', 'encounter']
     assert _split_compound('Wolfire', d) == ['Wolfire']          # too short to split (< 8)
     assert _split_compound('dragonstorm', set()) == ['dragonstorm']   # no dictionary: no-op
+
+
+def test_writer_never_returns_an_empty_prompt(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda messages, **kw: "Arcane Signet. "))
+    card = {'name': 'Arcane Signet', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'}
+    out = pg.generate_subject_with_ai(card, None, backend='local', local_model='m')
+    assert len(out.split()) >= 5 and 'signet' in out.lower()
