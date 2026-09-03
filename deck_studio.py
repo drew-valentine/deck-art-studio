@@ -1878,7 +1878,8 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
         # rendered as card art); render_style_lead swaps them for a de-named
         # genre phrase + original-characters guard. Artist names pass through.
         from prompt_generator import render_style_lead
-        style_bits.append(render_style_lead(style_source, lineage=(_meta.get('style_lineage') or '')))
+        style_bits.append(render_style_lead(style_source, lineage=(_meta.get('style_lineage') or ''),
+                                            kind=(_meta.get('style_source_kind') or '')))
     if flux_style_prompt:
         # Image-first descriptors (the vision model read the actual inspiration,
         # reconciled with the named style if one was given). Works for ANY style,
@@ -3136,11 +3137,14 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
     # (memoized — the block builder above already asked)
     data['style_idiom'] = (style_idiom_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
                            if style_source else [])
-    from vision_analyzer import style_lineage_recall
+    from vision_analyzer import style_lineage_recall, style_source_kind
     from prompt_generator import franchise_style_phrase
+    # franchise / artist / movement — recalled, so a new source needs no table entry
+    data['style_source_kind'] = (style_source_kind(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
+                                 if style_source else '')
     # only franchises need a de-named lead; artists/movements pass verbatim
     data['style_lineage'] = (style_lineage_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
-                             if style_source and franchise_style_phrase(style_source) else '')
+                             if style_source and franchise_style_phrase(style_source, data['style_source_kind']) else '')
 
     with open(deck_json_path, 'w') as f:
         json.dump(data, f, indent=2)
@@ -3152,6 +3156,7 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         active_deck_meta['style_staging'] = data['style_staging']
         active_deck_meta['style_idiom'] = data['style_idiom']
         active_deck_meta['style_lineage'] = data['style_lineage']
+        active_deck_meta['style_source_kind'] = data['style_source_kind']
 
     if tokens:
         print(f"  [distill] Style tokens saved for {deck_id}: {list(tokens.keys())}")
@@ -4005,7 +4010,8 @@ def _execute_prompt_job(job, ctx):
         # biases scenes toward the show's trademark settings (labs, portals,
         # garages), which are character attractors at render time.
         from prompt_generator import franchise_style_phrase
-        style_hint = franchise_style_phrase(style_name) or style_name
+        style_hint = (franchise_style_phrase(style_name, data.get('style_source_kind') or '')
+                      or style_name)
         # The block's palette clause is for the image model; in the writer's
         # hint it turns into scene content ("coral-colored stone").
         from prompt_generator import hint_without_palette

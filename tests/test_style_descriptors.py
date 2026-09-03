@@ -512,3 +512,17 @@ def test_style_lineage_recall_filters_names_and_unknown(monkeypatch):
     assert va.style_lineage_recall('Rick & Morty', 'm') == 'late-night adult animation on a cable comedy network'
     assert va.style_lineage_recall('Nobody Knows This', 'm') == ''
     assert va.style_lineage_recall('Rick and Morty Show', 'm') == ''   # name leaked into the phrase -> dropped
+
+
+def test_style_source_kind_recall(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    monkeypatch.setattr(va, '_preferred_idiom_model', lambda m: m)
+    va._KIND_CACHE.clear()
+    replies = iter(["FRANCHISE", "Artist.", "UNKNOWN", "banana"])
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda **kw: next(replies)))
+    assert va.style_source_kind('Smiling Friends', 'm') == 'franchise'
+    assert va.style_source_kind('Some Painter', 'm') == 'artist'
+    assert va.style_source_kind('Nobody', 'm') == ''
+    assert va.style_source_kind('Garbage', 'm') == ''
+    assert va.style_source_kind('', 'm') == ''

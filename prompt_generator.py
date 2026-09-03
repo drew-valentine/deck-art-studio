@@ -858,19 +858,29 @@ _FRANCHISE_PHRASES = {
 }
 
 
-def franchise_style_phrase(style_source: str):
-    """De-named genre phrase for a character franchise, or None for artist /
-    movement / unknown names (which are safe to use verbatim)."""
+_GENERIC_FRANCHISE_PHRASE = 'an animated series or film with original characters'
+
+
+def franchise_style_phrase(style_source: str, kind: str = ''):
+    """De-named phrase for a character franchise, or None for artist /
+    movement / unknown names (which are safe to use verbatim).
+
+    ``kind`` is the recalled classification stored at distillation
+    (vision_analyzer.style_source_kind): 'franchise' de-names any source, known
+    or not; 'artist' / 'movement' pass verbatim even if a keyword matches. The
+    keyword table is only the offline fallback when no kind is stored."""
     if not style_source:
         return None
     tokens = re.findall(r"[a-zé]+", style_source.lower().replace('&', ' '))
-    for t in tokens:
-        if t in _FRANCHISE_PHRASES:
-            return _FRANCHISE_PHRASES[t]
-    return None
+    table = next((_FRANCHISE_PHRASES[t] for t in tokens if t in _FRANCHISE_PHRASES), None)
+    if kind == 'franchise':
+        return table or _GENERIC_FRANCHISE_PHRASE
+    if kind in ('artist', 'movement'):
+        return None
+    return table
 
 
-def render_style_lead(style_source: str, lineage: str = '') -> str:
+def render_style_lead(style_source: str, lineage: str = '', kind: str = '') -> str:
     """The style lead for the image-model prompt. Franchise names are replaced
     with a de-named phrase plus an original-characters guard — the name
     itself is the strongest character summons there is. The recalled
@@ -880,7 +890,7 @@ def render_style_lead(style_source: str, lineage: str = '') -> str:
     leak)."""
     if not style_source:
         return ''
-    phrase = franchise_style_phrase(style_source)
+    phrase = franchise_style_phrase(style_source, kind)
     if phrase:
         return f"in the style of {(lineage or '').strip() or phrase}, original character designs"
     return f"in the style of {style_source}"

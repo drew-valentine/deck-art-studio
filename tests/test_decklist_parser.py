@@ -610,3 +610,16 @@ def test_render_style_lead_prefers_lineage_for_franchises():
     assert render_style_lead('Rick and Morty', lineage='late-night adult animation on a cable comedy network') == \
         'in the style of late-night adult animation on a cable comedy network, original character designs'
     assert render_style_lead('Moebius', lineage='ignored for artists') == 'in the style of Moebius'
+
+
+def test_franchise_phrase_uses_recalled_kind_over_table():
+    from prompt_generator import franchise_style_phrase, render_style_lead, _GENERIC_FRANCHISE_PHRASE
+    # a brand-new show not in any table: the recalled kind de-names it
+    assert franchise_style_phrase('Smiling Friends', kind='franchise') == _GENERIC_FRANCHISE_PHRASE
+    assert render_style_lead('Smiling Friends', kind='franchise').startswith('in the style of an animated series')
+    # an artist whose name happens to contain a table keyword passes verbatim
+    assert franchise_style_phrase('Marvel Kowalski', kind='artist') is None
+    assert render_style_lead('Marvel Kowalski', kind='artist') == 'in the style of Marvel Kowalski'
+    # no kind stored: the table is the fallback
+    assert franchise_style_phrase('Rick and Morty') == 'an adult animated sci-fi cartoon series'
+    assert franchise_style_phrase('Moebius') is None

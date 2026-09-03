@@ -1670,6 +1670,51 @@ def style_idiom_seen(image_path, style_source: str, vision_model: str,
     return out
 
 
+_KIND_CACHE = {}
+
+
+def style_source_kind(style_source: str, text_model: str) -> str:
+    """Classify a declared/recognized style source: 'franchise' (a show, film,
+    game or comic with a recurring cast — its NAME summons that cast at
+    render time and must be de-named), 'artist', 'movement' (a medium, era or
+    school), or '' when unknown. Recalled once at distillation so a brand-new
+    source classifies itself with no code change; the keyword table in
+    prompt_generator is only the offline fallback."""
+    src = (style_source or '').strip().replace('&', 'and')
+    if not src:
+        return ''
+    key = (src.lower(), text_model)
+    if key in _KIND_CACHE:
+        return _KIND_CACHE[key]
+    try:
+        import mlx_llm
+        reply = mlx_llm.chat(
+            messages=[
+                {'role': 'system', 'content':
+                    "Classify the style source a user typed for card art. Answer with ONE "
+                    "word: FRANCHISE (a show, film, game, comic or book series with "
+                    "recurring named characters), ARTIST (a person or studio's personal "
+                    "style), MOVEMENT (a medium, era, school or genre such as 'ukiyo-e' "
+                    "or 'hand drawn illustration'), or UNKNOWN."},
+                {'role': 'user', 'content': "Source: The Simpsons"},
+                {'role': 'assistant', 'content': "FRANCHISE"},
+                {'role': 'user', 'content': "Source: Moebius"},
+                {'role': 'assistant', 'content': "ARTIST"},
+                {'role': 'user', 'content': "Source: Art Nouveau poster"},
+                {'role': 'assistant', 'content': "MOVEMENT"},
+                {'role': 'user', 'content': f"Source: {src}"},
+            ],
+            model=_preferred_idiom_model(text_model), max_tokens=5, temperature=0.0)
+    except Exception as e:
+        print(f"  [style] source-kind recall failed: {e}")
+        return ''
+    word = re.sub(r'[^a-z]', '', (reply or '').strip().lower().split()[0] if (reply or '').strip() else '')
+    kind = word if word in ('franchise', 'artist', 'movement') else ''
+    print(f"  [style] source kind for '{src}': {kind or 'unknown'}")
+    _KIND_CACHE[key] = kind
+    return kind
+
+
 _LINEAGE_CACHE = {}
 
 
