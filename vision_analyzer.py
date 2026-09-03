@@ -1816,41 +1816,74 @@ def reference_has_prominent_character(image_path, vision_model: str):
     return None
 
 
-_DEFECT_KEYS = ('extra limbs', 'extra fingers', 'missing limbs', 'doubled head', 'duplicated subject',
-                'text', 'signature', 'watermark', 'subject missing', 'malformed hands', 'malformed face')
+_DEFECT_KEYS = ('extra limbs', 'doubled head', 'duplicated subject', 'text', 'signature',
+                'subject missing', 'malformed hands')
+
+
+def _parse_counts(text: str) -> dict:
+    """Parse 'heads=1; arms=2; hands=2; copies=1; text=no; signature=no;
+    subject=yes; hands_ok=yes' (order-free, tolerant of prose around it)."""
+    import re as _re
+    out = {}
+    for key in ('heads', 'arms', 'hands', 'copies'):
+        m = _re.search(key + r'\s*[=:]\s*(\d+)', text, _re.IGNORECASE)
+        if m:
+            out[key] = int(m.group(1))
+    for key in ('text', 'signature', 'subject', 'hands_ok'):
+        m = _re.search(key + r'\s*[=:]\s*(yes|no)', text, _re.IGNORECASE)
+        if m:
+            out[key] = m.group(1).lower() == 'yes'
+    return out
 
 
 def inspect_render(image_path, card_name: str, card_type: str, vision_model: str) -> list:
-    """Defect checklist over a finished render, by the vision model: anatomy
-    (extra or missing limbs/fingers, doubled heads, malformed hands or
-    faces), duplicated subject, text / signature / watermark, and — for
-    creatures — the subject missing. Returns a list of defect labels ([] =
-    clean, None = unreadable). The scene checklist judges the prompt; this
-    judges the picture."""
+    """Defect checklist over a finished render, by the vision model. Asking
+    the model to LIST defects made it echo the whole label list; asking it to
+    COUNT (heads, arms, hands, copies of the subject) and answer yes/no
+    (text, signature, subject present, hands look natural) is far more
+    reliable. Defects are derived from the counts. Returns a list of defect
+    labels ([] = clean, None = unreadable)."""
     if image_path is None or not vision_model:
         return None
-    subj = 'a creature or character' if card_type in ('creature', 'planeswalker') else 'an object, place or scene'
+    figure = card_type in ('creature', 'planeswalker')
+    subj = 'a creature or character' if figure else 'an object, place or scene'
     try:
         import mlx_llm
         reply = mlx_llm.vision(
             str(image_path),
-            f"This is card art for '{card_name}', whose subject is {subj}. Inspect it "
-            "strictly. Answer OK if it has NONE of these, otherwise list ONLY the "
-            "applicable labels from this set, comma-separated: extra limbs, extra "
-            "fingers, missing limbs, doubled head, duplicated subject, malformed hands, "
-            "malformed face, text, signature, watermark, subject missing. A single "
-            "creature or character should have one head, two arms, two legs and five "
-            "fingers per hand; any letters, handwriting, signature or logo counts as "
-            "text/signature.",
-            model=vision_model, max_tokens=40, temperature=0.0)
+            f"This is card art for '{card_name}', whose subject is {subj}. Answer with "
+            "EXACTLY this format and nothing else:\n"
+            "heads=<number of heads on the main figure, 0 if no figure>; "
+            "arms=<number of arms on the main figure>; hands=<number of hands>; "
+            "copies=<how many times the main subject appears>; "
+            "text=<yes/no: any letters, words, numerals, handwriting or logo>; "
+            "signature=<yes/no: an artist signature or copyright mark>; "
+            "subject=<yes/no: the named subject is clearly present>; "
+            "hands_ok=<yes/no: every visible hand looks natural with five fingers>",
+            model=vision_model, max_tokens=80, temperature=0.0)
     except Exception as e:
         print(f"  [inspect] vision read failed: {e}")
         return None
-    text = (reply or '').strip().lower()
-    if text.startswith('ok'):
-        return []
-    found = [k for k in _DEFECT_KEYS if k in text]
-    return found if found else ([] if 'none' in text else [text[:60]])
+    c = _parse_counts(reply or '')
+    if not c:
+        return None
+    defects = []
+    if figure:
+        if c.get('heads', 1) > 1:
+            defects.append('doubled head')
+        if c.get('arms', 2) > 2 or c.get('hands', 2) > 2:
+            defects.append('extra limbs')
+        if c.get('hands_ok', True) is False:
+            defects.append('malformed hands')
+        if c.get('subject', True) is False:
+            defects.append('subject missing')
+    if c.get('copies', 1) > 1:
+        defects.append('duplicated subject')
+    if c.get('text') is True:
+        defects.append('text')
+    if c.get('signature') is True:
+        defects.append('signature')
+    return defects
 
 
 def style_staging_seen(image_path, vision_model: str) -> str:

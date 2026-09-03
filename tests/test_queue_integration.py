@@ -287,15 +287,26 @@ def test_front_face_unit_drops_the_back_face_name():
     assert ds._face_unit_for(plain, 'Sol Ring') is plain
 
 
-def test_inspect_render_parses_checklist(monkeypatch):
+def test_inspect_render_derives_defects_from_counts(monkeypatch):
     import sys, types
     import vision_analyzer as va
-    answers = iter(['OK', 'extra fingers, signature', 'None found.', 'garbage answer'])
+    answers = iter([
+        'heads=1; arms=2; hands=2; copies=1; text=no; signature=no; subject=yes; hands_ok=yes',
+        'heads=1; arms=3; hands=3; copies=1; text=no; signature=yes; subject=yes; hands_ok=no',
+        'heads=2; arms=2; hands=2; copies=2; text=yes; signature=no; subject=yes; hands_ok=yes',
+        'heads=0; arms=0; hands=0; copies=1; text=no; signature=no; subject=no; hands_ok=yes',
+        'I cannot tell.',
+    ])
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: next(answers)))
-    assert va.inspect_render('x.png', 'Sol Ring', 'artifact', 'v') == []
-    assert va.inspect_render('x.png', 'Keiga', 'creature', 'v') == ['extra fingers', 'signature']
-    assert va.inspect_render('x.png', 'Keiga', 'creature', 'v') == []
-    assert va.inspect_render('x.png', 'Keiga', 'creature', 'v') == ['garbage answer']
+    assert va.inspect_render('x.png', 'Krark', 'creature', 'v') == []
+    assert va.inspect_render('x.png', 'Krark', 'creature', 'v') == ['extra limbs', 'malformed hands', 'signature']
+    assert va.inspect_render('x.png', 'Keiga', 'creature', 'v') == ['doubled head', 'duplicated subject', 'text']
+    assert va.inspect_render('x.png', 'Glissa', 'creature', 'v') == ['subject missing']
+    assert va.inspect_render('x.png', 'Glissa', 'creature', 'v') is None
+    # object cards ignore anatomy counts but still flag text / signature / copies
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(
+        vision=lambda *a, **k: 'heads=1; arms=3; hands=3; copies=1; text=no; signature=yes; subject=yes; hands_ok=no'))
+    assert va.inspect_render('x.png', 'Sol Ring', 'artifact', 'v') == ['signature']
     assert va.inspect_render(None, 'x', 'creature', 'v') is None
 
 
