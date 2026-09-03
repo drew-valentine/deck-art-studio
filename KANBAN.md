@@ -115,6 +115,8 @@
     - Render: the FLUX prompt order is now lead + medium anchors + colour coverage + palette, then the subject sentence, then idiom/motifs/reference read, then the rest of the scene — style-first buried the subject, subject-early lost the colour. "no signature" added to the guard. The MLX worker retries once after a Metal GPU hang.
     - m4 (subject-early) confirmed subjects recover (Arcane Signet, Glissa) but colour drops; m5 on the new default order is running as the deciding evidence.
     - Open before ship: the m5 verdict; Blast Zone showed the reference's iconic striped hat — image-channel prop bleed, on the watch list.
+    - m5/m6 prompt-order verdict: subject-early kept subjects but dropped colour on ink decks; medium-first kept colour but lost a Seuss elf; default is now lead + colour-coverage clause, subject sentence, full block, rest of scene. Differences between orders on Seuss were within single-roll variance; block content and writer output matter more. Seuss references are white-paper art with sparse fills, so pale renders are partly faithful.
+    - Correction: "Aclazotz renders as a skull gate" was the BACK face (Temple of the Dead) picked by the sheet builder; the front face is a fine bat god. Sheet builder fixed; front-face writer unit fix (front name only) kept.
   - Scope:
     - [x] Wire `Flux1Redux` into `flux_worker` with a token-pooling hook
     - [x] Pass each deck's inspiration images as references
@@ -128,14 +130,14 @@
     - [x] Text-side idiom recall: named-style idiom + vision read, staging and tonal register, composition backstops, type-aware rules-text gating
     - [x] Cross-deck regression matrix under the new block builder (m2/m3 across Temur Roar, Marchesa, Heads-I-Win, Glissa/Seuss, Alela × 4 card types)
     - [x] Deck-agnostic source classification (source kind + production lineage recalled with an UNKNOWN escape; keyword table demoted to fallback)
-    - [ ] m5 prompt-order verdict (style-first vs subject-early)
-    - [ ] Creature faces on Marchesa — front-face fix landed, render pending
-    - [ ] Creature faces (Keiga) still generic; ring-as-object clarity
+    - [x] m5 prompt-order verdict (style-first vs subject-early) — settled: lead + colour coverage, subject sentence, full block; order differences within roll variance
+    - [x] Creature faces on Marchesa — the "skull gate" was the back face; front face renders correctly, sheet builder fixed
+    - [ ] Creature design on franchise decks varies with the writer's roll; ring-as-object now reliable on 3 of 4 decks
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
     - [x] Given a deck whose references contain figures or lettering, when cards are generated, then neither the reference figures nor their glyph text appear in the card art. — met by design: token averaging cancels per-image content and the dial cannot be pushed past 81 tokens. At 81 × 4 references the matrix leaked on 3 of 4 decks, so the ceiling is doing the work.
-    - [ ] Given the four validation decks (Seuss, Moebius, cartoon, Egyptian), when a card from each is rendered, then the result reads as that deck's source style — the demo-alela v1 bar. — OPEN, moving as of 2026-09-03. The image channel alone did not clear the bar; the text-side idiom work cleared it on 3 of 4 representative Temur Roar cards. The cross-deck regression matrix now running is the deciding evidence. FLUX.1-dev + Redux does transfer the line character; it costs ~215 s/card and drifts the subject.
+    - [ ] Given the four validation decks (Seuss, Moebius, cartoon, Egyptian), when a card from each is rendered, then the result reads as that deck's source style — the demo-alela v1 bar. — OPEN, moving as of 2026-09-03. The image channel alone did not clear the bar; the text-side idiom work cleared it on 3 of 4 representative Temur Roar cards. The m3 cross-deck matrix (final block builder) reads as the source style on 4 of 4 representative cards for the cartoon, comic, Egyptian and Seuss decks and 3 to 4 of 4 for the fine-line deck; composition misses were prompt-side and are backstopped. Awaiting Drew's eye on the m3 sheets before ticking. FLUX.1-dev + Redux does transfer the line character; it costs ~215 s/card and drifts the subject.
     - [x] Given a batch run, when per-card time is measured, then it stays at or under the current text-only path. — met at the Subtle default: 57–78 s/card against the ~65 s text-only baseline.
 
 ## Done
