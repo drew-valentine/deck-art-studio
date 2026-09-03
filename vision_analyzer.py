@@ -1387,6 +1387,8 @@ _MEDIUM_ANCHORS = {
                          'flat color', 'dense intricate detail'],
     'watercolor': ['watercolor painting', 'soft washes', 'visible pigment texture'],
     'oil painting': ['oil painting', 'visible brushstrokes', 'painterly texture'],
+    'painted illustration': ['painted illustration', 'flat opaque paint',
+                             'hand-painted texture'],
     '3d render': ['3D render', 'volumetric lighting', 'detailed surface texture'],
     'photograph': ['cinematic photograph', 'photographic lighting',
                    'shallow depth of field'],
@@ -1418,6 +1420,10 @@ _MEDIUM_KEYWORD_MAP = {
                                'renaissance'}),
     'comic book': frozenset({'comic', 'manga', 'graphic-novel'}),
     'pixel art': frozenset({'pixel', '8-bit', '16-bit'}),
+    # painted media that are neither oil nor watercolor: digital painting,
+    # tempera, acrylic, wall painting on plaster or papyrus
+    'painted illustration': frozenset({'painting', 'painted', 'papyrus', 'parchment',
+                                       'fresco', 'mural', 'tempera', 'acrylic'}),
 }
 
 
@@ -1442,6 +1448,8 @@ def _classify_style_medium(style_source: str, text_model: str,
         if src_tokens & keys or any(' ' in k and k in src_lower for k in keys):
             return medium
 
+    if img_desc == '':
+        return ''            # name-map-only pass (caller supplies evidence next)
     labels = list(_MEDIUM_ANCHORS.keys())
     # '&' derails the small model's name recognition; normalize it.
     src = style_source.replace('&', 'and')
@@ -1502,6 +1510,24 @@ def recognized_style_source(descriptions) -> str:
                 if val and not _re.match(r'^(original|unknown|n/?a|none)$', val, _re.IGNORECASE):
                     votes[val] += 1
     return votes.most_common(1)[0][0] if votes else ''
+
+
+def _evidence_medium_vote(stored_descriptions: str) -> str:
+    """Deterministic medium vote over the stored analyses' own Art Style /
+    Medium / Source lines (no model in the loop). '' when no keyword hits."""
+    import re as _re
+    text = stored_descriptions or ''
+    lines = [ln for ln in text.splitlines()
+             if _re.match(r'\s*[-*\s]*(art style|medium|source)\s*:', ln, _re.IGNORECASE)
+             and not _re.search(r'source\s*:\s*(original|unknown|n/?a)\s*$', ln, _re.IGNORECASE)]
+    if not lines:
+        return ''
+    tokens = set(_re.findall(r'[a-z0-9-]+', ' '.join(lines).lower()))
+    votes = {m: len(tokens & keys) for m, keys in _MEDIUM_KEYWORD_MAP.items()}
+    best = max(votes.values()) if votes else 0
+    if not best:
+        return ''
+    return next(m for m, v in votes.items() if v == best)
 
 
 def _classify_medium_from_evidence(stored_descriptions: str, prose: str,
@@ -1954,11 +1980,22 @@ def build_flux_style_block(image_path, style_source: str = '',
     # anchors at all: a papyrus-hieroglyph deck whose analyses said "ink on
     # papyrus" rendered from a bare palette line and looked nothing like its
     # references. Evidence is the fallback authority, never silence.
-    medium = (_classify_style_medium(style_source, text_model,
-                                     img_desc=best_prose[:400])
-              if style_source
-              else _classify_medium_from_evidence(stored_descriptions,
-                                                  best_prose, text_model))
+    if style_source:
+        # Declaration first (deterministic name map), then the deck's own
+        # stored evidence, and only then the model's guess from a raw read: a
+        # deck declared "Ancient Egyptian Hieroglyphs" whose analyses said
+        # "papyrus illustration" was classified PHOTOGRAPH because the raw
+        # read described a photo of a painted wall.
+        medium = _classify_style_medium(style_source, text_model, img_desc='')
+        if not medium:
+            medium = _evidence_medium_vote(stored_descriptions)
+        if not medium:
+            ev_lines = ' '.join(ln.strip() for ln in (stored_descriptions or '').splitlines()
+                                if ln.strip().lower().lstrip('-* ').startswith(('art style', 'medium')))
+            medium = _classify_style_medium(style_source, text_model,
+                                            img_desc=(ev_lines or best_prose)[:400])
+    else:
+        medium = _classify_medium_from_evidence(stored_descriptions, best_prose, text_model)
     anchors = _medium_anchors(medium)
     if anchors and anchors[0] == 'ink illustration':
         # Ink variants are decided per-AXIS from textual evidence — line

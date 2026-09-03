@@ -542,3 +542,20 @@ def test_block_states_colour_coverage_from_evidence(monkeypatch):
             "Technique: monochrome crosshatching, uncoloured")
     blk2 = va.build_flux_style_block('x.png', style_source='', text_model='m', stored_descriptions=mono)
     assert 'monochrome, uncoloured ink on white paper' in blk2
+
+
+def test_declared_source_medium_prefers_stored_evidence_over_raw_read(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    monkeypatch.setattr(va, 'analyze_inspiration_style', lambda *a, **k: {'style_prose': 'a photograph of a painted temple wall, dramatic shadows'})
+    monkeypatch.setattr(va, 'style_idiom_recall', lambda *a, **k: [])
+    monkeypatch.setattr(va, 'style_idiom_seen', lambda *a, **k: [])
+    # the LLM would say photograph from the raw read; it must not be consulted
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda **kw: "photograph"))
+    stored = ("Source: Original\nArt Style: Papyrus illustration rendering\n- Medium: Papyrus parchment\n"
+              "Colors: deep brown, vibrant green\nSource: Ancient Egyptian Hieroglyphs\n"
+              "Art Style: Digital painting with flat figures\n- Medium: Digital painting")
+    blk = va.build_flux_style_block('x.png', style_source='Ancient Egyptian Hieroglyphs',
+                                    text_model='m', stored_descriptions=stored)
+    assert 'photograph' not in blk
+    assert va._evidence_medium_vote(stored) != ''
