@@ -44,7 +44,7 @@ class TestTokenPooling:
 class TestSettings:
     def test_defaults(self):
         cfg = ds._style_reference_settings({})
-        assert cfg == {'enabled': True, 'tokens': 25, 'strength': 1.0, 'max_images': 1}
+        assert cfg == {'enabled': True, 'tokens': 25, 'strength': 1.0, 'max_images': 4, 'average': True}
 
     def test_zero_tokens_disables(self):
         cfg = ds._style_reference_settings({'style_reference': {'tokens': 0}})
@@ -65,11 +65,10 @@ class TestSettings:
         meta = {'inspiration_images': [{'filename': f'i{i}.png'} for i in range(6)]
                 + [{'filename': 'missing.png'}]}
         paths = ds._style_reference_images(meta, tmp_path)
-        assert len(paths) == 1                      # ONE reference by default
+        assert len(paths) == ds.STYLE_REFERENCE_MAX_IMAGES   # all refs (averaged), hard cap
         assert paths[0].endswith('i0.png')
-        more = ds._style_reference_images({**meta, 'style_reference': {'max_images': 9}}, tmp_path)
-        assert len(more) == ds.STYLE_REFERENCE_MAX_IMAGES   # hard cap
-        assert all(p.endswith('.png') for p in more)
+        one = ds._style_reference_images({**meta, 'style_reference': {'max_images': 1}}, tmp_path)
+        assert len(one) == 1
         assert ds._style_reference_images({**meta, 'style_reference': {'enabled': False}}, tmp_path) == []
         assert ds._style_reference_images(meta, None) == []
 
@@ -90,7 +89,7 @@ class TestGeneratorRequest:
         ref = tmp_path / 'ref.png'; ref.write_bytes(b'x')
         gen.generate(prompt='p', width=64, height=64,
                      reference_images=[str(ref)], reference_tokens=25, reference_strength=0.9)
-        assert sent['redux'] == {'images': [str(ref)], 'tokens': 25, 'strength': 0.9}
+        assert sent['redux'] == {'images': [str(ref)], 'tokens': 25, 'strength': 0.9, 'average': True}
 
     def test_no_references_no_redux_field(self, monkeypatch):
         from local_image_generator import LocalImageGenerator
@@ -178,3 +177,10 @@ class TestReduxPoolingHook:
         assert calls['embed'] == 1                                 # cached per (path, mtime, k)
         assert mod.ReduxUtil.embed_images([], None, None, None) == []     # no refs -> no tokens
         assert mod.ReduxUtil.embed_images(None, None, None, None) == []
+        # several references AVERAGE into one style token set
+        ref2 = tmp_path / 'r2.png'; ref2.write_bytes(b'y')
+        fw._REDUX_STATE['average'] = True
+        avg = mod.ReduxUtil.embed_images([str(ref), str(ref2)], None, None, [1.0, 1.0])
+        assert len(avg) == 1 and avg[0].shape == (1, 81, 4)
+        fw._REDUX_STATE['average'] = False
+        assert len(mod.ReduxUtil.embed_images([str(ref), str(ref2)], None, None, [1.0, 1.0])) == 2

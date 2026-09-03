@@ -1703,12 +1703,13 @@ def _build_negative_fallback(style_tokens: dict, deck_meta: dict) -> str:
 # reference's full idiom but its figures/layout start to displace the subject
 # (a 16-card validation matrix: at 81 tokens x 4 refs, artifacts and lands
 # rendered the references' characters; at 25 the subjects returned), 729 = a
-# variation of the reference. ONE reference by default: a controlled A/B
-# (four cards, four decks, same prompts + seed) showed every reference's tokens
-# add its CONTENT — four refs at 25 each leaked figures and objects, a single
-# ref at 25 kept the card's subject on all four decks with the style intact.
-# `max_images` raises that (hard cap STYLE_REFERENCE_MAX_IMAGES).
-STYLE_REFERENCE_DEFAULT = {'enabled': True, 'tokens': 25, 'strength': 1.0, 'max_images': 1}
+# variation of the reference. Every reference's tokens add its CONTENT (four
+# refs concatenated at 25 each leaked figures and objects), so references are
+# AVERAGED by default: the element-wise mean over up to STYLE_REFERENCE_MAX_IMAGES
+# references cancels each image's content and keeps the shared style — cleaner
+# and leak-free versus any single reference, at one reference's token cost.
+# `average: false` falls back to concatenating (then keep max_images at 1).
+STYLE_REFERENCE_DEFAULT = {'enabled': True, 'tokens': 25, 'strength': 1.0, 'max_images': 4, 'average': True}
 STYLE_REFERENCE_MAX_IMAGES = 4   # hard cap; the per-deck default is ONE reference
 STYLE_REFERENCE_MAX_TOKENS = 81  # 'Balanced' is the ceiling — above it the reference's content displaces the subject
 
@@ -1722,9 +1723,11 @@ def _style_reference_settings(meta) -> dict:
         cfg['tokens'] = max(0, min(STYLE_REFERENCE_MAX_TOKENS, int(cfg['tokens'])))
         cfg['strength'] = float(cfg['strength'])
         cfg['max_images'] = max(1, min(STYLE_REFERENCE_MAX_IMAGES, int(cfg['max_images'])))
+        cfg['average'] = bool(cfg['average'])
     except (TypeError, ValueError):
         cfg['tokens'], cfg['strength'] = STYLE_REFERENCE_DEFAULT['tokens'], 1.0
         cfg['max_images'] = STYLE_REFERENCE_DEFAULT['max_images']
+        cfg['average'] = True
     cfg['enabled'] = bool(cfg['enabled']) and cfg['tokens'] > 0
     return cfg
 
@@ -1861,8 +1864,9 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     ref_cfg = _style_reference_settings(_meta)
     ref_images = _style_reference_images(_meta, deck_dir)
     if ref_images:
-        print(f"[local_img] style references: {len(ref_images)} image(s), "
-              f"{ref_cfg['tokens']} tokens/ref, strength {ref_cfg['strength']}")
+        print(f"[local_img] style references: {len(ref_images)} image(s)"
+              f"{' averaged' if ref_cfg['average'] and len(ref_images) > 1 else ''}, "
+              f"{ref_cfg['tokens']} tokens, strength {ref_cfg['strength']}")
     with generation_lock:
         _status[card_name]['message'] = ('Generating with style references...'
                                          if ref_images else 'Generating from text prompt...')
@@ -1873,6 +1877,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
         reference_images=ref_images,
         reference_tokens=ref_cfg['tokens'],
         reference_strength=ref_cfg['strength'],
+        reference_average=ref_cfg['average'],
     )
 
 
@@ -3650,6 +3655,8 @@ def api_style_reference(deck_id):
             cfg['max_images'] = max(1, min(STYLE_REFERENCE_MAX_IMAGES, int(body['max_images'])))
         except (TypeError, ValueError):
             return jsonify({'error': 'max_images must be an integer'}), 400
+    if 'average' in body:
+        cfg['average'] = bool(body['average'])
     _save_deck_meta_field(deck_id, style_reference=cfg)
     if deck_id == active_deck_id:
         active_deck_meta['style_reference'] = cfg

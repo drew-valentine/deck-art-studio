@@ -77,7 +77,7 @@ def _pool_token_grid(emb, k):
     return grid.reshape(b, k * k, d)
 
 
-_REDUX_STATE = {"k": 0, "cache": {}}
+_REDUX_STATE = {"k": 0, "cache": {}, "average": True}
 
 
 def _redux_weights_cached() -> bool:
@@ -123,8 +123,17 @@ def _install_redux_pooling():
     def _embed_images(image_paths, image_encoder, image_embedder, image_strengths=None):
         if not image_paths:
             return []
-        return original_embed_images(image_paths, image_encoder, image_embedder,
+        embs = original_embed_images(image_paths, image_encoder, image_embedder,
                                      image_strengths=image_strengths)
+        if _REDUX_STATE.get("average") and len(embs) > 1:
+            # STYLE ESTIMATOR: a deck's references differ in CONTENT but share
+            # a STYLE. The element-wise mean over references cancels what is
+            # specific to each image (its figures, layout) and keeps what they
+            # have in common (medium, palette, stroke) — measured cleaner and
+            # leak-free versus any single reference at the same budget, and it
+            # costs one reference's worth of tokens no matter how many are used.
+            return [sum(embs) / len(embs)]
+        return embs
 
     RU.ReduxUtil.embed_images = staticmethod(_embed_images)
     RU.ReduxUtil._das_pooled = True
@@ -251,9 +260,11 @@ class _Engine:
         if self._kind == "redux":
             tokens = int(redux.get("tokens") or 25)
             strength = float(redux.get("strength") or 1.0)
+            _REDUX_STATE["average"] = bool(redux.get("average", True))
             _REDUX_STATE["k"] = max(1, int(round(tokens ** 0.5))) if ref_images else 0
-            _log(f"redux {w}x{h} steps={n_steps} refs={len(ref_images)} "
-                 f"tokens/ref={_REDUX_STATE['k'] ** 2 if ref_images else 0} "
+            _log(f"redux {w}x{h} steps={n_steps} refs={len(ref_images)}"
+                 f"{' (averaged)' if len(ref_images) > 1 and _REDUX_STATE['average'] else ''} "
+                 f"tokens={_REDUX_STATE['k'] ** 2 if ref_images else 0} "
                  f"strength={strength}: {prompt[:80]}")
             result = self._flux.generate_image(
                 seed=seed, prompt=prompt, num_inference_steps=n_steps, width=w, height=h,
