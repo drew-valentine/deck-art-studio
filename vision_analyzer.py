@@ -1669,17 +1669,19 @@ def style_staging_recall(style_source: str, text_model: str) -> str:
                 {'role': 'system', 'content':
                     "You are an art director. Given the name of an art style, artist, "
                     "show or movement, write exactly two sentences. Sentence 1: how it "
-                    "STAGES a scene — typical settings and props, how figures act and "
-                    "pose, camera distance. Sentence 2: its TONAL REGISTER (for example "
+                    "STAGES a scene — typical settings, props, lighting and camera "
+                    "distance. Do NOT describe its recurring cast or any character "
+                    "types (the subject of each picture is supplied separately). "
+                    "Sentence 2: its TONAL REGISTER (for example "
                     "deadpan absurd, gentle whimsy, grim gothic, serene wonder). Plain "
                     "concrete language. Describe props and settings GENERICALLY (a ray "
                     "gun, a garage workbench), never a trademark item. NEVER name "
                     "characters, people, places or the style itself."},
                 {'role': 'user', 'content': "Style: Moebius"},
                 {'role': 'assistant', 'content':
-                    "Scenes are staged in vast empty deserts or crystalline cities with a "
-                    "lone figure in flowing robes standing still or gliding on an odd "
-                    "vehicle, seen from a distance so the landscape dwarfs them. The "
+                    "Scenes are staged in vast empty deserts or crystalline cities under "
+                    "a pale flat sky, with odd vehicles and towering rock forms, seen "
+                    "from a distance so the landscape dwarfs whatever stands in it. The "
                     "register is serene, dreamlike wonder — quiet, unhurried, slightly "
                     "mystical."},
                 {'role': 'user', 'content': f"Style: {src}"},
