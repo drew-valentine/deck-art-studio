@@ -267,3 +267,21 @@ class TestRegistryReconcile:
         monkeypatch.setattr(ds, 'DECK_REGISTRY_PATH', decks / 'decks.json')
         reg = ds._load_deck_registry()
         assert [d['id'] for d in reg['decks']] == ['only']
+
+
+def test_front_face_unit_drops_the_back_face_name():
+    import deck_studio as ds
+    card = {'name': 'Aclazotz, Deepest Betrayal // Temple of the Dead',
+            'type_line': 'Legendary Creature — Bat God // Land',
+            'oracle_text': 'Flying // {T}: Add {B}.', 'card_type': 'creature',
+            'card_faces': [
+                {'name': 'Aclazotz, Deepest Betrayal', 'type_line': 'Legendary Creature — Bat God',
+                 'oracle_text': 'Flying, deathtouch', 'flavor_text': ''},
+                {'name': 'Temple of the Dead', 'type_line': 'Land', 'oracle_text': '{T}: Add {B}.'}]}
+    unit = ds._face_unit_for(card, card['name'])
+    assert unit['name'] == 'Aclazotz, Deepest Betrayal'
+    assert 'Temple' not in unit['name'] and unit['type_line'].startswith('Legendary Creature')
+    assert unit['oracle_text'] == 'Flying, deathtouch'
+    # single-faced cards pass through untouched
+    plain = {'name': 'Sol Ring', 'type_line': 'Artifact', 'card_type': 'artifact'}
+    assert ds._face_unit_for(plain, 'Sol Ring') is plain

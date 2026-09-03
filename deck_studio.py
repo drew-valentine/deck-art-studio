@@ -746,6 +746,28 @@ def back_face_card(card):
     return merged
 
 
+def front_face_card(card):
+    """Merged card dict for the FRONT face of a two-faced card — face fields
+    over card-level fields, name without the ' // Back Face' half. The scene
+    writer otherwise sees the back face's name (a place: "Temple of the
+    Dead") and stages the front face's creature inside it."""
+    faces = card.get('card_faces') or []
+    if len(faces) < 2 or ' // ' not in (card.get('name') or ''):
+        return card
+    face = faces[0]
+    merged = dict(card)
+    for k in ('name', 'mana_cost', 'type_line', 'oracle_text',
+              'power', 'toughness', 'loyalty', 'defense', 'flavor_text',
+              'card_type'):
+        if face.get(k) is not None:
+            merged[k] = face.get(k)
+    merged['name'] = (face.get('name') or card['name'].split(' // ')[0]).strip()
+    if not merged.get('card_type'):
+        from scryfall_client import normalize_card_type
+        merged['card_type'] = normalize_card_type(merged.get('type_line') or '')
+    return merged
+
+
 def is_rotated_split(card) -> bool:
     """Split-layout cards print as two rotated halves, EACH with its own
     art — classic splits (Fire // Ice) AND Rooms (Smoky Lounge // Misty
@@ -3995,7 +4017,7 @@ def _face_unit_for(card, fkey):
     if fkey.endswith(BACK_FACE_SUFFIX):
         return (split_half_card(card, 1) if is_rotated_split(card)
                 else back_face_card(card))
-    return split_half_card(card, 0) if is_rotated_split(card) else card
+    return split_half_card(card, 0) if is_rotated_split(card) else front_face_card(card)
 
 
 def _execute_art_job(job, ctx):
