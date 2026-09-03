@@ -648,8 +648,10 @@ def _scene_problems(draft: str, card: dict, local_model: str) -> str:
                     "a creature the creature itself is described (not only its "
                     "surroundings); for an artifact the named object is present and "
                     "central; for a land the location is the whole scene; (3) no "
-                    "invented second creature, person or prop competes for focus; "
-                    "(4) no library, graveyard or battlefield as a place."},
+                    "invented second creature, person or prop competes for focus — for "
+                    "an artifact, enchantment or land ANY person, hand, passer-by or "
+                    "onlooker counts as a failure; (4) no library, graveyard or "
+                    "battlefield as a place."},
                 {'role': 'user', 'content':
                     f"Card: {name}\nType: {type_line or ctype}\nDraft: {draft}\nAnswer:"},
             ],
