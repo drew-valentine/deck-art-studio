@@ -706,3 +706,21 @@ def test_franchise_stripping_only_uses_a_franchise_name(monkeypatch):
     out = pg.generate_subject_with_ai(card, None, backend='local', local_model='m',
                                       style_source_name='Rick and Morty', style_source_kind='franchise')
     assert 'Rick grabs' not in out and out.startswith("Krark's Thumb")
+
+
+def test_writer_describes_light_in_the_medium(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    seen = {}
+    def chat(messages, **kw):
+        seen['user'] = messages[1]['content']; return "Sol Ring, a gold ring, glows on an altar. Flat shadow. Dust."
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    card = {'name': 'Sol Ring', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'}
+    pg.generate_subject_with_ai(card, None, backend='local', local_model='m',
+                                style_hint='in the style of X — painted illustration, flat opaque paint, hand-painted texture')
+    assert 'Light in this medium (painted illustration)' in seen['user'] and 'painted light' in seen['user']
+    pg.generate_subject_with_ai(card, None, backend='local', local_model='m',
+                                style_hint='fine-line ink illustration, loose expressive hand-drawn linework')
+    assert 'hatched or solid-black shadows' in seen['user']
+    pg.generate_subject_with_ai(card, None, backend='local', local_model='m', style_hint='')
+    assert 'Light in this medium' not in seen['user']

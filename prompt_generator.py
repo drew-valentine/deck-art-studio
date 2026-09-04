@@ -893,6 +893,26 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     # message next to the task — at the tail of the long system message the
     # 8B writer dropped it.
     figure_line = ''
+    # H32: cinematic light vocabulary pulls the render toward photographic
+    # rendering ("shaft of sunlight, dust motes" made a papyrus deck's ring
+    # smooth digital). Light is described the way THIS medium renders it.
+    light_line = ''
+    medium_word = (style_hint.split(' — ')[-1].split(',')[0].strip().lower() if style_hint else '')
+    if medium_word:
+        if any(w in medium_word for w in ('ink', 'line', 'drawn', 'pen', 'woodblock', 'etching')):
+            how = 'flat fills, hatched or solid-black shadows, and bare paper for highlights'
+        elif any(w in medium_word for w in ('cel', 'animation', 'cartoon', 'comic')):
+            how = 'hard-edged cel shadows, flat colour, and simple flat highlights'
+        elif any(w in medium_word for w in ('paint', 'papyrus', 'fresco', 'watercolor', 'watercolour', 'oil')):
+            how = 'painted light: opaque fills, soft brushed glow, no photographic realism'
+        elif any(w in medium_word for w in ('pixel',)):
+            how = 'dithered pixel shading and flat colour bands'
+        else:
+            how = ''
+        if how:
+            light_line = (f"Light in this medium ({medium_word}): describe light and shadow as {how}; "
+                          "never lens, bokeh, volumetric, HDR or photographic terms.\n")
+
     if figure_idiom and figure_idiom.strip() and card_type in ('creature', 'planeswalker'):
         figure_line = (f"Figure idiom (REQUIRED in the first sentence): describe the creature's "
                        f"eyes, face and body in this artist's terms — {figure_idiom.strip()} — "
@@ -939,6 +959,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         + (f"Flavor text (use this as the THEMATIC ANCHOR for the scene): {safe_flavor}\n" if safe_flavor else "")
         + f"Direction: {guidance}\n"
         + figure_line
+        + light_line
         + "One subject. Then camera and scale, one strong light, one moment, one "
           "atmospheric detail. Three sentences, about sixty words.\n"
         + (f"User steer (OVERRIDES the reference description wherever they "
