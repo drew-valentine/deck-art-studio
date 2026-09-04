@@ -710,11 +710,11 @@ def test_object_line_uses_a_memoised_gloss(monkeypatch):
     calls = []
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda **k: (calls.append(1) or 'a finger ring with a flat engraved top.')))
     monkeypatch.setenv('OBJECT_GLOSS', '1')
-    pg._OBJECT_GLOSS.clear()
+    pg._OBJECT_GLOSS.clear(); pg._OBJECT_SYNONYMS.clear()
     line = pg._object_line({'name': 'Arcane Signet', 'card_type': 'artifact'}, 'm')
     assert line.startswith('Object (REQUIRED): a signet ring — a finger ring with a flat engraved top.')
     pg._object_line({'name': 'Arcane Signet', 'card_type': 'artifact'}, 'm')
-    assert len(calls) == 1
+    assert len(calls) == 2          # one gloss call + one synonym call, both memoised
     assert pg._object_line({'name': 'Command Tower', 'card_type': 'land'}, 'm') == ''
 
 

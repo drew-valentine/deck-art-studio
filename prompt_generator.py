@@ -1562,6 +1562,37 @@ def _object_gloss(literal: str, local_model: str) -> str:
     return gloss
 
 
+_OBJECT_SYNONYMS = {}
+
+
+def _object_synonyms(literal: str, local_model: str) -> list:
+    """One-word names an artist or a vision model might use for the object
+    ("a talisman" -> medallion, amulet, pendant, charm). Memoised per phrase;
+    model knowledge, no synonym tables. Used by the inspector's object check
+    so a talisman drawn as a medallion is not a miss."""
+    key = (literal or '').strip().lower()
+    if not key or os.environ.get('OBJECT_GLOSS', '1') == '0':
+        return []
+    if key in _OBJECT_SYNONYMS:
+        return _OBJECT_SYNONYMS[key]
+    syns = []
+    try:
+        import mlx_llm
+        reply = mlx_llm.chat(
+            messages=[{'role': 'user', 'content':
+                       f"List six single-word nouns that {key} could also be called or mistaken for "
+                       "in a picture (for example medallion, amulet). Comma-separated, lowercase, "
+                       "nothing else."}],
+            model=local_model, max_tokens=40, temperature=0.0)
+        syns = [w for w in re.findall(r'[a-z]{3,}', (reply or '').lower())
+                if w not in ('and', 'the', 'for', 'also', 'could', 'called', 'mistaken', 'picture')][:8]
+    except Exception as e:
+        print(f"  [prompt_gen] object synonyms failed: {e}")
+    _OBJECT_SYNONYMS[key] = syns
+    print(f"  [prompt_gen] object synonyms for {key!r}: {syns}")
+    return syns
+
+
 def _object_line(card: dict, local_model: str) -> str:
     if card.get('card_type') != 'artifact':
         return ''
@@ -1569,6 +1600,7 @@ def _object_line(card: dict, local_model: str) -> str:
     if not lit:
         return ''
     gloss = _object_gloss(lit, local_model)
+    _object_synonyms(lit, local_model)          # warm the inspector's synonym memo
     return (f"Object (REQUIRED): {lit}" + (f" — {gloss}" if gloss else '') +
             ". The first sentence says what it is in these plain words, shown whole.\n")
 

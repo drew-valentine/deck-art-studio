@@ -587,3 +587,17 @@ def test_object_check_accepts_gloss_synonyms(monkeypatch):
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: 'medallion, cloth, pedestal'))
     assert va._names_object('x.png', 'a talisman', 'v', alternates=va._object_alternates('a talisman'))
     assert not va._names_object('x.png', 'a talisman', 'v', alternates=[])
+
+
+def test_object_synonyms_feed_the_check(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    import prompt_generator as pg
+    monkeypatch.setenv('OBJECT_GLOSS', '1')
+    pg._OBJECT_SYNONYMS.clear(); pg._OBJECT_GLOSS.clear()
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(
+        chat=lambda **k: 'medallion, amulet, pendant, charm, disc, token',
+        vision=lambda *a, **k: 'medallion, cloth, pedestal'))
+    assert pg._object_synonyms('a talisman', 'm')[:3] == ['medallion', 'amulet', 'pendant']
+    assert 'medallion' in va._object_alternates('a talisman')
+    assert va._names_object('x.png', 'a talisman', 'v', alternates=va._object_alternates('a talisman'))

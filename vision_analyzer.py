@@ -1947,13 +1947,15 @@ def _object_alternates(subject_hint: str) -> list:
     missing because only the literal noun counted. No synonym tables."""
     import re as _re
     try:
-        from prompt_generator import _OBJECT_GLOSS
+        from prompt_generator import _OBJECT_GLOSS, _OBJECT_SYNONYMS
     except Exception:
         return []
-    gloss = _OBJECT_GLOSS.get((subject_hint or '').strip().lower(), '')
+    key = (subject_hint or '').strip().lower()
+    syns = list(_OBJECT_SYNONYMS.get(key, []))
+    gloss = _OBJECT_GLOSS.get(key, '')
     stop = {'a', 'an', 'the', 'of', 'on', 'in', 'with', 'for', 'and', 'or', 'small', 'large', 'flat',
             'round', 'worn', 'used', 'held', 'top', 'side', 'made', 'from', 'that', 'this', 'its'}
-    return [w for w in _re.findall(r'[a-z]+', gloss.lower()) if len(w) > 3 and w not in stop]
+    return syns + [w for w in _re.findall(r'[a-z]+', gloss.lower()) if len(w) > 3 and w not in stop]
 
 
 def _names_object(image_path, subject_hint: str, vision_model: str, alternates=()) -> bool:
