@@ -1865,6 +1865,12 @@ def _style_block_window(card_type):
         except ValueError:
             pass
     a, b = STYLE_BLOCKS_CREATURE if card_type in ('creature', 'planeswalker') else STYLE_BLOCKS_DEFAULT
+    obj = os.environ.get('STYLE_BLOCKS_OBJECT', '').strip()      # experiment hook: non-creature window
+    if obj and '-' in obj and card_type not in ('creature', 'planeswalker'):
+        try:
+            a, b = (int(x) for x in obj.split('-', 1))
+        except ValueError:
+            pass
     if (a, b) == (0, 9):
         return None                  # the worker's own default; nothing to send
     return {'double': list(range(a, b + 1)), 'single': []}
