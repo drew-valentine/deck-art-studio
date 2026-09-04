@@ -1531,7 +1531,7 @@ def _object_gloss(literal: str, local_model: str) -> str:
             model=local_model, max_tokens=30, temperature=0.0)
         gloss = _tidy_prompt(_strip_chat_preamble(reply or '')).strip().rstrip('.')
         gloss = re.split(r'[.\n]', gloss)[0].strip()          # first clause only
-        if len(gloss.split()) > 16 or len(gloss.split()) < 3:
+        if len(gloss.split()) > 24 or len(gloss.split()) < 3:
             print(f"  [prompt_gen] object gloss rejected for {key!r}: {reply!r}")
             gloss = ''
     except Exception as e:

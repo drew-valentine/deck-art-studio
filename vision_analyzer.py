@@ -1918,7 +1918,7 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
         # open LIST question is not. Measured on five object renders: both
         # wrong objects caught or one missed, no true ring ever flagged — so
         # this one is a real DEFECT (re-roll), not an advisory.
-        if not _names_object(image_path, subject_hint, vision_model):
+        if not _names_object(image_path, subject_hint, vision_model, alternates=_object_alternates(subject_hint)):
             defects.append('subject missing')
     if c.get('composition', True) is False:
         notes.append('confusing composition')
@@ -1940,7 +1940,23 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
     return defects
 
 
-def _names_object(image_path, subject_hint: str, vision_model: str) -> bool:
+def _object_alternates(subject_hint: str) -> list:
+    """Nouns the object may equally be called, from the writer's memoised
+    plain gloss of the term ("a talisman" -> "a small engraved medallion worn
+    for luck" -> medallion). Two talismans rendered as medallions were flagged
+    missing because only the literal noun counted. No synonym tables."""
+    import re as _re
+    try:
+        from prompt_generator import _OBJECT_GLOSS
+    except Exception:
+        return []
+    gloss = _OBJECT_GLOSS.get((subject_hint or '').strip().lower(), '')
+    stop = {'a', 'an', 'the', 'of', 'on', 'in', 'with', 'for', 'and', 'or', 'small', 'large', 'flat',
+            'round', 'worn', 'used', 'held', 'top', 'side', 'made', 'from', 'that', 'this', 'its'}
+    return [w for w in _re.findall(r'[a-z]+', gloss.lower()) if len(w) > 3 and w not in stop]
+
+
+def _names_object(image_path, subject_hint: str, vision_model: str, alternates=()) -> bool:
     """Ask the model to LIST the objects it sees (open recall, not yes/no)
     and check the literal noun of the expected subject ('ring' for 'a signet
     ring') is among them. A single-answer "main object" question was fooled
@@ -1962,8 +1978,12 @@ def _names_object(image_path, subject_hint: str, vision_model: str) -> bool:
         print(f"  [inspect] object naming failed: {e}")
         return True
     ans = (reply or '').lower()
-    stem = noun[:-1] if noun.endswith('s') else noun
-    return stem in ans
+    wanted = [noun] + [a for a in (alternates or []) if a]
+    for w in wanted:
+        stem = w[:-1] if w.endswith('s') else w
+        if len(stem) >= 3 and stem in ans:
+            return True
+    return False
 
 
 def pick_take(ref_paths, a_path, b_path, card_name: str, vision_model: str):

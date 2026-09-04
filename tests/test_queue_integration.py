@@ -577,3 +577,13 @@ def test_floating_head_is_a_body_defect(monkeypatch):
     adv = {}
     assert va.inspect_render('x.png', 'Gisela', 'creature', 'v', advisory=adv) == ['body not visible']
     assert adv == {}
+
+
+def test_object_check_accepts_gloss_synonyms(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    import prompt_generator as pg
+    pg._OBJECT_GLOSS['a talisman'] = 'a small engraved medallion worn for luck'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: 'medallion, cloth, pedestal'))
+    assert va._names_object('x.png', 'a talisman', 'v', alternates=va._object_alternates('a talisman'))
+    assert not va._names_object('x.png', 'a talisman', 'v', alternates=[])
