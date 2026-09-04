@@ -664,3 +664,17 @@ def test_evidence_medium_phrase_keeps_the_specific_surface():
     assert _evidence_medium_phrase(stored, 'painted illustration') == 'papyrus parchment'
     assert _evidence_medium_phrase("- Medium: Ink illustration", 'ink illustration') == ''
     assert _evidence_medium_phrase("", 'cel animation') == ''
+
+
+def test_camera_line_per_type():
+    from prompt_generator import _camera_line
+    assert 'face clearly visible' in _camera_line('creature')
+    assert 'whole object' in _camera_line('artifact')
+    assert 'establishing' in _camera_line('land')
+    assert _camera_line('enchantment') == ''
+
+
+def test_tidy_strips_inline_labels():
+    from prompt_generator import _tidy_prompt
+    t = "Keiga spreads its wings against waves. Scene: As she glides, her scales a bright blue-green."
+    assert _tidy_prompt(t) == "Keiga spreads its wings against waves. As she glides, her scales a bright blue-green."

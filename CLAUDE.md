@@ -90,7 +90,8 @@ decks/<deck-slug>/
   writer gets that plus the block minus hues (`prompt_generator.hint_without_palette`) — hues
   in the writer's hint become scene content. Writer rules: one subject in the foreground, two
   sentences of ~60 words (cap 64, whole sentences) following the scene grammar — subject at a moment, camera + scale + one named light, one atmospheric detail; rules-text zones (library/graveyard) are never scenery. Creatures also get a Body line
-  (`_body_line`: the FIRST subtype names what the body is — a Bat God is a bat); lands are built
+  (`_body_line`: the FIRST subtype names what the body is — a Bat God is a bat) and every type a
+  Framing line (`_camera_line`: face visible / whole object / establishing view); lands are built
   from the style's world (its plants, skies, architecture), never a generic version of the terrain;
   artifact guidance never lists relic presentations (a listed "strung on a cord" was parroted).
   Also recalled at distillation, each with an UNKNOWN escape: `style_source_kind`

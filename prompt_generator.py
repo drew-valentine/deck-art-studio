@@ -679,6 +679,7 @@ def _tidy_prompt(text: str) -> str:
         return text
     out = _META_LINE_RE.sub(' ', text)
     out = re.sub(r'[*#_]+', '', out)                 # markdown bold / headings
+    out = re.sub(r'(?:(?<=[.!?])\s*|^)(?:Scene|Title|Prompt|Description|Caption)\s*:\s*', ' ', out)  # inline labels
     out = _LETTERING_RE.sub('', out)                 # "a small silver 'A' on its face"
     out = re.sub(r'["\u201c\u201d]+', '', out)
     out = re.sub(r'\.{2,}', '.', out)
@@ -1130,6 +1131,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         + f"Direction: {guidance}\n"
         + figure_line
         + _body_line(card)
+        + _camera_line(card_type)
         + (f"World (REQUIRED): this {card_type} exists in the style's own world — {staging.strip()} "
            "Build the setting from that world's plants, skies, rock and buildings, and put one of "
            "its signature features in the first sentence. Never a generic version of the terrain.\n"
@@ -1398,6 +1400,21 @@ def _body_line(card: dict) -> str:
     kind = subtypes[0].lower()
     return (f"Body: this creature is a {kind} — give it a {kind}'s head, face, eyes and limbs "
             f"(not a human face with {kind} parts). Say so in the first sentence.\n")
+
+
+def _camera_line(card_type: str) -> str:
+    """H53: a deterministic framing requirement per Magic card type, in the
+    user message (where the writer obeys). Loose "camera and scale" wording
+    gave a goblin as a giant fist with no face and a dragon cropped to a
+    wing. Card types are Magic's own, not deck tables."""
+    if card_type in ('creature', 'planeswalker'):
+        return ("Framing (REQUIRED): full figure or head-to-hip, the whole face clearly visible, "
+                "the subject filling most of the frame — never a close-up of a hand, a weapon or a back.\n")
+    if card_type == 'artifact':
+        return "Framing (REQUIRED): the whole object, centred and large, nothing cropped.\n"
+    if card_type == 'land':
+        return "Framing (REQUIRED): a wide establishing view of the place with a clear focal landmark.\n"
+    return ''
 
 
 def _ensure_creature_type_in_prompt(text: str, card: dict) -> str:
