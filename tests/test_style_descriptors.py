@@ -748,3 +748,12 @@ def test_invented_names_are_stripped():
     # real names from the card survive; dictionary capitals survive
     t2 = "Keiga, the Tide Star, a Dragon Spirit, soars over the Pacific swell."
     assert _strip_invented_names(t2, {'name': 'Keiga, the Tide Star', 'type_line': 'Legendary Creature — Dragon Spirit'}) == t2
+
+
+def test_light_strip_never_erodes_the_subject_sentence():
+    from prompt_generator import _strip_light_words
+    t = ("Two delicate glass vials hang suspended in mid-air, their glass glowing softly amid the greenery. "
+         "Wicker beams frame the garden, sunlight glinting on the leaves. A faint trail of sawdust drifts behind the vials.")
+    out = _strip_light_words(t)
+    assert out.startswith("Two delicate glass vials hang suspended in mid-air") and 'sawdust' in out
+    assert 'glow' not in out and 'glint' not in out and 'sunlight' not in out and len(out.split()) >= 20

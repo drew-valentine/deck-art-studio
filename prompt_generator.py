@@ -636,7 +636,7 @@ def _fix_invented_cyclops(text: str, anchor: str) -> str:
 
 
 _LIGHT_WORD_RE = re.compile(
-    r'\b(?:glow(?:s|ing)?|beams?|sunbeams?|shafts? of|rays? of|shimmer(?:s|ing)?|illuminat\w*|'
+    r'\b(?:glow(?:s|ing)?|beams? of (?:light|sun)\w*|light ?beams?|sunbeams?|shafts? of|rays? of|shimmer(?:s|ing)?|illuminat\w*|'
     r'gleam(?:s|ing)?|sheen|(?:warm|soft|golden|pale|dim|harsh|hard|rim|back)[- ]lit|'
     r'(?:warm|soft|golden|pale|dim|harsh|hard|rim|back|side|low)[- ]light\w*|lit by|lighting|'
     r'shadows?|halo|luminous|radiant|radiating|bathed in|sun ?sets?|sunset|sunrise|dawn|dusk|'
@@ -656,15 +656,40 @@ def _strip_light_words(text: str) -> str:
         return text
     sentences = [x.strip() for x in re.split(r'(?<=[.!?])\s+', text.strip()) if x.strip()]
     kept = [x for x in sentences if not _LIGHT_WORD_RE.search(x)]
-    if kept:
+    total = sum(len(x.split()) for x in sentences)
+    kept_words = sum(len(x.split()) for x in kept)
+    # Dropping sentences is only safe when it keeps the SUBJECT sentence and
+    # most of the scene; otherwise ("74 -> 10 words", a prompt reduced to
+    # sawdust drifting behind some vials) cut the light phrases out of every
+    # sentence instead.
+    if kept and sentences and kept[0] == sentences[0] and kept_words >= 0.6 * total:
         return ' '.join(kept)
-    # every sentence carries light: cut the light phrases out of the first
-    # rather than keep it whole ("its ivory skin glistening in the desert sun")
-    first = _LIGHT_WORD_RE.sub('', sentences[0])
-    first = re.sub(r'\b(?:in|under|by|with|of|from|against)\s+(?:the |a |an )?(?=[,.;])', '', first)
-    first = re.sub(r'\s*,\s*,', ',', first)
-    first = re.sub(r'\s+([.!?,;])', r'\1', first)
-    return re.sub(r'\s{2,}', ' ', first).strip()
+    return ' '.join(_cut_light_phrases(x) for x in sentences if _cut_light_phrases(x))
+
+
+def _cut_light_phrases(sentence: str) -> str:
+    """Remove the light from one sentence: a comma clause that carries a light
+    word is dropped whole (", its gemstone polished to a warm sheen"), except
+    the first clause, which keeps the subject and loses only the words."""
+    end = sentence.strip()[-1] if sentence.strip() and sentence.strip()[-1] in '.!?' else '.'
+    clauses = re.split(r'(,\s*)', sentence.strip().rstrip('.!?'))
+    parts = []
+    tail = re.compile(r'^(?:its|his|her|their|with|as|while|where|casting|bathed|lit|glowing|'
+                      r'illuminated|shimmering|gleaming)\b', re.IGNORECASE)
+    for i, c in enumerate(clauses):
+        if i > 0 and _LIGHT_WORD_RE.search(c) and (tail.match(c.strip()) or _LIGHT_WORD_RE.match(c.strip())):
+            parts.append('')                    # a descriptive tail: drop it and its comma
+        else:
+            parts.append(c)
+    out = ''.join(parts)
+    out = re.sub(r'(,\s*)+(?=,|$)', '', out).strip()
+    out = _LIGHT_WORD_RE.sub('', out) + end
+    out = re.sub(r'\b(?:in|under|by|with|of|from|against|into)\s+(?:the |a |an |its |his |her )?(?=[,.;]|$)', '', out)
+    out = re.sub(r'\s*,\s*,', ',', out)
+    out = re.sub(r',\s*(?=[.!?])', '', out)
+    out = re.sub(r'\s+([.!?,;])', r'\1', out)
+    out = re.sub(r'\s{2,}', ' ', out).strip()
+    return out if len(out.split()) >= 2 else ''
 
 
 _LETTERING_RE = re.compile(

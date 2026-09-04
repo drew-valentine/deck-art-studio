@@ -750,7 +750,7 @@ def test_dangling_tail_and_invented_cyclops():
 def test_strip_light_words_drops_whole_sentences_only():
     from prompt_generator import _strip_light_words, _tidy_prompt
     out = _strip_light_words("A golden ring rests on a crimson cushion, its gemstone polished to a warm sheen. Bold stripes cross the cushion.")
-    assert out == "Bold stripes cross the cushion."
+    assert out == "A golden ring rests on a crimson cushion. Bold stripes cross the cushion."
     assert _strip_light_words("Keiga rises from the sea, spray flying.") == "Keiga rises from the sea, spray flying."
     # the only sentence carrying light words loses the light phrase, not the sentence
     assert _strip_light_words("A ring gleams.") == "A ring."
