@@ -205,7 +205,8 @@
     - [x] 3a34ff2 — object-check synonyms now come from a memoised model list (medallion, amulet, pendant) rather than the descriptive gloss; re-check in flight.
     - [x] H66 — lettering inside the art (shop signs, engraved words) is caught by a transcription probe over the central 70% of the render; measured on eight cards (two lettered caught, six clean quiet) and promoted to a re-rolling defect (INSPECT_CENTRE_TEXT=0 mutes). Commit 156a041.
     - [x] 156a041 — object check: when the noun list misses, a multiple-choice category question gives a second opinion, because the model's synonyms for a talisman never said "medallion"; re-check in flight (h67).
-    - [ ] h64 — stone artifact re-render with the widened vocabulary (re-queued: a chain-ordering slip restarted the server under the run)
+    - [x] h64 — stone artifact re-render with the widened vocabulary: renders as a grey stone on a stump in the cartoon deck's palette (was a red loop before the vocabulary widening).
+    - [x] h67 — object-check re-check: the category second opinion passes one talisman drawn as a medallion; the other (a framed ornament between two skulls) still fails, a defensible miss. Commit 2525b9d also strips "a stillness that belies…" abstractions.
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
