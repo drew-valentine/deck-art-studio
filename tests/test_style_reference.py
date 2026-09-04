@@ -402,3 +402,4 @@ def test_world_features_from_staging():
           "elements, featuring glowing plants and floating crystals. The tone is whimsical and surreal.")
     assert ds._world_features(st) == ['glowing plants', 'floating crystals']
     assert ds._world_features('') == []
+    assert ds._world_features('Scenes are staged with symbolic figures and towering pylons.') == ['towering pylons']

@@ -1909,7 +1909,15 @@ def _world_features(staging: str) -> list:
     for m in _re.finditer(r'(?:with|featuring|of|among|amid|under|full of)\s+([^.;:]+)', text, _re.IGNORECASE):
         for part in _re.split(r',|\band\b|\b(?:with|featuring|among|amid|under|full of)\b', m.group(1)):
             words = [w for w in _re.findall(r"[A-Za-z-]+", part.lower()) if w not in ('a', 'an', 'the', 'its', 'their')]
-            if 1 <= len(words) <= 3 and words[-1] not in _WORLD_GENERIC and len(words[-1]) > 3:
+            if not (1 <= len(words) <= 3) or words[-1] in _WORLD_GENERIC or len(words[-1]) <= 3:
+                continue
+            try:
+                from prompt_generator import _PERSON_WORD_RE
+                if _PERSON_WORD_RE.search(' '.join(words)):
+                    continue        # never put people into a land's lead
+            except Exception:
+                pass
+            if True:
                 phrase = ' '.join(words)
                 if phrase not in out:
                     out.append(phrase)
@@ -2025,9 +2033,10 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
         _idiom_types = ('creature', 'planeswalker', 'artifact', 'land', 'enchantment', 'instant', 'sorcery')
     if card_type in _idiom_types and os.environ.get('FIGURE_IDIOM', '1') != '0':
         subject = _with_figure_idiom(subject, (_meta.get('style_idiom') or []))
-    # --- H60 experiment hook: the style's WORLD features lead a land's scene
-    # in the render prompt itself (early tokens), not only in the writer's hint
-    if card_type in ('land', 'enchantment') and os.environ.get('WORLD_LEAD', '0') == '1':
+    # --- H60: the style's WORLD features lead a land's scene in the render
+    # prompt itself (early tokens), not only in the writer's hint. Seed A/B on a
+    # cartoon deck: crystal shards appeared in both seeds; WORLD_LEAD=0 mutes.
+    if card_type in ('land', 'enchantment') and os.environ.get('WORLD_LEAD', '1') != '0':
         feats = _world_features(_meta.get('style_staging') or '')
         if feats:
             subject = f"{', '.join(feats[:3])}. {subject}"
