@@ -1905,6 +1905,11 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
     if c.get('text') is True or c.get('signature') is True:
         if _edge_marks_present(image_path, vision_model):
             defects.append('text' if c.get('text') is True else 'signature')
+        elif c.get('text') is True and advisory is not None and os.environ.get('INSPECT_CENTRE_TEXT', '1') != '0':
+            # lettering INSIDE the art (shop signs, a word on a ring) never
+            # reaches the edge strips; probe the middle as an ADVISORY first
+            if _centre_text_present(image_path, vision_model):
+                advisory.setdefault('composition', []).append('text in art')
     # Composition (H43): a confusing picture, or an object/place card whose
     # named subject is not there, is recorded as ADVISORY by default so the
     # false-positive rate can be measured on real batches before it is allowed
@@ -2041,6 +2046,40 @@ def pick_take(ref_paths, a_path, b_path, card_name: str, vision_model: str):
     except Exception as e:
         print(f"  [inspect] take comparison failed: {e}")
         return None
+
+
+def _centre_text_present(image_path, vision_model: str) -> bool:
+    """Open question over the central 70% of the image: transcribe any
+    readable letters or words. A transcription with two or more letters
+    counts; 'none' does not. Open recall, not yes/no confirmation."""
+    try:
+        from PIL import Image
+        import tempfile, os as _os, re as _re
+        import mlx_llm
+        im = Image.open(image_path).convert('RGB')
+        w, h = im.size
+        crop = im.crop((int(w * 0.15), int(h * 0.15), int(w * 0.85), int(h * 0.85)))
+        fd, path = tempfile.mkstemp(suffix='.png', prefix='inspect_centre_')
+        _os.close(fd)
+        try:
+            crop.save(path)
+            reply = mlx_llm.vision(
+                path,
+                "Transcribe any readable letters, words or numerals painted inside this picture "
+                "(signs, labels, engraved words). If there are none, answer exactly: none",
+                model=vision_model, max_tokens=30, temperature=0.0)
+        finally:
+            try:
+                _os.unlink(path)
+            except OSError:
+                pass
+        ans = (reply or '').strip().lower()
+        if not ans or ans.startswith('none') or 'no readable' in ans or 'no text' in ans:
+            return False
+        return bool(_re.search(r'[a-z0-9]{2,}', ans))
+    except Exception as e:
+        print(f"  [inspect] centre text read failed: {e}")
+        return False
 
 
 def _edge_marks_present(image_path, vision_model: str) -> bool:

@@ -601,3 +601,16 @@ def test_object_synonyms_feed_the_check(monkeypatch):
     assert pg._object_synonyms('a talisman', 'm')[:3] == ['medallion', 'amulet', 'pendant']
     assert 'medallion' in va._object_alternates('a talisman')
     assert va._names_object('x.png', 'a talisman', 'v', alternates=va._object_alternates('a talisman'))
+
+
+def test_centre_text_is_an_advisory_when_edges_are_clean(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    reply = 'heads=0; arms=0; hands=0; copies=1; text=yes; signature=no; subject=yes; hands_ok=yes; composition=yes; face=no; body=no'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: reply))
+    monkeypatch.setattr(va, '_edge_marks_present', lambda p, vm: False)
+    monkeypatch.setattr(va, '_centre_text_present', lambda p, vm: True)
+    monkeypatch.delenv('INSPECT_COMPOSITION', raising=False)
+    adv = {}
+    assert va.inspect_render('x.png', 'Black Market Connections', 'enchantment', 'v', advisory=adv) == []
+    assert adv['composition'] == ['text in art']
