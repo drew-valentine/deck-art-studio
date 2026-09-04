@@ -594,6 +594,25 @@ def hint_without_palette(block: str) -> str:
     return ', '.join(x for x in out if x)
 
 
+_UNPAINTABLE_RE = re.compile(
+    r'(?:,\s*)?\b(?:a (?:grim |silent |quiet |living |stark |bitter )?(?:testament|reminder|symbol|beacon|echo|metaphor) (?:to|of|for)[^,.;]*'
+    r'|as if [^,.;]*|seem(?:s|ing)? to [^,.;]*|symboli[sz]ing [^,.;]*'
+    r'|(?:hinting|speaking|whispering) (?:at|of) [^,.;]*)', re.IGNORECASE)
+
+
+def _strip_unpaintable(text: str) -> str:
+    """Drop trailing abstractions the image model cannot draw ("..., a grim
+    reminder of the flip to be ignored", "..., as if the very thought...").
+    They spend tokens and occasionally summon literal props for metaphors."""
+    if not text:
+        return text
+    out = _UNPAINTABLE_RE.sub('', text)
+    out = re.sub(r'\s*,\s*([.!?])', r'\1', out)      # "settles, ." -> "settles."
+    out = re.sub(r'\s+([.!?,;])', r'\1', out)
+    out = re.sub(r'\s{2,}', ' ', out).strip()
+    return out
+
+
 def _limit_scene_sentences(text: str, max_sentences: int = 3, max_words: int = 64) -> str:
     """Composition backstop: keep the first ``max_sentences`` sentences. The
     scene writer is asked for two; a third almost always introduces a second
@@ -807,7 +826,10 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         "strong LIGHT with a named quality (rim-lit from behind, a single shaft through "
         "dust, hard side light, glow from below); (3) ONE atmospheric detail that "
         "carries the setting (spray, embers, drifting dust, rain on the lens) and "
-        "nothing else. Be inventive and VARY it each time: a fresh setting, camera "
+        "nothing else. PAINTABLE ONLY: every clause must be something a painter can "
+        "put on the canvas — no 'a testament to', 'a reminder of', 'symbolizing', "
+        "'as if', 'seems to', no feelings, no meanings; if it cannot be drawn, cut it. "
+        "Be inventive and VARY it each time: a fresh setting, camera "
         "angle, distance, time of day, weather, and composition so re-rolls feel "
         "distinct — but always the same single focal subject. "
         "PRESERVE the subject's defining anatomy stated in the reference: if it says "
@@ -1005,6 +1027,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             print(f"  [prompt_gen] opening rule retry for {name}: {'kept' if out is retry else 'draft kept'}")
         out = _strip_franchise_sentences(out, franchise_name)   # output backstop
         out = _strip_example_leak(out, card)
+        out = _strip_unpaintable(out)
         out = _limit_scene_sentences(out, 3)
         # H21: writer variance is the dominant failure now (a chair inside a
         # ring, a bird for a faerie). A cheap checklist pass judges the draft

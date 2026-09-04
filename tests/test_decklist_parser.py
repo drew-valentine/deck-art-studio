@@ -724,3 +724,11 @@ def test_writer_describes_light_in_the_medium(monkeypatch):
     assert 'hatched or solid-black shadows' in seen['user']
     pg.generate_subject_with_ai(card, None, backend='local', local_model='m', style_hint='')
     assert 'Light in this medium' not in seen['user']
+
+
+def test_strip_unpaintable_removes_abstractions():
+    from prompt_generator import _strip_unpaintable
+    assert _strip_unpaintable("A ring glows, as if the very thought of hunger has become a cruel joke. Dust settles, a testament to its power.") == \
+        "A ring glows. Dust settles."
+    assert _strip_unpaintable("Keiga rises from the sea, seeming to shrug off the storm, spray flying.") == "Keiga rises from the sea, spray flying."
+    assert _strip_unpaintable("") == ""
