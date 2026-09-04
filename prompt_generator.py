@@ -600,6 +600,38 @@ _UNPAINTABLE_RE = re.compile(
     r'|(?:hinting|speaking|whispering) (?:at|of) [^,.;]*)', re.IGNORECASE)
 
 
+_DANGLING_RE = re.compile(r'\s*\b(that|which|and|as|while|with|of|the|a|an|but|or|to|whose|where|for|in|on|at|by)\s*([.!?])\s*$', re.IGNORECASE)
+
+
+def _fix_dangling_tail(text: str) -> str:
+    """A draft cut off mid-clause ends "...a warm, golden light that." Drop the
+    dangling function word(s) so the sentence closes on its last content word."""
+    if not text:
+        return text
+    out = text
+    for _ in range(3):
+        m = _DANGLING_RE.search(out)
+        if not m:
+            break
+        out = out[:m.start()].rstrip(' ,;') + m.group(2)
+    return out
+
+
+_SINGLE_EYE_RE = re.compile(r'\b(?:a |her |his |its )?(?:single|one|lone|solitary|sole)(?:,? [a-z-]+){0,3}? eye\b(?!s)', re.IGNORECASE)
+
+
+def _fix_invented_cyclops(text: str, anchor: str) -> str:
+    """The anatomy-preservation rule ("a cyclops has ONE eye") gets over-applied:
+    a faerie gained "a single, piercing emerald eye". Unless the reference
+    anchor itself speaks of one eye, restore the plural."""
+    if not text:
+        return text
+    a = (anchor or '').lower()
+    if any(w in a for w in ('one eye', 'single eye', 'cyclops', 'one-eyed', 'lone eye')):
+        return text
+    return _SINGLE_EYE_RE.sub(lambda m: re.sub(r'\b(single|one|lone|solitary|sole),?\s*', '', m.group(0), flags=re.IGNORECASE) + 's', text)
+
+
 def _strip_unpaintable(text: str) -> str:
     """Drop trailing abstractions the image model cannot draw ("..., a grim
     reminder of the flip to be ignored", "..., as if the very thought...").
@@ -999,7 +1031,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                 {'role': 'user', 'content': user_msg},
             ],
             model=local_model,
-            max_tokens=140,
+            max_tokens=220,
             temperature=0.8,  # varied between re-rolls; 0.95 made the 3B model
                               # degenerate into word-salad tails ("waveform GS cave
                               # events super intend impact"), so keep it lower.
@@ -1028,7 +1060,9 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         out = _strip_franchise_sentences(out, franchise_name)   # output backstop
         out = _strip_example_leak(out, card)
         out = _strip_unpaintable(out)
+        out = _fix_invented_cyclops(out, base_desc)
         out = _limit_scene_sentences(out, 3)
+        out = _fix_dangling_tail(out)
         # H21: writer variance is the dominant failure now (a chair inside a
         # ring, a bird for a faerie). A cheap checklist pass judges the draft
         # against the card; one lower-temperature re-roll if it fails.

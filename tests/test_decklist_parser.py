@@ -732,3 +732,13 @@ def test_strip_unpaintable_removes_abstractions():
         "A ring glows. Dust settles."
     assert _strip_unpaintable("Keiga rises from the sea, seeming to shrug off the storm, spray flying.") == "Keiga rises from the sea, spray flying."
     assert _strip_unpaintable("") == ""
+
+
+def test_dangling_tail_and_invented_cyclops():
+    from prompt_generator import _fix_dangling_tail, _fix_invented_cyclops
+    assert _fix_dangling_tail("A ring lies on a cushion, its gemstone radiating a warm light that.") == "A ring lies on a cushion, its gemstone radiating a warm light."
+    assert _fix_dangling_tail("Keiga rises. Spray flies and.") == "Keiga rises. Spray flies."
+    assert _fix_dangling_tail("Keiga rises from the sea.") == "Keiga rises from the sea."
+    assert _fix_invented_cyclops("Alela sits, her single, piercing emerald eye shimmering.", "a faerie warlock") == \
+        "Alela sits, her piercing emerald eyes shimmering."
+    assert _fix_invented_cyclops("Okaun glares with his single eye.", "Okaun, a cyclops with one eye") == "Okaun glares with his single eye."
