@@ -101,6 +101,9 @@ decks/<deck-slug>/
   (franchise / artist / movement — the franchise gate for de-naming; the `_FRANCHISE_PHRASES`
   table is only the offline fallback), `style_lineage` (a de-named production lineage for the
   render lead), `style_idiom` (list; the writer puts it on creatures as a figure idiom).
+  The franchise render lead ends "original character designs" only for creatures/planeswalkers;
+  on other types it ends "no people, no characters", and the artifact/land guard adds "No people,
+  no characters, no hands" (a saga drew a lookalike boy in a garage, a relic drew two onlookers).
   Render-side (deck_studio): `_style_block_window(card_type)` — creatures/planeswalkers show the
   references to double blocks 0-14 (figure design), other types 0-9; `_assemble_flux_prompt` order =
   lead + colour-coverage clause, subject sentence, full block, rest of scene; `/api/generate` takes
@@ -144,7 +147,8 @@ decks/<deck-slug>/
   capitalised non-dictionary word not in the card's name, type or flavor drops its clause) / cyclops /
   light strip / dangling / tidy run once more, because every
   rewrite path can reintroduce what an earlier strip removed; `_tidy_prompt` also drops markdown
-  markers, writer notes, sentence-initial labels ("Color contrast:"), parroted instruction phrases
+  markers, quoted slogans (they render as lettering), camera directions, writer notes, sentence-initial
+  labels ("Color contrast:"), parroted instruction phrases
   (`_INSTRUCTION_ECHO_RE`: "centered and large, with nothing cropped") and lettering clauses — a quoted
   'A' on a ring becomes letters in the art)
   → empty guard. Writer instructions never carry concrete example

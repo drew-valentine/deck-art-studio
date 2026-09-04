@@ -403,3 +403,13 @@ def test_world_features_from_staging():
     assert ds._world_features(st) == ['glowing plants', 'floating crystals']
     assert ds._world_features('') == []
     assert ds._world_features('Scenes are staged with symbolic figures and towering pylons.') == ['towering pylons']
+
+
+def test_franchise_lead_and_guard_are_card_type_aware():
+    from prompt_generator import render_style_lead
+    import deck_studio as ds
+    assert render_style_lead('Rick & Morty', '', 'franchise', 'creature').endswith('original character designs')
+    assert render_style_lead('Rick & Morty', '', 'franchise', 'artifact').endswith('no people, no characters')
+    assert render_style_lead('Rick & Morty', '', 'franchise', 'enchantment').endswith('original unnamed figures only')
+    assert render_style_lead('Moebius', '', 'artist', 'artifact') == 'in the style of Moebius'
+    assert 'card_type' in ds._assemble_flux_prompt.__code__.co_varnames

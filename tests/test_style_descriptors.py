@@ -782,3 +782,13 @@ def test_body_line_carries_a_memoised_gloss(monkeypatch):
     assert 'is a faerie — a small slender winged humanoid with pointed ears' in line
     pg._body_line(card, 'm')
     assert len(calls) == 1
+
+
+def test_tidy_strips_quoted_slogans_and_camera_directions():
+    from prompt_generator import _tidy_prompt
+    t = "Gears rotate before the stage, as 'Wubba lubba dub dub, the machinery will never be still'."
+    assert _tidy_prompt(t) == "Gears rotate before the stage."
+    t = "Invasion of Zendikar,, stands proudly amid foliage. The camera cuts to a low angle, with the dryad's figure, as the hues contrast."
+    out = _tidy_prompt(t)
+    assert ',,' not in out and 'camera' not in out and out.startswith('Invasion of Zendikar, stands proudly')
+    assert _tidy_prompt("A ring sits on a cloth.") == "A ring sits on a cloth."

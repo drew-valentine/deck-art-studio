@@ -1924,7 +1924,7 @@ def _world_features(staging: str) -> list:
     return out
 
 
-def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '') -> str:
+def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '', card_type: str = '') -> str:
     """Order: style lead, the scene's FIRST sentence (the subject), the rest of
     the style block, the rest of the scene, feedback. FLUX weights early
     tokens most: style-first alone gave the block ~70 words of head start
@@ -1980,6 +1980,10 @@ def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '') -> 
     out = '. '.join(p for p in pieces if p) + '.'
     extra = os.environ.get('FLUX_GUARD_EXTRA', '').strip()      # experiment hook
     tail = ' No text, no words, no signature, no watermark, no card frame, no borders.'
+    if card_type in ('artifact', 'land'):
+        # H69: an object or a place has no cast; the image model adds onlookers
+        # to a relic on a pedestal unless told not to
+        tail += ' No people, no characters, no hands.'
     return out + (f' {extra}.' if extra else '') + tail
 
 
@@ -2068,7 +2072,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
         # rendered as card art); render_style_lead swaps them for a de-named
         # genre phrase + original-characters guard. Artist names pass through.
         from prompt_generator import render_style_lead
-        lead = render_style_lead(style_source, lineage=(_meta.get('style_lineage') or ''),
+        lead = render_style_lead(style_source, lineage=(_meta.get('style_lineage') or ''), card_type=card_type,
                                  kind=(_meta.get('style_source_kind') or ''))
         # experiment hook only (H24 A/B): replace the lead's phrase wholesale
         if os.environ.get('FLUX_LEAD_OVERRIDE'):
@@ -2099,7 +2103,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     # burying it after a long scene) stops a rich scene from drowning it. Validated
     # empirically — the same style words buried at the tail gave ZERO style transfer;
     # front-loaded they come through. (Kept well under the 256-token T5 budget.)
-    flux_prompt = _assemble_flux_prompt(style_bits, subject, feedback_text)
+    flux_prompt = _assemble_flux_prompt(style_bits, subject, feedback_text, card_type=card_type)
 
     # --- Progress callback — updates status per inference step ---
     def on_step(step, total):

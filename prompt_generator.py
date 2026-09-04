@@ -746,6 +746,13 @@ def _tidy_prompt(text: str) -> str:
         return text
     out = _META_LINE_RE.sub(' ', text)
     out = re.sub(r'[*#_]+', '', out)                 # markdown bold / headings
+    # quoted speech or slogans render as lettering ("as 'Wubba lubba dub dub, ...'")
+    out = re.sub(r"(?:,\s*)?(?:\b(?:as|saying|reading|with the words?|inscribed|captioned)\s+)?"
+                 r"(?:[\"\u201c\u2018][^\"\u201d\u2019]{6,}?[\"\u201d\u2019]|(?<!\w)'[^']{6,}?'(?!\w))", '', out)
+    # camera directions are the writer talking to itself, not a scene
+    out = re.sub(r'(?:,\s*)?\b(?:the )?camera (?:cuts|zooms|pans|pulls|tilts|dollies|sweeps)[^.!?;]*', '', out, flags=re.IGNORECASE)
+    out = re.sub(r',\s*,+', ',', out)               # doubled commas
+    out = re.sub(r'\s*\.(?:\s*\.)+', '.', out)      # ".." left by a removed sentence
     out = re.sub(r'(?:(?<=[.!?])\s*|^)(?:The |A |Bold |Cinematic |Strong )?(?:Scene|Title|Prompt|Description|Caption|Moment|Colou?r contrast|'
                  r'Contrast|Camera|Framing|Light(?:ing)?|Mood|Atmosphere|World|Body|Setting|Subject|Detail|Note|'
                  r'Composition|Palette|Style)\s*:\s+(?=[A-Za-z])', ' ', out, flags=re.IGNORECASE)  # my own labels
@@ -1457,7 +1464,7 @@ def franchise_style_phrase(style_source: str, kind: str = ''):
     return table
 
 
-def render_style_lead(style_source: str, lineage: str = '', kind: str = '') -> str:
+def render_style_lead(style_source: str, lineage: str = '', kind: str = '', card_type: str = '') -> str:
     """The style lead for the image-model prompt. Franchise names are replaced
     with a de-named phrase plus an original-characters guard — the name
     itself is the strongest character summons there is. The recalled
@@ -1469,7 +1476,16 @@ def render_style_lead(style_source: str, lineage: str = '', kind: str = '') -> s
         return ''
     phrase = franchise_style_phrase(style_source, kind)
     if phrase:
-        return f"in the style of {(lineage or '').strip() or phrase}, original character designs"
+        # "original character designs" is right for a creature; on an artifact,
+        # land or saga it INVITES a cast (a lookalike boy appeared in a garage
+        # for a saga, an elf and a dwarf around a goblin's thumb)
+        if card_type in ('', 'creature', 'planeswalker'):
+            guard = 'original character designs'
+        elif card_type in ('artifact', 'land'):
+            guard = 'no people, no characters'
+        else:                                   # enchantment / instant / sorcery: people are scene content
+            guard = 'original unnamed figures only'
+        return f"in the style of {(lineage or '').strip() or phrase}, {guard}"
     return f"in the style of {style_source}"
 
 
