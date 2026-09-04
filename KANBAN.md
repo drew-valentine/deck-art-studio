@@ -203,7 +203,9 @@
     - [x] m17 — Egyptian demo deck, all six cards, two takes + inspection: 6 of 6 in the papyrus register with zero final defects (the sun-ring artifact remains the smoothest object but sits framed by hieroglyph columns). Sheet m17-demo-alela.jpg.
     - [x] d637de3 — literal-object vocabulary widened to common artifact nouns (stone, cloak, boots, tome, …); a stone artifact with no entry had rendered as a red loop.
     - [x] 3a34ff2 — object-check synonyms now come from a memoised model list (medallion, amulet, pendant) rather than the descriptive gloss; re-check in flight.
-    - [ ] h64 — stone artifact re-render with the widened vocabulary (in flight)
+    - [x] H66 — lettering inside the art (shop signs, engraved words) is caught by a transcription probe over the central 70% of the render; measured on eight cards (two lettered caught, six clean quiet) and promoted to a re-rolling defect (INSPECT_CENTRE_TEXT=0 mutes). Commit 156a041.
+    - [x] 156a041 — object check: when the noun list misses, a multiple-choice category question gives a second opinion, because the model's synonyms for a talisman never said "medallion"; re-check in flight (h67).
+    - [ ] h64 — stone artifact re-render with the widened vocabulary (re-queued: a chain-ordering slip restarted the server under the run)
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
