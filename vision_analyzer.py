@@ -1905,11 +1905,13 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
     if c.get('text') is True or c.get('signature') is True:
         if _edge_marks_present(image_path, vision_model):
             defects.append('text' if c.get('text') is True else 'signature')
-        elif c.get('text') is True and advisory is not None and os.environ.get('INSPECT_CENTRE_TEXT', '1') != '0':
+        elif c.get('text') is True and os.environ.get('INSPECT_CENTRE_TEXT', '1') != '0':
             # lettering INSIDE the art (shop signs, a word on a ring) never
-            # reaches the edge strips; probe the middle as an ADVISORY first
+            # reaches the edge strips; a transcription probe over the middle
+            # measured 8/8 (two lettered cards caught, six clean cards quiet),
+            # so it is a real DEFECT — a re-roll, since the zoom cannot hide it
             if _centre_text_present(image_path, vision_model):
-                advisory.setdefault('composition', []).append('text in art')
+                defects.append('text in art')
     # Composition (H43): a confusing picture, or an object/place card whose
     # named subject is not there, is recorded as ADVISORY by default so the
     # false-positive rate can be measured on real batches before it is allowed
@@ -1923,7 +1925,8 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
         # open LIST question is not. Measured on five object renders: both
         # wrong objects caught or one missed, no true ring ever flagged — so
         # this one is a real DEFECT (re-roll), not an advisory.
-        if not _names_object(image_path, subject_hint, vision_model, alternates=_object_alternates(subject_hint)):
+        if not _names_object(image_path, subject_hint, vision_model, alternates=_object_alternates(subject_hint)) \
+                and not _object_category_matches(image_path, subject_hint, vision_model):
             defects.append('subject missing')
     if c.get('composition', True) is False:
         notes.append('confusing composition')
@@ -1961,6 +1964,27 @@ def _object_alternates(subject_hint: str) -> list:
     stop = {'a', 'an', 'the', 'of', 'on', 'in', 'with', 'for', 'and', 'or', 'small', 'large', 'flat',
             'round', 'worn', 'used', 'held', 'top', 'side', 'made', 'from', 'that', 'this', 'its'}
     return syns + [w for w in _re.findall(r'[a-z]+', gloss.lower()) if len(w) > 3 and w not in stop]
+
+
+def _object_category_matches(image_path, subject_hint: str, vision_model: str) -> bool:
+    """Second opinion when the object list misses: a multiple-choice question
+    (the literal object vs. person / animal / building / landscape / some other
+    object). Less yes-biased than yes/no and not dependent on the model's
+    synonym vocabulary — a talisman drawn as a medallion picks (a); a goblet
+    labelled a signet ring picks 'some other object'. True on a read failure."""
+    try:
+        import mlx_llm
+        reply = mlx_llm.vision(
+            str(image_path),
+            f"Which ONE best describes the main thing in this picture? (a) {subject_hint} "
+            "(b) a person or creature (c) a building or structure (d) a landscape or place "
+            "(e) some other object. Answer with the letter only.",
+            model=vision_model, max_tokens=5, temperature=0.0)
+    except Exception as e:
+        print(f"  [inspect] object category read failed: {e}")
+        return True
+    ans = (reply or '').strip().lower()
+    return ans.startswith('a') or ans.startswith('(a')
 
 
 def _names_object(image_path, subject_hint: str, vision_model: str, alternates=()) -> bool:

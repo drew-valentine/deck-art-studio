@@ -536,6 +536,7 @@ def test_open_naming_question_catches_a_wrong_object(monkeypatch):
     answers = iter([
         'heads=0; arms=0; hands=0; copies=1; text=no; signature=no; subject=yes; hands_ok=yes; composition=yes; face=no',
         'a golden goblet',
+        '(e)',                                    # category: some other object -> miss
         'heads=0; arms=0; hands=0; copies=1; text=no; signature=no; subject=yes; hands_ok=yes; composition=yes; face=no',
         'a silver signet ring on a stone',
     ])
@@ -603,7 +604,7 @@ def test_object_synonyms_feed_the_check(monkeypatch):
     assert va._names_object('x.png', 'a talisman', 'v', alternates=va._object_alternates('a talisman'))
 
 
-def test_centre_text_is_an_advisory_when_edges_are_clean(monkeypatch):
+def test_centre_text_is_a_defect_when_edges_are_clean(monkeypatch):
     import sys, types
     import vision_analyzer as va
     reply = 'heads=0; arms=0; hands=0; copies=1; text=yes; signature=no; subject=yes; hands_ok=yes; composition=yes; face=no; body=no'
@@ -612,5 +613,17 @@ def test_centre_text_is_an_advisory_when_edges_are_clean(monkeypatch):
     monkeypatch.setattr(va, '_centre_text_present', lambda p, vm: True)
     monkeypatch.delenv('INSPECT_COMPOSITION', raising=False)
     adv = {}
-    assert va.inspect_render('x.png', 'Black Market Connections', 'enchantment', 'v', advisory=adv) == []
-    assert adv['composition'] == ['text in art']
+    assert va.inspect_render('x.png', 'Black Market Connections', 'enchantment', 'v', advisory=adv) == ['text in art']
+    assert adv == {}
+
+
+def test_category_question_rescues_a_synonym_miss(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    answers = iter([
+        'heads=0; arms=0; hands=0; copies=1; text=no; signature=no; subject=yes; hands_ok=yes; composition=yes; face=no',
+        'medallion, cloth, pedestal',             # list misses 'talisman'
+        'a',                                      # category: (a) a talisman -> pass
+    ])
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: next(answers)))
+    assert va.inspect_render('x.png', 'Talisman of Hierarchy', 'artifact', 'v', subject_hint='a talisman') == []

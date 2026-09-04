@@ -124,7 +124,10 @@ decks/<deck-slug>/
   re-rolls, `INSPECT_BODY=0` mutes) and, for object cards, subject presence via an OPEN naming question (`_names_object`: "what is
   the objects you see" must contain the literal noun, since yes/no is answered yes for a goblet
   labelled a signet ring; measured 4/5 with no false positives, so for ARTIFACTS a miss is a real
-  defect that re-rolls, `INSPECT_SUBJECT=0` to mute) — the rest recorded as
+  defect that re-rolls, `INSPECT_SUBJECT=0` to mute; a list miss gets a multiple-choice category
+  second opinion so a talisman drawn as a medallion is not a miss) and lettering INSIDE the art
+  (`_centre_text_present`: a transcription probe over the central 70%, 8/8 measured, a defect that
+  re-rolls, `INSPECT_CENTRE_TEXT=0` mutes) — the rest recorded as
   `inspection.advisory` by default (`INSPECT_COMPOSITION=advisory|enforce|off`) until the
   false-positive rate is known.
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
