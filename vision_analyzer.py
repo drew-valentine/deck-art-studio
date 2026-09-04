@@ -1577,6 +1577,11 @@ _IDIOM_FEWSHOT = [
         "vast empty desert spaces"},
 ]
 _IDIOM_PALETTE_WORDS = ('palette', 'color', 'colour', 'tones', 'hues')
+# writing is never a drawing idiom to reproduce: a block carrying "hieroglyphic
+# symbols" or "calligraphic lettering" fills cards with glyph columns and
+# gibberish text (a defect by the inspector's own checklist)
+_IDIOM_WRITING_WORDS = ('glyph', 'hieroglyph', 'symbol', 'letter', 'text', 'calligraph',
+                        'inscription', 'writing', 'script', 'typograph', 'caption', 'label')
 _IDIOM_MAX_WORDS = 40
 
 
@@ -1623,6 +1628,8 @@ def _idiom_phrases(text: str, style_source: str, max_words: int) -> list:
         if any(t[:1].isupper() for t in toks) or any(t in src_words for t in low):
             continue
         if any(t.startswith(w) for t in low for w in _IDIOM_PALETTE_WORDS):
+            continue
+        if any(w in t for t in low for w in _IDIOM_WRITING_WORDS):
             continue
         key = ' '.join(low)
         if key in seen or count + len(toks) > max_words:

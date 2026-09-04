@@ -580,3 +580,9 @@ def test_pixel_palette_measures_paper_and_hues(tmp_path):
     assert va.pixel_coverage_from_refs(p, [p, p2]) in ('coloured figures and objects on open white paper',
                                                        'fully coloured with soft muted fills, no bare white paper',
                                                        'fully coloured with saturated flat colour fills, no bare white paper')
+
+
+def test_idiom_phrases_drop_writing_words():
+    import vision_analyzer as va
+    out = va._idiom_phrases('bold black outline, hieroglyphic symbols, striped patterns, calligraphic lettering, symmetrical composition', 'Ancient Egyptian Hieroglyphs', 40)
+    assert out == ['bold black outline', 'striped patterns', 'symmetrical composition']
