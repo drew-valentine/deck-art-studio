@@ -192,9 +192,11 @@
     - [x] m11 — fine-line ink deck, 24-card slice, two takes + inspection: about 21 of 24 on-style with sensible composition, eight or more WOW-level. Three final "text" verdicts (signatures, handled by the art zoom); one floating-head miss led to a new body-visible advisory (measurement queued).
     - [x] m12 — cartoon deck, 17-card slice, two takes + inspection: zero final defects; about 15 of 17 read as the reference's world (acid yellows and magentas, crystal caves, green portals, wobbly-eyed figures), about seven WOW-level; the one miss is an instant that rendered as a generic forest ape. Sheet m12-temur-roar.jpg.
     - [x] H61 — moment rewrite: a creature whose first sentence is a static posture gets one rewrite asking for a decisive action; on the cartoon deck's 18-card slice it correctly stayed idle because every creature opening already moved (MOMENT_REWRITE=0 mutes). Same commit: prompt erosion on flat media fixed (one more light-word naming pass before any sentence strip; single-sentence prompts lose the light phrase, not the sentence — the 18-card slice has no prompt under 28 words), a body-visible advisory for floating-head renders, invented proper names stripped by a dictionary check, one more parroted phrase stripped. Commit 006bde6.
-    - [ ] H62 — body-visible advisory measurement on the fine-line deck (in flight)
+    - [x] H62 — body-visible check measured six of six on the fine-line deck (the floating winged head fired, five whole figures passed), so for creatures a miss is now a real defect that re-rolls (INSPECT_BODY=0 mutes); same commit gives instants and sorceries the writer's World line and the world lead in the render prompt. Commit eccd540.
     - [ ] m13 — picture-book deck 18-card slice (queued)
     - [ ] m14 — comic-ink deck 18-card slice (queued)
+    - [ ] m15 — fine-line deck cards 25-48 slice (queued)
+    - [ ] m16 — cartoon deck cards 19-36 slice (queued)
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
