@@ -757,3 +757,9 @@ def test_light_strip_never_erodes_the_subject_sentence():
     out = _strip_light_words(t)
     assert out.startswith("Two delicate glass vials hang suspended in mid-air") and 'sawdust' in out
     assert 'glow' not in out and 'glint' not in out and 'sunlight' not in out and len(out.split()) >= 20
+
+
+def test_bold_framing_label_is_stripped():
+    from prompt_generator import _tidy_prompt
+    t = "Eshki bursts from the water. Bold framing: Eshki, its bare chest a sharp contrast against the mist."
+    assert _tidy_prompt(t) == "Eshki bursts from the water. Eshki, its bare chest a sharp contrast against the mist."

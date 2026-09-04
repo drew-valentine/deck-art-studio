@@ -724,7 +724,7 @@ def _tidy_prompt(text: str) -> str:
         return text
     out = _META_LINE_RE.sub(' ', text)
     out = re.sub(r'[*#_]+', '', out)                 # markdown bold / headings
-    out = re.sub(r'(?:(?<=[.!?])\s*|^)(?:The |A )?(?:Scene|Title|Prompt|Description|Caption|Moment|Colou?r contrast|'
+    out = re.sub(r'(?:(?<=[.!?])\s*|^)(?:The |A |Bold |Cinematic |Strong )?(?:Scene|Title|Prompt|Description|Caption|Moment|Colou?r contrast|'
                  r'Contrast|Camera|Framing|Light(?:ing)?|Mood|Atmosphere|World|Body|Setting|Subject|Detail|Note|'
                  r'Composition|Palette|Style)\s*:\s+(?=[A-Za-z])', ' ', out, flags=re.IGNORECASE)  # my own labels
     out = _INSTRUCTION_ECHO_RE.sub('', out)          # parroted framing instructions
