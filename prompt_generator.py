@@ -618,6 +618,7 @@ def _fix_dangling_tail(text: str) -> str:
 
 
 _SINGLE_EYE_RE = re.compile(r'\b(?:a |her |his |its )?(?:single|one|lone|solitary|sole)(?:,? [a-z-]+){0,3}? eye\b(?!s)', re.IGNORECASE)
+_SINGLE_STARE_RE = re.compile(r'\b(?:single|one|lone|solitary|sole),?\s+(?=(?:[a-z-]+,?\s+){0,3}(?:stare|gaze|orb)\b)', re.IGNORECASE)
 
 
 def _fix_invented_cyclops(text: str, anchor: str) -> str:
@@ -629,7 +630,8 @@ def _fix_invented_cyclops(text: str, anchor: str) -> str:
     a = (anchor or '').lower()
     if any(w in a for w in ('one eye', 'single eye', 'cyclops', 'one-eyed', 'lone eye')):
         return text
-    return _SINGLE_EYE_RE.sub(lambda m: re.sub(r'\b(single|one|lone|solitary|sole),?\s*', '', m.group(0), flags=re.IGNORECASE) + 's', text)
+    out = _SINGLE_EYE_RE.sub(lambda m: re.sub(r'\b(single|one|lone|solitary|sole),?\s*', '', m.group(0), flags=re.IGNORECASE) + 's', text)
+    return _SINGLE_STARE_RE.sub('', out)
 
 
 _LIGHT_WORD_RE = re.compile(
@@ -639,7 +641,9 @@ _LIGHT_WORD_RE = re.compile(
     r'shadows?|halo|luminous|radiant|radiating|bathed in|sun ?sets?|sunset|sunrise|dawn|dusk|'
     r'burnished|glint(?:s|ing)?|cast(?:s|ing)? (?:a |an |the |long |deep |soft )?(?:glow|light|shadow|tone|beam)\w*|'
     r'silhouetted against|backlit|candlelit|moonlit|sunlit|lamplight|candlelight|firelight|torchlight|'
-    r'sunlight|sunshine|sparkl\w*|shin(?:e|es|ing|y)|glossy|brightly lit|(?:afternoon|morning|evening|midday) sun)\b', re.IGNORECASE)
+    r'sunlight|sunshine|sparkl\w*|shin(?:e|es|ing|y)|glossy|polished|lustrous|metallic sheen|highlights?|'
+    r'glisten\w*|(?:fading|failing|dying|first|last|morning|evening|late) light|in the light of|'
+    r'brightly lit|(?:afternoon|morning|evening|midday) sun)\b', re.IGNORECASE)
 
 
 def _strip_light_words(text: str) -> str:
@@ -653,11 +657,30 @@ def _strip_light_words(text: str) -> str:
     return ' '.join(kept) if kept else sentences[0]
 
 
+_LETTERING_RE = re.compile(
+    r"(?:,\s*)?\b(?:with|bearing|showing|displaying|marked with|engraved with|stamped with|etched with)\s+"
+    r"(?:a |an |the )?[^.;]{0,60}?(?:\b(?:letters?|initials?|monogram|inscription|lettering|numerals?|"
+    r"words?|glyphs? of text)\b|the (?:letter|word) '?[A-Za-z]'?|['\u2018\u2019][A-Za-z]['\u2018\u2019])"
+    r"(?:\s+(?!(?:rests?|sits?|lies?|stands?|hangs?|floats?|rises?|glows?)\b)"
+    r"[A-Za-z'\u2018\u2019-]+){0,8}", re.IGNORECASE)
+
+
+_META_LINE_RE = re.compile(
+    r'\s*(?:^|\n|(?<=[.!?]))\s*(?:[-*•]\s*)?(?:The |This )?(?:focal (?:subject|point)|main subject|'
+    r'subject of the (?:scene|image)|note|scene description|composition)\b\s*(?:is|are|should|must|remains|:)[^.!?\n]*[.!?]?',
+    re.IGNORECASE)
+
+
 def _tidy_prompt(text: str) -> str:
-    """Strip stray quotes and doubled punctuation the small model leaves."""
+    """Strip stray quotes, doubled punctuation and the writer's own notes
+    ("- The focal subject is Krark, the Goblin Wizard" tailed a Krark prompt;
+    such notes read as instructions the image model then illustrates)."""
     if not text:
         return text
-    out = re.sub(r'["\u201c\u201d]+', '', text)
+    out = _META_LINE_RE.sub(' ', text)
+    out = re.sub(r'[*#_]+', '', out)                 # markdown bold / headings
+    out = _LETTERING_RE.sub('', out)                 # "a small silver 'A' on its face"
+    out = re.sub(r'["\u201c\u201d]+', '', out)
     out = re.sub(r'\.{2,}', '.', out)
     out = re.sub(r'\s+([.!?,;])', r'\1', out)
     out = re.sub(r'\s{2,}', ' ', out).strip()
@@ -734,6 +757,34 @@ def _person_problems(draft: str, card: dict) -> str:
     return f"a person in an {card['card_type']} scene ({', '.join(hits)})" if hits else ''
 
 
+_FLAT_WORDS = ('ink', 'line', 'drawn', 'pen', 'woodblock', 'etching', 'cel', 'animation',
+               'cartoon', 'comic', 'papyrus', 'fresco', 'hieroglyph', 'pixel', 'flat')
+
+
+def _names_a_colour(text: str) -> bool:
+    """True when the scene names at least one colour word."""
+    from vision_analyzer import _COLOR_WORDS
+    words = {w.lower() for w in re.findall(r"[A-Za-z]+", text or '')}
+    return bool(words & set(_COLOR_WORDS))
+
+
+def _is_coloured_style(style_hint: str) -> bool:
+    """The block says the style is coloured (a palette clause or a coloured
+    coverage clause), as opposed to monochrome ink."""
+    h = (style_hint or '').lower()
+    if 'monochrome' in h or 'black ink only' in h or 'black and white' in h:
+        return False
+    return 'palette of' in h or 'colour' in h or 'color' in h
+
+
+def _is_flat_medium(style_hint: str) -> bool:
+    """Flat media (no rendered light) from the block's medium anchor."""
+    medium_word = (style_hint.split(' — ')[-1].split(',')[0].strip().lower() if style_hint else '')
+    hint_low = (style_hint or '').lower()
+    return bool(medium_word) and (any(w in medium_word for w in _FLAT_WORDS)
+                                  or 'flat opaque' in hint_low or 'flat cel' in hint_low)
+
+
 def _scene_problems(draft: str, card: dict, local_model: str) -> str:
     """Checklist judgement of a scene draft against its card, by the same
     language model at temperature 0: is the card's subject (with its creature
@@ -808,6 +859,11 @@ def _strip_chat_preamble(text: str) -> str:
     if not text:
         return text
     out = text.strip().strip('`').strip()
+    # a bold or labelled heading ("**Scene: The Signet of Power**", "Title: ...")
+    # is the writer naming its own picture; the image model letters it
+    out = re.sub(r'^(?:\*\*[^*\n]{0,80}\*\*|#+ [^\n]{0,80}|(?:Scene|Title|Prompt|Description)\s*:\s*[^\n.]{0,60})\s*[\n:]\s*',
+                 '', out, count=1)
+    out = re.sub(r'^\*\*[^*\n]{0,80}\*\*\s*', '', out, count=1)
     out = _PREAMBLE_RE.sub('', out, count=1)
     return out.strip()
 
@@ -865,7 +921,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     # the deck theme (e.g. sci-fi → android faces) otherwise hijacks the subject.
     _no_character = card_type in ('artifact', 'enchantment', 'land', 'instant', 'sorcery')
     type_guidance = {
-        'artifact': 'Depict the artifact OBJECT itself, filling the frame. If the card NAME literally names a physical thing or body part (e.g. "Krark\'s Thumb" = a thumb, "Sol Ring" = a ring, "Sword of X" = a sword), depict THAT literal object as the relic — do NOT substitute a generic glowing disc, amulet, or runed orb. In the FIRST sentence say what physical object it is in plain everyday words the image model knows (a signet is "a signet ring", a phylactery is "a small ornate box", a bauble is "a glass trinket"), then describe it. If the object is a BODY PART, the image model will draw the whole limb unless told otherwise: say it is ONE single part, detached, cut cleanly at its base, with no hand, arm or body anywhere, and present it as a kept relic — strung on a cord, mounted, or lying on a cloth. NOT a landscape, NOT a person.',
+        'artifact': 'Depict the artifact OBJECT itself, filling the frame. If the card NAME literally names a physical thing or body part (e.g. "Krark\'s Thumb" = a thumb, "Sol Ring" = a ring, "Sword of X" = a sword), depict THAT literal object as the relic — do NOT substitute a generic glowing disc, amulet, or runed orb. In the FIRST sentence say what physical object it is in plain everyday words the image model knows (a signet is "a signet ring", a phylactery is "a small ornate box", a bauble is "a glass trinket"), then describe it. If the object is a BODY PART, the image model will draw the whole limb unless told otherwise: say it is ONE single part, detached, cut cleanly at its base, with no hand, arm or body anywhere, and present it as a kept relic at rest. Any other object is shown large and whole, resting where it belongs or in use, with nothing hanging above or beside it. NOT a landscape, NOT a person.',
         'enchantment': 'The card name is an event, effect or blessing, never a character: do not write the name as a person who stands or acts. Depict the SCENE the enchantment represents — the people, creatures, place, ritual, or event drawn from its flavor and rules text (e.g. an army of warriors growing stronger under a hopeful dawn, a blessing settling over a battlefield). Do NOT default to abstract swirling energy, a glowing aura, or a magical vortex — give it concrete subject matter.',
         'instant': 'Depict the dramatic moment of the spell being cast — the action and energy itself.',
         'sorcery': 'Depict the spell being cast — the ritual, the gathering of power.',
@@ -962,19 +1018,23 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                     "card's subject dominant and clearly readable; the themes are set dressing."
                 )
         elif staging and staging.strip():
+            is_flat = _is_flat_medium(style_hint)
             # the register comes from the style itself (see style_staging_recall),
             # not from the calm-film-still default below
             system_msg += (
                 f"\n\nCRITICAL — The art style is: {style_hint}. "
                 "Describe specific, concrete visual details — composition, posture, "
-                "objects, lighting. Cinematic framing and light are REQUIRED; generic "
+                "objects" + (", lighting. Cinematic framing and light are REQUIRED" if not is_flat
+                             else ". Bold framing is REQUIRED") + "; generic "
                 "magic filler is BANNED: never 'maelstrom', 'volcanic fury', 'arcane "
                 "energy', 'swirling vortex', 'mystical aura', 'otherworldly glow'."
                 f"\n\nSTAGING AND REGISTER — stage the scene the way this artist would, and "
                 f"write in their tone: {staging.strip()} Apply this to the setting, props, "
                 "posture and mood ONLY — the card's subject stays exactly what it is. "
                 "For a LAND the card's own location IS the setting (a landscape, not a "
-                "prop in a room): take only the lighting and tone from the staging."
+                "prop in a room), but build it from THIS style's world: its plants, skies, "
+                "rock, architecture and weather, so the terrain the card names is the "
+                "version of it that exists in the style's world, never a generic one."
             )
         else:
             system_msg += (
@@ -1009,9 +1069,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     # shadows pull the image model toward smooth digital painting. On these
     # media drama comes from pose, scale, colour contrast and pattern, and the
     # word "light" is banned from the scene entirely.
-    flat_words = ('ink', 'line', 'drawn', 'pen', 'woodblock', 'etching', 'cel', 'animation',
-                  'cartoon', 'comic', 'papyrus', 'fresco', 'hieroglyph', 'pixel', 'flat')
-    is_flat = any(w in medium_word for w in flat_words) or 'flat opaque' in hint_low or 'flat cel' in hint_low
+    is_flat = _is_flat_medium(style_hint)
     if medium_word and is_flat:
         light_line = (f"This medium ({medium_word}) is FLAT: no rendered light at all — do not write "
                       "glow, beam, shaft, ray, shimmer, soft light, warm light, shadow or lighting. "
@@ -1071,6 +1129,11 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         + (f"Flavor text (use this as the THEMATIC ANCHOR for the scene): {safe_flavor}\n" if safe_flavor else "")
         + f"Direction: {guidance}\n"
         + figure_line
+        + _body_line(card)
+        + (f"World (REQUIRED): this {card_type} exists in the style's own world — {staging.strip()} "
+           "Build the setting from that world's plants, skies, rock and buildings, and put one of "
+           "its signature features in the first sentence. Never a generic version of the terrain.\n"
+           if staging and staging.strip() and card_type in ('land', 'enchantment') else "")
         + light_line
         + ("One subject. Then camera and scale, one strong colour contrast, one moment, "
            "one atmospheric detail. Three sentences, about sixty words.\n" if is_flat else
@@ -1154,6 +1217,28 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             if out != before:
                 print(f"  [prompt_gen] flat-media strip for {name}: "
                       f"{len(before.split())} -> {len(out.split())} words")
+        if is_flat and _is_coloured_style(style_hint) and not _names_a_colour(out):
+            # H46: on coloured flat media (coloured figures on white paper, cel,
+            # comic) a scene with no colour word renders as bare line art —
+            # three of four cards on a picture-book deck came out uncoloured.
+            try:
+                recol = mlx_llm.chat(
+                    messages=[
+                        {'role': 'system', 'content': system_msg},
+                        {'role': 'user', 'content': user_msg},
+                        {'role': 'assistant', 'content': out},
+                        {'role': 'user', 'content':
+                            "Rewrite the same scene, same length, naming the flat colour of the "
+                            "subject and of each main object (its clothing, skin, the ground, "
+                            "the sky) in plain colour words. No light words."},
+                    ],
+                    model=local_model, max_tokens=220, temperature=0.4)
+                recol = _limit_scene_sentences(_strip_chat_preamble(recol), 3)
+                if len(recol.split()) >= 5 and _opens_with_subject(recol, card) and _names_a_colour(recol):
+                    out = _strip_light_words(_strip_unpaintable(recol)) if is_flat else recol
+                    print(f"  [prompt_gen] colour rewrite for {name}")
+            except Exception as e:
+                print(f"  [prompt_gen] colour rewrite failed: {e}")
         out = _fix_invented_cyclops(out, base_desc)
         out = _limit_scene_sentences(out, 3)
         out = _fix_dangling_tail(out)
@@ -1181,6 +1266,13 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                 if len(redo.split()) >= 5 and _opens_with_subject(redo, card) \
                         and not _scene_problems(redo, card, local_model):
                     out = redo
+        # final cleanup: every rewrite path above (flat, colour, scene-check
+        # redo) can reintroduce what an earlier strip removed
+        out = _strip_unpaintable(out)
+        out = _fix_invented_cyclops(out, base_desc)
+        if is_flat:
+            out = _strip_light_words(out)
+        out = _tidy_prompt(_fix_dangling_tail(out))
         if len(out.split()) < 5:
             # the backstops can strip a draft down to nothing (a franchise
             # sentence, a fragment); never persist an empty prompt
@@ -1288,6 +1380,24 @@ def _strip_franchise_sentences(text: str, style_hint: str) -> str:
             continue
         kept.append(sent)
     return ' '.join(kept).strip()
+
+
+def _body_line(card: dict) -> str:
+    """H45: the first creature subtype names WHAT the body is — Magic writes
+    race/animal first, class second ("Bat God" is a bat, "Human Wizard" a
+    human). The writer otherwise gives a Bat God a woman's face with wings.
+    Deterministic, no creature tables."""
+    if card.get('card_type') != 'creature':
+        return ''
+    type_line = card.get('type_line', '') or ''
+    if '—' not in type_line:
+        return ''
+    subtypes = type_line.split('—', 1)[1].strip().split()
+    if not subtypes:
+        return ''
+    kind = subtypes[0].lower()
+    return (f"Body: this creature is a {kind} — give it a {kind}'s head, face, eyes and limbs "
+            f"(not a human face with {kind} parts). Say so in the first sentence.\n")
 
 
 def _ensure_creature_type_in_prompt(text: str, card: dict) -> str:

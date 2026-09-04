@@ -1,3 +1,4 @@
+import os
 import re
 #!/usr/bin/env python3
 """
@@ -1836,14 +1837,15 @@ def _parse_counts(text: str) -> dict:
         m = _re.search(key + r'\s*[=:]\s*(\d+)', text, _re.IGNORECASE)
         if m:
             out[key] = int(m.group(1))
-    for key in ('text', 'signature', 'subject', 'hands_ok'):
+    for key in ('text', 'signature', 'subject', 'hands_ok', 'composition', 'face'):
         m = _re.search(key + r'\s*[=:]\s*(yes|no)', text, _re.IGNORECASE)
         if m:
             out[key] = m.group(1).lower() == 'yes'
     return out
 
 
-def inspect_render(image_path, card_name: str, card_type: str, vision_model: str) -> list:
+def inspect_render(image_path, card_name: str, card_type: str, vision_model: str,
+                   advisory: dict | None = None) -> list:
     """Defect checklist over a finished render, by the vision model. Asking
     the model to LIST defects made it echo the whole label list; asking it to
     COUNT (heads, arms, hands, copies of the subject) and answer yes/no
@@ -1866,8 +1868,12 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
             "text=<yes/no: any letters, words, numerals, handwriting or logo>; "
             "signature=<yes/no: an artist signature or copyright mark>; "
             "subject=<yes/no: the named subject is clearly present>; "
-            "hands_ok=<yes/no: every visible hand looks natural with five fingers>",
-            model=vision_model, max_tokens=80, temperature=0.0)
+            "hands_ok=<yes/no: every visible hand looks natural with five fingers>; "
+            "composition=<yes/no: the picture reads as ONE clear scene with the named "
+            "subject as the obvious focus, not a confusing jumble>; "
+            "face=<yes/no: the main figure's face is visible, 'no' if there is no figure "
+            "or the picture is only a hand, a limb or a back>",
+            model=vision_model, max_tokens=110, temperature=0.0)
     except Exception as e:
         print(f"  [inspect] vision read failed: {e}")
         return None
@@ -1880,7 +1886,9 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
             defects.append('doubled head')
         if c.get('arms', 2) > 2 or c.get('hands', 2) > 2:
             defects.append('extra limbs')
-        if c.get('hands_ok', True) is False:
+        if c.get('hands_ok', True) is False and c.get('hands', 1) > 0:
+            # "every visible hand looks natural" is answered no for a creature
+            # with NO hands (a winged dragon spirit was re-rolled twice for it)
             defects.append('malformed hands')
         if c.get('subject', True) is False:
             defects.append('subject missing')
@@ -1892,7 +1900,81 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
     if c.get('text') is True or c.get('signature') is True:
         if _edge_marks_present(image_path, vision_model):
             defects.append('text' if c.get('text') is True else 'signature')
+    # Composition (H43): a confusing picture, or an object/place card whose
+    # named subject is not there, is recorded as ADVISORY by default so the
+    # false-positive rate can be measured on real batches before it is allowed
+    # to trigger re-rolls (INSPECT_COMPOSITION=enforce) or muted (=off).
+    mode = os.environ.get('INSPECT_COMPOSITION', 'advisory')
+    notes = []
+    if not figure and c.get('subject', True) is False:
+        notes.append('subject missing')
+    if c.get('composition', True) is False:
+        notes.append('confusing composition')
+    if figure and c.get('face', True) is False and c.get('heads', 1) >= 1:
+        # a Krark render was a giant fist with no face: readable, on-style,
+        # and not the card
+        notes.append('face not visible')
+    if notes and mode != 'off':
+        if mode == 'enforce':
+            defects.extend(notes)
+        elif advisory is not None:
+            advisory['composition'] = notes
     return defects
+
+
+def pick_take(ref_paths, a_path, b_path, card_name: str, vision_model: str):
+    """H41: when two takes tie on defects, ask the vision model which better
+    matches the reference style and is the more striking card art. The
+    three images (reference, take A, take B) go in as ONE side-by-side sheet
+    because the worker reads a single image. Asked twice with the takes
+    swapped to cancel position bias; returns 'a', 'b', or None when the two
+    answers disagree or the read fails."""
+    if not vision_model or not ref_paths:
+        return None
+    try:
+        from PIL import Image, ImageDraw
+        import tempfile, os as _os
+        import mlx_llm
+        ref = Image.open(ref_paths[0]).convert('RGB')
+        votes = []
+        for order in (('a', 'b'), ('b', 'a')):
+            paths = {'a': a_path, 'b': b_path}
+            tiles = [ref] + [Image.open(paths[k]).convert('RGB') for k in order]
+            h = 512
+            tiles = [t.resize((max(1, int(t.width * h / t.height)), h)) for t in tiles]
+            sheet = Image.new('RGB', (sum(t.width for t in tiles) + 40, h + 28), (255, 255, 255))
+            x = 0
+            for t, label in zip(tiles, ('REFERENCE', 'LEFT', 'RIGHT')):
+                sheet.paste(t, (x, 28))
+                ImageDraw.Draw(sheet).text((x + 6, 6), label, fill=(0, 0, 0))
+                x += t.width + 20
+            fd, path = tempfile.mkstemp(suffix='.png', prefix='pick_take_')
+            _os.close(fd)
+            try:
+                sheet.save(path)
+                reply = mlx_llm.vision(
+                    path,
+                    f"The first panel is a style REFERENCE. LEFT and RIGHT are two candidate "
+                    f"card illustrations for '{card_name}'. Which candidate looks more like it "
+                    "was made by the reference's artist AND is the more striking, readable "
+                    "picture? Answer with exactly one word: LEFT or RIGHT.",
+                    model=vision_model, max_tokens=5, temperature=0.0)
+            finally:
+                try:
+                    _os.unlink(path)
+                except OSError:
+                    pass
+            word = (reply or '').strip().upper()
+            if 'LEFT' in word and 'RIGHT' not in word:
+                votes.append(order[0])
+            elif 'RIGHT' in word and 'LEFT' not in word:
+                votes.append(order[1])
+            else:
+                return None
+        return votes[0] if votes[0] == votes[1] else None
+    except Exception as e:
+        print(f"  [inspect] take comparison failed: {e}")
+        return None
 
 
 def _edge_marks_present(image_path, vision_model: str) -> bool:
@@ -2147,6 +2229,31 @@ def _medium_anchors(medium: str) -> list:
     return list(_MEDIUM_ANCHORS.get(medium, []))
 
 
+def _evidence_medium_phrase(stored_descriptions: str, medium: str) -> str:
+    """H52: the analyst's own short 'Medium:' phrase that best matches the
+    voted bucket ('papyrus parchment' for a papyrus deck the vote files under
+    'painted illustration'). The bucket anchor is generic; the phrase is the
+    specific surface the references show, and it goes right after the bucket
+    word so the image model reads it early. '' when none is usable."""
+    import re as _re
+    keys = _MEDIUM_KEYWORD_MAP.get(medium, frozenset())
+    best, best_score = '', 0
+    for ln in (stored_descriptions or '').splitlines():
+        m = _re.match(r'\s*[-*\s]*medium\s*:\s*(.+)$', ln, _re.IGNORECASE)
+        if not m:
+            continue
+        phrase = _re.split(r'[;(,.]| with | and ', m.group(1).strip())[0].strip().lower()
+        words = _re.findall(r'[a-z0-9-]+', phrase)
+        if not 1 <= len(words) <= 4:
+            continue
+        score = len(set(words) & keys)
+        if score > best_score:
+            best, best_score = ' '.join(words), score
+    if not best or best == medium or set(best.split()) <= set(medium.split()):
+        return ''
+    return best
+
+
 # Color/palette detection for palette preservation (see build_flux_style_descriptors).
 
 
@@ -2250,6 +2357,9 @@ def build_flux_style_block(image_path, style_source: str = '',
     else:
         medium = _classify_medium_from_evidence(stored_descriptions, best_prose, text_model)
     anchors = _medium_anchors(medium)
+    _ev_phrase = _evidence_medium_phrase(stored_descriptions, medium)
+    if anchors and _ev_phrase and _ev_phrase not in ' '.join(anchors):
+        anchors.insert(1, _ev_phrase)
     if anchors and anchors[0] == 'ink illustration':
         # Ink variants are decided per-AXIS from textual evidence — line
         # weight, line character, and detail density are independent. The old

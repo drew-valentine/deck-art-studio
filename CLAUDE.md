@@ -89,7 +89,10 @@ decks/<deck-slug>/
   stores how the style STAGES scenes + its tonal register in `deck.json.style_staging`; the scene
   writer gets that plus the block minus hues (`prompt_generator.hint_without_palette`) — hues
   in the writer's hint become scene content. Writer rules: one subject in the foreground, two
-  sentences of ~60 words (cap 64, whole sentences) following the scene grammar — subject at a moment, camera + scale + one named light, one atmospheric detail; rules-text zones (library/graveyard) are never scenery.
+  sentences of ~60 words (cap 64, whole sentences) following the scene grammar — subject at a moment, camera + scale + one named light, one atmospheric detail; rules-text zones (library/graveyard) are never scenery. Creatures also get a Body line
+  (`_body_line`: the FIRST subtype names what the body is — a Bat God is a bat); lands are built
+  from the style's world (its plants, skies, architecture), never a generic version of the terrain;
+  artifact guidance never lists relic presentations (a listed "strung on a cord" was parroted).
   Also recalled at distillation, each with an UNKNOWN escape: `style_source_kind`
   (franchise / artist / movement — the franchise gate for de-naming; the `_FRANCHISE_PHRASES`
   table is only the offline fallback), `style_lineage` (a de-named production lineage for the
@@ -98,7 +101,10 @@ decks/<deck-slug>/
   references to double blocks 0-14 (figure design), other types 0-9; `_assemble_flux_prompt` order =
   lead + colour-coverage clause, subject sentence, full block, rest of scene; `/api/generate` takes
   `seed` for like-for-like A/Bs (experiment hooks: FLUX_PROMPT_ORDER, STYLE_BLOCKS_DOUBLE,
-  FIGURE_IDIOM, SCENE_CHECK, REDUX_EDGE_CROP, FLUX_LEAD_OVERRIDE, FLUX_GUARD_EXTRA). Colour coverage
+  FIGURE_IDIOM, FIGURE_IDIOM_ALL, SCENE_CHECK, REDUX_EDGE_CROP, FLUX_LEAD_OVERRIDE, FLUX_GUARD_EXTRA).
+  Block medium = declaration → stored-evidence keyword vote → LLM; the analyst's own short `Medium:`
+  phrase matching the voted bucket (`_evidence_medium_phrase`, e.g. 'papyrus parchment' filed under
+  'painted illustration') is inserted right after the bucket anchor. Colour coverage
   is measured from reference pixels (`pixel_palette`); character-heavy references (VLM yes/no,
   `prominent_character`) default the deck to Medium unless `style_reference.user_set`.
   End-of-batch inspection (`INSPECT` job, `_execute_inspect_job`, `vision_analyzer.inspect_render`):
@@ -108,12 +114,22 @@ decks/<deck-slug>/
   top/bottom strips; with `takes>1` the final pass keeps the cleaner take (`_pick_cleaner_take`);
   a final-pass signature/text-only verdict sets `frame_overrides.art_zoom=1.10` and recomposites
   (`_hide_edge_marks`) instead of re-rolling.
+  Ties on defects between takes are decided by `vision_analyzer.pick_take` (reference + both takes
+  on one sheet, asked twice with the takes swapped; only a consistent answer counts). The inspector
+  also answers `composition=yes/no`, `face=yes/no` (a creature render that is only a fist or a
+  back) and, for object/place cards, subject presence — recorded as
+  `inspection.advisory` by default (`INSPECT_COMPOSITION=advisory|enforce|off`) until the
+  false-positive rate is known.
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
   unpaintable-abstraction strip → (flat media: rewrite without light words naming the offending
-  words, up to two passes, unpaintable strip again, then sentence-level light strip as last resort) → invented-cyclops fix → sentence/word cap (3 sentences / 64 words) → dangling-tail
+  words, up to two passes, unpaintable strip again, then sentence-level light strip as last resort) → colour rewrite when a coloured flat style's scene names no colour word (`_names_a_colour`,
+  `_is_coloured_style`; bare line art otherwise) → invented-cyclops fix → sentence/word cap (3 sentences / 64 words) → dangling-tail
   fix → tidy → scene checklist re-roll (deterministic `_person_problems` word check for artifact/land
-  first, then the LLM checklist) → empty guard. Writer instructions never carry concrete example
+  first, then the LLM checklist) → final cleanup (unpaintable / cyclops / light strip / dangling / tidy run once more, because every
+  rewrite path can reintroduce what an earlier strip removed; `_tidy_prompt` also drops markdown
+  markers, writer notes and lettering clauses — a quoted 'A' on a ring becomes letters in the art)
+  → empty guard. Writer instructions never carry concrete example
   nouns — the writer parrots them into scenes (`test_flat_media_line_has_no_example_nouns`). Flat media = ink/cel/comic/papyrus/fresco/
   hieroglyph/woodblock/pixel/flat opaque paint (`is_flat` in `generate_subject_with_ai`).
   Idiom phrases about writing (glyph/symbol/lettering/text/script) are filtered

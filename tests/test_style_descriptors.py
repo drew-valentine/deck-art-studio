@@ -612,3 +612,55 @@ def test_person_check_on_land_and_artifact():
     assert out == "A gold ring rests on a cloth."
     for w in ('bright sunlight', 'sparkled', 'shining', 'late afternoon sun'):
         assert _LIGHT_WORD_RE.search(w), w
+
+
+def test_body_line_names_the_first_subtype():
+    from prompt_generator import _body_line
+    assert "is a bat" in _body_line({'card_type': 'creature', 'type_line': 'Legendary Creature — Bat God'})
+    assert "is a human" in _body_line({'card_type': 'creature', 'type_line': 'Creature — Human Wizard'})
+    assert _body_line({'card_type': 'creature', 'type_line': 'Creature'}) == ''
+    assert _body_line({'card_type': 'artifact', 'type_line': 'Artifact — Equipment'}) == ''
+
+
+def test_tidy_strips_writer_notes():
+    from prompt_generator import _tidy_prompt
+    t = "Krark lunges forward, his hand grasping a staff. The air shudders. - The focal subject is Krark, the Goblin Wizard"
+    assert _tidy_prompt(t) == "Krark lunges forward, his hand grasping a staff. The air shudders."
+    t = "A ring rests on a cloth.\nNote: keep the ring central."
+    assert _tidy_prompt(t) == "A ring rests on a cloth."
+    assert _tidy_prompt("A composition of towers rises.") == "A composition of towers rises."
+    assert _tidy_prompt("The composition is balanced. Fog rolls in.") == "Fog rolls in."
+
+
+def test_colour_helpers():
+    from prompt_generator import _names_a_colour, _is_coloured_style
+    assert _names_a_colour("A turquoise ring on a grey pedestal.")
+    assert not _names_a_colour("A ring on a pedestal, its surface catching the eye.")
+    assert _is_coloured_style("ink illustration, coloured figures on open white paper, palette of light blue, pink")
+    assert not _is_coloured_style("monochrome ink illustration, black ink only on white paper")
+
+
+def test_preamble_strip_drops_headings():
+    from prompt_generator import _strip_chat_preamble
+    assert _strip_chat_preamble("**Scene: The Signet of Power** A silver signet ring rests atop a pedestal.") == "A silver signet ring rests atop a pedestal."
+    assert _strip_chat_preamble("Scene: Signet\nA silver ring rests.") == "A silver ring rests."
+    assert _strip_chat_preamble("A silver ring rests on a pedestal.") == "A silver ring rests on a pedestal."
+
+
+def test_tidy_strips_markdown_and_lettering():
+    from prompt_generator import _tidy_prompt, _fix_invented_cyclops
+    t = "**Attrition**, a crumbling **beige** stone monument, stands at the edge of a cracked **brown** landscape."
+    assert _tidy_prompt(t) == "Attrition, a crumbling beige stone monument, stands at the edge of a cracked brown landscape."
+    t = "The ring sits on a cushion, with a small, polished silver 'A' prominently displayed on its face, its engravings green."
+    assert "'A'" not in _tidy_prompt(t) and "engravings green" in _tidy_prompt(t)
+    t = "A ring engraved with the letter K rests on cloth."
+    assert _tidy_prompt(t) == "A ring rests on cloth."
+    assert _fix_invented_cyclops("Its single, unblinking, red stare fixes you.", "") == "Its unblinking, red stare fixes you."
+
+
+def test_evidence_medium_phrase_keeps_the_specific_surface():
+    from vision_analyzer import _evidence_medium_phrase
+    stored = "Art Style: Papyrus illustration\n- Medium: Papyrus parchment\nSource: X\nArt Style: Digital painting\n- Medium: Digital painting"
+    assert _evidence_medium_phrase(stored, 'painted illustration') == 'papyrus parchment'
+    assert _evidence_medium_phrase("- Medium: Ink illustration", 'ink illustration') == ''
+    assert _evidence_medium_phrase("", 'cel animation') == ''

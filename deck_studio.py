@@ -1998,7 +1998,10 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     # The writer applies it only on a good roll; the render prompt adds it to
     # the creature's own sentence regardless ("..., drawn with wobbly eyes,
     # lumpy anatomy").
-    if card_type in ('creature', 'planeswalker') and os.environ.get('FIGURE_IDIOM', '1') != '0':
+    _idiom_types = ('creature', 'planeswalker')
+    if os.environ.get('FIGURE_IDIOM_ALL', '0') == '1':      # H51 experiment hook
+        _idiom_types = ('creature', 'planeswalker', 'artifact', 'land', 'enchantment', 'instant', 'sorcery')
+    if card_type in _idiom_types and os.environ.get('FIGURE_IDIOM', '1') != '0':
         subject = _with_figure_idiom(subject, (_meta.get('style_idiom') or []))
 
     # --- Card Back override (avoid FLUX rendering a literal physical card back) ---
@@ -4331,8 +4334,23 @@ def _pick_cleaner_take(name, card, raw_path, defects, ctx, vmodel, inspect_rende
     if not prev_raw.exists():
         return defects
     prev_defects = inspect_render(prev_raw, name, card.get('card_type', ''), vmodel)
-    if prev_defects is None or len(prev_defects) >= len(defects or []):
+    if prev_defects is None:
         return defects
+    if len(prev_defects) > len(defects or []):
+        return defects
+    if len(prev_defects) == len(defects or []):
+        # H41: a tie on defects is decided on STYLE — which take looks more
+        # like the reference's artist and is the more striking picture
+        refs = _inspiration_paths(ctx)
+        if not refs:
+            return defects
+        import vision_analyzer as _va
+        choice = _va.pick_take(refs, raw_path, prev_raw, name, vmodel)
+        if choice != 'b':
+            print(f"  [inspect] {name}: takes tied on defects, kept the current take"
+                  f" ({'style pick' if choice == 'a' else 'no clear style pick'})")
+            return defects
+        print(f"  [inspect] {name}: takes tied on defects, style pick chose the earlier take")
     # the archived take is cleaner: archive the current, restore the archived
     _archive_art(name, ctx['raw_art_dir'], ctx['composite_dir'], ctx['versions_dir'])
     shutil.copy2(prev_raw, raw_path)
@@ -4345,6 +4363,17 @@ def _pick_cleaner_take(name, card, raw_path, defects, ctx, vmodel, inspect_rende
         shutil.copy2(prev_comp, comp_path)
     print(f"  [inspect] {name}: kept the earlier take ({len(prev_defects)} defects vs {len(defects or [])})")
     return prev_defects
+
+
+def _inspiration_paths(ctx):
+    """Existing inspiration image paths for a job context, oldest first."""
+    deck_dir = ctx.get('deck_dir')
+    if not deck_dir:
+        return []
+    entries = ((ctx.get('meta') or {}).get('inspiration_images') or [])
+    names = [e.get('filename') if isinstance(e, dict) else e for e in entries]
+    out = [Path(deck_dir) / n for n in names if isinstance(n, str) and n]
+    return [p for p in out if p.exists()]
 
 
 def _inspect_faces_for(card, raw_art_dir):
@@ -4384,7 +4413,11 @@ def _execute_inspect_job(job, ctx):
             faces = _inspect_faces_for(card, raw_dir)
             bad = []
             for face_label, path in faces:
-                defects = inspect_render(path, name, card.get('card_type', ''), vmodel)
+                advisory = {}
+                defects = inspect_render(path, name, card.get('card_type', ''), vmodel, advisory=advisory)
+                if advisory.get('composition'):
+                    print(f"  [inspect] {name} ({face_label}) composition advisory: "
+                          f"{', '.join(advisory['composition'])}")
                 if takes > 1 and face_label == 'front':
                     # H33: the earlier take was archived as the latest version;
                     # if it is cleaner than the current one, swap them.
@@ -4393,6 +4426,7 @@ def _execute_inspect_job(job, ctx):
                 try:
                     meta = json.load(open(meta_path)) if meta_path.exists() else {}
                     meta['inspection'] = {'defects': defects, 'final': final,
+                                          'advisory': advisory.get('composition', []),
                                           'at': datetime.now().isoformat()}
                     with open(meta_path, 'w') as f:
                         json.dump(meta, f, indent=2)

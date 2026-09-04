@@ -324,7 +324,7 @@ def test_inspect_job_rerolls_defective_cards_once(monkeypatch, tmp_path):
     cards = [{'name': 'Keiga, the Tide Star', 'card_type': 'creature'}, {'name': 'Sol Ring', 'card_type': 'artifact'}]
     ctx = {'cards': cards, 'raw_art_dir': raw, 'deck_name': 'D'}
     verdicts = {'Keiga, the Tide Star': ['doubled head'], 'Sol Ring': []}
-    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm: verdicts[name])
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None: verdicts[name])
     monkeypatch.setattr(ds, 'has_second_art_face', lambda c: False)
     monkeypatch.setattr(ds, '_ollama_work_start', lambda: None)
     monkeypatch.setattr(ds, '_ollama_work_done', lambda: None)
@@ -372,7 +372,7 @@ def test_inspection_keeps_the_cleaner_take(monkeypatch, tmp_path):
     card = {'name': 'Keiga, the Tide Star', 'card_type': 'creature'}
     ctx = {'cards': [card], 'raw_art_dir': raw, 'composite_dir': comp, 'versions_dir': vroot, 'deck_name': 'D'}
     verdicts = {'keiga_the_tide_star.png': ['doubled head'], 'v1_raw.png': []}
-    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm: verdicts[path.name])
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None: verdicts[path.name])
     monkeypatch.setattr(ds, 'has_second_art_face', lambda c: False)
     monkeypatch.setattr(ds, '_ollama_work_start', lambda: None)
     monkeypatch.setattr(ds, '_ollama_work_done', lambda: None)
@@ -398,7 +398,7 @@ def test_final_inspection_hides_edge_signature_by_zoom(monkeypatch, tmp_path):
     deck_json = tmp_path / 'deck.json'; json.dump({'cards': [dict(card)]}, open(deck_json, 'w'))
     ctx = {'cards': [card], 'raw_art_dir': raw, 'composite_dir': comp, 'versions_dir': tmp_path / 'v',
            'deck_dir': tmp_path, 'meta': {}, 'deck_name': 'D'}
-    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm: ['signature'])
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None: ['signature'])
     monkeypatch.setattr(ds, 'has_second_art_face', lambda c: False)
     monkeypatch.setattr(ds, '_ollama_work_start', lambda: None)
     monkeypatch.setattr(ds, '_ollama_work_done', lambda: None)
@@ -411,3 +411,100 @@ def test_final_inspection_hides_edge_signature_by_zoom(monkeypatch, tmp_path):
     assert card['frame_overrides']['art_zoom'] == ds.EDGE_MARK_ZOOM
     assert json.load(open(deck_json))['cards'][0]['frame_overrides']['art_zoom'] == ds.EDGE_MARK_ZOOM
     assert rendered == ['Sol Ring']
+
+
+def _two_take_ctx(tmp_path, monkeypatch):
+    import json
+    import deck_studio as ds
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    raw = tmp_path / 'raw_art'; raw.mkdir(); comp = tmp_path / 'composites'; comp.mkdir()
+    vroot = tmp_path / 'art_versions'; vdir = vroot / 'keiga_the_tide_star'; vdir.mkdir(parents=True)
+    (raw / 'keiga_the_tide_star.png').write_bytes(b'take2')
+    (comp / 'keiga_the_tide_star.png').write_bytes(b'take2c')
+    (vdir / 'v1_raw.png').write_bytes(b'take1'); (vdir / 'v1_composite.png').write_bytes(b'take1c')
+    json.dump({'versions': [{'version': 1}]}, open(vdir / 'manifest.json', 'w'))
+    (tmp_path / 'inspiration_1.png').write_bytes(b'ref')
+    card = {'name': 'Keiga, the Tide Star', 'card_type': 'creature'}
+    ctx = {'cards': [card], 'raw_art_dir': raw, 'composite_dir': comp, 'versions_dir': vroot,
+           'deck_name': 'D', 'deck_dir': tmp_path, 'meta': {'inspiration_images': [{'filename': 'inspiration_1.png'}]}}
+    monkeypatch.setattr(ds, 'has_second_art_face', lambda c: False)
+    monkeypatch.setattr(ds, '_ollama_work_start', lambda: None)
+    monkeypatch.setattr(ds, '_ollama_work_done', lambda: None)
+    monkeypatch.setattr(ds, '_enqueue_art', lambda *a, **k: None)
+    monkeypatch.setattr(ds, '_archive_art', lambda name, rd, cd, vd: None)
+    return raw, comp, ctx
+
+
+def test_tied_takes_are_decided_by_style_pick(monkeypatch, tmp_path):
+    """H41: both takes clean -> the vision model's style pick decides; 'b'
+    (the archived take) restores it, 'a' or no clear pick keeps the current."""
+    import deck_studio as ds
+    import vision_analyzer as va
+    from generation_queue import Job, INSPECT
+    raw, comp, ctx = _two_take_ctx(tmp_path, monkeypatch)
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None: [])
+    asked = []
+    monkeypatch.setattr(va, 'pick_take', lambda refs, a, b, name, vm: (asked.append((len(refs), a.name, b.name)) or 'b'))
+    job = Job(id='j', type=INSPECT, deck_id='d', card_name='', params={'final': True, 'takes': 2, 'card_names': ['Keiga, the Tide Star']})
+    ds._execute_inspect_job(job, ctx)
+    assert asked == [(1, 'keiga_the_tide_star.png', 'v1_raw.png')]
+    assert (raw / 'keiga_the_tide_star.png').read_bytes() == b'take1'
+    assert (comp / 'keiga_the_tide_star.png').read_bytes() == b'take1c'
+    # no clear pick: current take stays
+    raw, comp, ctx = _two_take_ctx(tmp_path / 'n', monkeypatch)
+    monkeypatch.setattr(va, 'pick_take', lambda *a: None)
+    ds._execute_inspect_job(job, ctx)
+    assert (raw / 'keiga_the_tide_star.png').read_bytes() == b'take2'
+
+
+def test_pick_take_cancels_position_bias(monkeypatch, tmp_path):
+    import sys, types
+    from PIL import Image
+    import vision_analyzer as va
+    for n in ('r', 'a', 'b'):
+        Image.new('RGB', (8, 12), (n == 'a') * 255).save(tmp_path / f'{n}.png')
+    replies = iter(['LEFT', 'RIGHT'])      # same take named with the order swapped -> 'a'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: next(replies)))
+    assert va.pick_take([tmp_path / 'r.png'], tmp_path / 'a.png', tmp_path / 'b.png', 'K', 'v') == 'a'
+    replies = iter(['LEFT', 'LEFT'])       # the model just likes the left panel -> no pick
+    assert va.pick_take([tmp_path / 'r.png'], tmp_path / 'a.png', tmp_path / 'b.png', 'K', 'v') is None
+    assert va.pick_take([], tmp_path / 'a.png', tmp_path / 'b.png', 'K', 'v') is None
+
+
+def test_composition_is_advisory_by_default(monkeypatch):
+    """H43: a confusing picture or a missing object subject is recorded, not a
+    defect, until INSPECT_COMPOSITION=enforce."""
+    import sys, types
+    import vision_analyzer as va
+    reply = 'heads=0; arms=0; hands=0; copies=1; text=no; signature=no; subject=no; hands_ok=yes; composition=no'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: reply))
+    monkeypatch.delenv('INSPECT_COMPOSITION', raising=False)
+    adv = {}
+    assert va.inspect_render('x.png', 'Sol Ring', 'artifact', 'v', advisory=adv) == []
+    assert adv['composition'] == ['subject missing', 'confusing composition']
+    monkeypatch.setenv('INSPECT_COMPOSITION', 'enforce')
+    assert va.inspect_render('x.png', 'Sol Ring', 'artifact', 'v') == ['subject missing', 'confusing composition']
+    monkeypatch.setenv('INSPECT_COMPOSITION', 'off')
+    adv = {}
+    assert va.inspect_render('x.png', 'Sol Ring', 'artifact', 'v', advisory=adv) == [] and adv == {}
+
+
+def test_handless_creature_is_not_flagged_for_hands(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    reply = 'heads=1; arms=0; hands=0; copies=1; text=no; signature=no; subject=yes; hands_ok=no; composition=yes'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: reply))
+    assert va.inspect_render('x.png', 'Keiga, the Tide Star', 'creature', 'v') == []
+
+
+def test_hidden_face_is_a_composition_advisory(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    reply = 'heads=1; arms=1; hands=1; copies=1; text=no; signature=no; subject=yes; hands_ok=yes; composition=yes; face=no'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: reply))
+    monkeypatch.delenv('INSPECT_COMPOSITION', raising=False)
+    adv = {}
+    assert va.inspect_render('x.png', 'Krark', 'creature', 'v', advisory=adv) == []
+    assert adv['composition'] == ['face not visible']
+    adv = {}
+    assert va.inspect_render('x.png', 'Sol Ring', 'artifact', 'v', advisory=adv) == [] and adv == {}
