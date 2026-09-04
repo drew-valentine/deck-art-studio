@@ -15,6 +15,7 @@ Requires: pip install flask openai Pillow cairosvg
 
 import io
 import json
+import shutil
 import math
 import os
 import re
@@ -4252,7 +4253,7 @@ def _execute_flavor_job(job, ctx):
         _ollama_work_done()
 
 
-def _enqueue_inspection(deck_id, card_names, final=False, label=None):
+def _enqueue_inspection(deck_id, card_names, final=False, label=None, takes=1):
     """Enqueue an end-of-batch render inspection for these cards. It runs
     after the batch's art jobs (FIFO), evicts FLUX once for the vision model,
     and re-queues each defective card at most once; the re-rolls are followed
@@ -4262,8 +4263,43 @@ def _enqueue_inspection(deck_id, card_names, final=False, label=None):
         return None
     job = Job(type=INSPECT, deck_id=deck_id, deck_name=_deck_display_name(deck_id),
               card_name='', label=label or ('Final inspection' if final else f'Inspect {len(names)} render(s)'),
-              params={'card_names': names, 'final': bool(final)})
+              params={'card_names': names, 'final': bool(final), 'takes': int(takes or 1)})
     return gen_queue.enqueue(job)
+
+
+def _pick_cleaner_take(name, card, raw_path, defects, ctx, vmodel, inspect_render):
+    """Compare the current render with the latest archived take (the previous
+    take of a multi-take batch). If the archived one has fewer defects,
+    archive the current one and put the archived take back as current.
+    Returns the defects of whichever render is current afterwards."""
+    slug = name_to_slug(name)
+    vdir = ctx['versions_dir'] / slug
+    manifest = vdir / 'manifest.json'
+    try:
+        versions = json.load(open(manifest)).get('versions', []) if manifest.exists() else []
+    except Exception:
+        versions = []
+    if not versions:
+        return defects
+    latest = max(v.get('version', 0) for v in versions)
+    prev_raw = vdir / f'v{latest}_raw.png'
+    if not prev_raw.exists():
+        return defects
+    prev_defects = inspect_render(prev_raw, name, card.get('card_type', ''), vmodel)
+    if prev_defects is None or len(prev_defects) >= len(defects or []):
+        return defects
+    # the archived take is cleaner: archive the current, restore the archived
+    _archive_art(name, ctx['raw_art_dir'], ctx['composite_dir'], ctx['versions_dir'])
+    shutil.copy2(prev_raw, raw_path)
+    prev_meta = vdir / f'v{latest}_meta.json'
+    if prev_meta.exists():
+        shutil.copy2(prev_meta, raw_path.with_suffix('.meta.json'))
+    prev_comp = vdir / f'v{latest}_composite.png'
+    comp_path = ctx['composite_dir'] / f'{slug}.png'
+    if prev_comp.exists():
+        shutil.copy2(prev_comp, comp_path)
+    print(f"  [inspect] {name}: kept the earlier take ({len(prev_defects)} defects vs {len(defects or [])})")
+    return prev_defects
 
 
 def _inspect_faces_for(card, raw_art_dir):
@@ -4285,6 +4321,7 @@ def _execute_inspect_job(job, ctx):
     this is the final pass, re-queues defective cards once."""
     names = list((job.params or {}).get('card_names') or [])
     final = bool((job.params or {}).get('final'))
+    takes = int((job.params or {}).get('takes') or 1)
     bcfg = backend_config.load_config()
     vmodel = bcfg.get('ollama_vision_model', 'llava:7b')
     from vision_analyzer import inspect_render
@@ -4303,6 +4340,10 @@ def _execute_inspect_job(job, ctx):
             bad = []
             for face_label, path in faces:
                 defects = inspect_render(path, name, card.get('card_type', ''), vmodel)
+                if takes > 1 and face_label == 'front':
+                    # H33: the earlier take was archived as the latest version;
+                    # if it is cleaner than the current one, swap them.
+                    defects = _pick_cleaner_take(name, card, path, defects, ctx, vmodel, inspect_render)
                 meta_path = path.with_suffix('.meta.json')
                 try:
                     meta = json.load(open(meta_path)) if meta_path.exists() else {}
@@ -5314,7 +5355,7 @@ def generate_batch():
     # End-of-batch inspection: the vision model checks every render for
     # anatomy / duplication / text defects and re-queues failures once.
     if os.environ.get('RENDER_INSPECT', '1') != '0':
-        _enqueue_inspection(active_deck_id, card_names)
+        _enqueue_inspection(active_deck_id, card_names, takes=takes)
     return jsonify({'success': True, 'queued': len(job_ids), 'job_ids': job_ids,
                     'count': len(job_ids),
                     'message': f'Queued {len(job_ids)} cards for generation'})

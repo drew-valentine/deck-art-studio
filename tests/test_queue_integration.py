@@ -358,3 +358,31 @@ def test_generate_batch_takes_enqueues_each_card_n_times(monkeypatch, client):
     assert [a[1] for a in arts] == ['Sol Ring', 'Keiga, the Tide Star', 'Sol Ring', 'Keiga, the Tide Star']
     assert arts[0][2].endswith('(take 1/2)') and arts[-1][2].endswith('(take 2/2)')
     assert queued[-1] == ('inspect', ('Sol Ring', 'Keiga, the Tide Star'))
+
+
+def test_inspection_keeps_the_cleaner_take(monkeypatch, tmp_path):
+    import json
+    import deck_studio as ds
+    import vision_analyzer as va
+    raw = tmp_path / 'raw_art'; raw.mkdir(); comp = tmp_path / 'composites'; comp.mkdir()
+    vroot = tmp_path / 'art_versions'; vdir = vroot / 'keiga_the_tide_star'; vdir.mkdir(parents=True)
+    (raw / 'keiga_the_tide_star.png').write_bytes(b'take2')
+    (vdir / 'v1_raw.png').write_bytes(b'take1'); (vdir / 'v1_composite.png').write_bytes(b'take1c')
+    json.dump({'versions': [{'version': 1}]}, open(vdir / 'manifest.json', 'w'))
+    card = {'name': 'Keiga, the Tide Star', 'card_type': 'creature'}
+    ctx = {'cards': [card], 'raw_art_dir': raw, 'composite_dir': comp, 'versions_dir': vroot, 'deck_name': 'D'}
+    verdicts = {'keiga_the_tide_star.png': ['doubled head'], 'v1_raw.png': []}
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm: verdicts[path.name])
+    monkeypatch.setattr(ds, 'has_second_art_face', lambda c: False)
+    monkeypatch.setattr(ds, '_ollama_work_start', lambda: None)
+    monkeypatch.setattr(ds, '_ollama_work_done', lambda: None)
+    monkeypatch.setattr(ds.backend_config, 'load_config', lambda: {'ollama_vision_model': 'v'})
+    monkeypatch.setattr(ds, '_archive_art', lambda *a, **k: {'version': 2})
+    queued = []
+    monkeypatch.setattr(ds, '_enqueue_art', lambda deck_id, name, **kw: queued.append(('art', name)))
+    monkeypatch.setattr(ds, '_enqueue_inspection', lambda deck_id, names, **kw: queued.append(('inspect', tuple(names))))
+    job = ds.Job(type=ds.INSPECT, deck_id='d', card_name='', params={'card_names': [card['name']], 'final': False, 'takes': 2})
+    ds._execute_inspect_job(job, ctx)
+    assert (raw / 'keiga_the_tide_star.png').read_bytes() == b'take1'      # the clean take is current
+    assert (comp / 'keiga_the_tide_star.png').read_bytes() == b'take1c'
+    assert queued == []                                                       # clean: no re-roll
