@@ -208,7 +208,8 @@
     - [x] h64 — stone artifact re-render with the widened vocabulary: renders as a grey stone on a stump in the cartoon deck's palette (was a red loop before the vocabulary widening).
     - [x] h67 — object-check re-check: the category second opinion passes one talisman drawn as a medallion; the other (a framed ornament between two skulls) still fails, a defensible miss. Commit 2525b9d also strips "a stillness that belies…" abstractions.
     - [x] m18 — the original 20-card five-deck matrix re-run on the finished code: 18.5 of 20 on-style with sensible composition (was 16 of 20 before the night's work): cartoon deck 2.5→4, picture-book 2→3.5, fine-line 4, comic-ink 3.5, Egyptian 3.5 — the Egyptian sun-ring finally rendered flat; the one partial is the Egyptian faerie drawn bird-legged. Sheets m18-<deck>.jpg and m18-all-decks.jpg.
-    - [ ] m19 — comic-ink deck cards 19-36 slice (in flight)
+    - [x] m19 — comic-ink deck cards 19-36 (17 cards), two takes + inspection: 17 of 17 on-style with zero final defects. Seven-slice tally about 121 of 138 cards on-style with sensible composition.
+    - [ ] H68 — creature Body line carries a model-derived gloss of the type (a faerie drawn bird-legged on the Egyptian deck); re-render in flight
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
