@@ -108,7 +108,12 @@ decks/<deck-slug>/
   top/bottom strips; with `takes>1` the final pass keeps the cleaner take (`_pick_cleaner_take`).
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
-  unpaintable-abstraction strip → sentence/word cap → scene checklist re-roll → empty guard.
+  unpaintable-abstraction strip → (flat media: rewrite without light words, then sentence-level
+  light strip) → invented-cyclops fix → sentence/word cap (3 sentences / 64 words) → dangling-tail
+  fix → tidy → scene checklist re-roll → empty guard. Flat media = ink/cel/comic/papyrus/fresco/
+  hieroglyph/woodblock/pixel/flat opaque paint (`is_flat` in `generate_subject_with_ai`).
+  Idiom phrases about writing (glyph/symbol/lettering/text/script) are filtered
+  (`_IDIOM_WRITING_WORDS`).
   STANDING RULE: deck-agnostic and style-agnostic — a new style must work with zero code
   changes; derive facts from the declaration, model knowledge and vision reads, never tables.
 - **18 GB memory rule**: FLUX and the LLM/VLM cannot be co-resident. `mlx_llm.unload()` is
