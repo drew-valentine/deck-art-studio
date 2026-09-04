@@ -180,8 +180,10 @@
     - [x] Backstops — markdown markers, writer notes, headings and lettering clauses are stripped, and every strip runs once more after the last model call.
     - [x] H42 rejected — LAB palette transfer only greys renders.
     - [x] H47 rejected — object style-block window 0-9 vs 0-12 makes no difference.
-    - [ ] H51 — idiom phrases on object cards A/B (in flight)
-    - [ ] H52 — the analyst's Medium phrase after the bucket anchor, A/B on Sol Ring (in flight)
+    - [x] H51 rejected — idiom phrases on object cards are marginal: slightly bolder outlines on Sol Ring, otherwise unchanged. `FIGURE_IDIOM_ALL` stays an off-by-default hook.
+    - [x] H52 kept — the analyst's Medium phrase after the bucket anchor adds papyrus context to Sol Ring renders, though the metal object still reads smooth. Object smoothness is not a text-block lever; two takes plus the style pick is the mitigation. Commit e02b9c3.
+    - [x] H53 — per-type Framing line in the writer's user message (creatures: face visible, full figure; artifacts: the whole object; lands: an establishing view). Krark went from a fist close-up to a whole goblin with his face showing, and Keiga from a wing crop to a whole dragon; inline "Scene:" labels are stripped. Commit fbdfe71.
+    - [ ] m10 — final five-deck matrix on the finished code: two takes per card plus inspection, sheets ready for morning review (in flight 2026-09-04)
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
