@@ -1165,7 +1165,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         + (f"World (REQUIRED): this {card_type} exists in the style's own world — {staging.strip()} "
            "Build the setting from that world's plants, skies, rock and buildings, and put one of "
            "its signature features in the first sentence. Never a generic version of the terrain.\n"
-           if staging and staging.strip() and card_type in ('land', 'enchantment') else "")
+           if staging and staging.strip() and card_type in ('land', 'enchantment', 'instant', 'sorcery') else "")
         + light_line
         + ("One subject. Then camera and scale, one strong colour contrast, one moment, "
            "one atmospheric detail. Three sentences, about sixty words.\n" if is_flat else

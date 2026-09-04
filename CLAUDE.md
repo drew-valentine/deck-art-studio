@@ -93,7 +93,7 @@ decks/<deck-slug>/
   (`_body_line`: the FIRST subtype names what the body is — a Bat God is a bat) and every type a
   Framing line (`_camera_line`: face visible / whole object / establishing view); artifacts get an
   Object line with a model-derived plain gloss of the literal object (`_object_gloss`, memoised,
-  `OBJECT_GLOSS=0` mutes) and a 'subject missing' re-roll leads the scene with that object; lands are built
+  `OBJECT_GLOSS=0` mutes) and a 'subject missing' re-roll leads the scene with that object; lands, enchantments, instants and sorceries are built
   from the style's world (its plants, skies, architecture), never a generic version of the terrain;
   artifact guidance never lists relic presentations (a listed "strung on a cord" was parroted).
   Also recalled at distillation, each with an UNKNOWN escape: `style_source_kind`
@@ -120,7 +120,8 @@ decks/<deck-slug>/
   Ties on defects between takes are decided by `vision_analyzer.pick_take` (reference + both takes
   on one sheet, asked twice with the takes swapped; only a consistent answer counts). The inspector
   also answers `composition=yes/no`, `face=yes/no` (a creature render that is only a fist or a
-  back), `body=yes/no` (a floating head) and, for object cards, subject presence via an OPEN naming question (`_names_object`: "what is
+  back), `body=yes/no` (a floating head; measured 6/6 so for creatures a miss is a real defect that
+  re-rolls, `INSPECT_BODY=0` mutes) and, for object cards, subject presence via an OPEN naming question (`_names_object`: "what is
   the objects you see" must contain the literal noun, since yes/no is answered yes for a goblet
   labelled a signet ring; measured 4/5 with no false positives, so for ARTIFACTS a miss is a real
   defect that re-rolls, `INSPECT_SUBJECT=0` to mute) — the rest recorded as

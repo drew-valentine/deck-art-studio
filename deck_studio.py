@@ -2036,7 +2036,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     # --- H60: the style's WORLD features lead a land's scene in the render
     # prompt itself (early tokens), not only in the writer's hint. Seed A/B on a
     # cartoon deck: crystal shards appeared in both seeds; WORLD_LEAD=0 mutes.
-    if card_type in ('land', 'enchantment') and os.environ.get('WORLD_LEAD', '1') != '0':
+    if card_type in ('land', 'enchantment', 'instant', 'sorcery') and os.environ.get('WORLD_LEAD', '1') != '0':
         feats = _world_features(_meta.get('style_staging') or '')
         if feats:
             subject = f"{', '.join(feats[:3])}. {subject}"

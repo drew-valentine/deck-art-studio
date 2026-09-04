@@ -1926,9 +1926,12 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
         # a Krark render was a giant fist with no face: readable, on-style,
         # and not the card
         notes.append('face not visible')
-    if figure and c.get('body', True) is False and c.get('heads', 1) >= 1:
-        # Gisela rendered as a floating winged head over a city
-        notes.append('body not visible')
+    if figure and c.get('body', True) is False and c.get('heads', 1) >= 1 \
+            and os.environ.get('INSPECT_BODY', '1') != '0':
+        # a floating winged head over a city passed every other check; measured
+        # on six creature renders (the head fired, five whole figures passed),
+        # so this is a real DEFECT that re-rolls (INSPECT_BODY=0 mutes)
+        defects.append('body not visible')
     if notes and mode != 'off':
         if mode == 'enforce':
             defects.extend(notes)
