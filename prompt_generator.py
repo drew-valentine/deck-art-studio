@@ -225,6 +225,27 @@ def _describe_artifact(name, type_line, oracle, keywords, atmosphere):
 # noun to a concrete depiction so the art shows the actual thing, not a generic
 # glowing amulet. The trailing noun of the name is the object.
 _LITERAL_OBJECT_NOUNS = {
+    # everyday object nouns Magic names artifacts after (card-generic, not deck
+    # tables): the writer's Object line and the inspector's object check key on
+    # these. A "Fellwar Stone" with no entry rendered as a red loop.
+    'stone': 'a rough fist-sized stone', 'cloak': 'a hooded cloak', 'boots': 'a pair of boots',
+    'tome': 'a heavy bound book', 'book': 'a heavy bound book', 'scroll': 'a rolled parchment scroll',
+    'map': 'an unrolled map', 'cauldron': 'an iron cauldron', 'cup': 'a drinking cup',
+    'cup': 'a drinking cup', 'bottle': 'a stoppered bottle', 'vial': 'a small glass vial',
+    'flask': 'a glass flask', 'urn': 'a tall urn', 'chest': 'a wooden chest', 'box': 'a small box',
+    'cage': 'an iron cage', 'chain': 'a heavy chain', 'anchor': 'an iron anchor',
+    'compass': 'a brass compass', 'hourglass': 'an hourglass', 'clock': 'a clock',
+    'candle': 'a lit candle', 'torch': 'a burning torch', 'quill': 'a feather quill',
+    'bow': 'a wooden bow', 'arrow': 'an arrow', 'gem': 'a cut gemstone', 'jewel': 'a cut jewel',
+    'pendant': 'a pendant on a cord', 'necklace': 'a necklace', 'collar': 'a collar',
+    'bracelet': 'a bracelet', 'belt': 'a belt', 'gloves': 'a pair of gloves', 'armor': 'a suit of armour',
+    'armour': 'a suit of armour', 'plate': 'a plate of armour', 'saddle': 'a saddle',
+    'wheel': 'a wheel', 'cannon': 'a cannon', 'engine': 'an engine of brass and iron',
+    'machine': 'a machine of brass and iron', 'lamp': 'a lamp', 'drum': 'a drum', 'flute': 'a flute',
+    'harp': 'a harp', 'lute': 'a lute', 'egg': 'an egg', 'feather': 'a feather', 'seed': 'a seed',
+    'coffin': 'a coffin', 'throne': 'a throne', 'altar': 'a stone altar', 'anvil': 'an anvil',
+    'forge': 'a forge', 'hammer': 'a hammer', 'sphere': 'a sphere', 'cube': 'a cube', 'disc': 'a disc',
+    'lens': 'a glass lens', 'monocle': 'a monocle', 'spectacles': 'a pair of spectacles',
     'thumb': 'a severed goblin thumb kept as a lucky talisman, leathery and ringed',
     'hand': 'a preserved severed hand',
     'eye': 'a single disembodied eye',
