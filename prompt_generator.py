@@ -595,7 +595,7 @@ def hint_without_palette(block: str) -> str:
 
 
 _UNPAINTABLE_RE = re.compile(
-    r'(?:,\s*)?\b(?:a (?:grim |silent |quiet |living |stark |bitter )?(?:testament|reminder|symbol|beacon|echo|metaphor) (?:to|of|for)[^,.;]*'
+    r'(?:,\s*(?:its|his|her|their) [^,.;]*?)?(?:,\s*)?\b(?:a (?:grim |silent |quiet |living |stark |bitter )?(?:testament|reminder|symbol|beacon|echo|metaphor) (?:to|of|for)[^,.;]*'
     r'|as if [^,.;]*|seem(?:s|ing)? to [^,.;]*|symboli[sz]ing [^,.;]*'
     r'|(?:hinting|speaking|whispering) (?:at|of) [^,.;]*)', re.IGNORECASE)
 
@@ -638,7 +638,8 @@ _LIGHT_WORD_RE = re.compile(
     r'(?:warm|soft|golden|pale|dim|harsh|hard|rim|back|side|low)[- ]light\w*|lit by|lighting|'
     r'shadows?|halo|luminous|radiant|radiating|bathed in|sun ?sets?|sunset|sunrise|dawn|dusk|'
     r'burnished|glint(?:s|ing)?|cast(?:s|ing)? (?:a |an |the |long |deep |soft )?(?:glow|light|shadow|tone|beam)\w*|'
-    r'silhouetted against|backlit|candlelit|moonlit|sunlit|lamplight|candlelight|firelight|torchlight)\b', re.IGNORECASE)
+    r'silhouetted against|backlit|candlelit|moonlit|sunlit|lamplight|candlelight|firelight|torchlight|'
+    r'sunlight|sunshine|sparkl\w*|shin(?:e|es|ing|y)|glossy|brightly lit|(?:afternoon|morning|evening|midday) sun)\b', re.IGNORECASE)
 
 
 def _strip_light_words(text: str) -> str:
@@ -713,6 +714,24 @@ def _limit_scene_sentences(text: str, max_sentences: int = 3, max_words: int = 6
             head = head[:cut] if cut > len(head) // 2 else head
             out = head.rstrip(' ,;.') + '.'
     return out
+
+
+_PERSON_WORD_RE = re.compile(
+    r"\b(?:he|she|her|his|him|man|woman|men|women|king|queen|lord|lady|figures?|person|people|"
+    r"soldiers?|warriors?|priests?|priestess|scribes?|hands?|onlookers?|crowd|leaders?|child|children|"
+    r"servants?|guards?|travell?ers?|villagers?|monks?)\b", re.IGNORECASE)
+
+
+def _person_problems(draft: str, card: dict) -> str:
+    """Deterministic half of the scene check: an artifact or land scene must
+    not contain a person (the language-model checker passed "King Celestia
+    stands tall atop Command Tower, her imposing form" on a land). Words that
+    are part of the card's own name are allowed. Generic — word list only."""
+    if not draft or card.get('card_type') not in ('artifact', 'land'):
+        return ''
+    name_words = {w.lower() for w in re.findall(r"[A-Za-z]+", card.get('name') or '')}
+    hits = sorted({m.group(0).lower() for m in _PERSON_WORD_RE.finditer(draft)} - name_words)
+    return f"a person in an {card['card_type']} scene ({', '.join(hits)})" if hits else ''
 
 
 def _scene_problems(draft: str, card: dict, local_model: str) -> str:
@@ -847,7 +866,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     _no_character = card_type in ('artifact', 'enchantment', 'land', 'instant', 'sorcery')
     type_guidance = {
         'artifact': 'Depict the artifact OBJECT itself, filling the frame. If the card NAME literally names a physical thing or body part (e.g. "Krark\'s Thumb" = a thumb, "Sol Ring" = a ring, "Sword of X" = a sword), depict THAT literal object as the relic — do NOT substitute a generic glowing disc, amulet, or runed orb. In the FIRST sentence say what physical object it is in plain everyday words the image model knows (a signet is "a signet ring", a phylactery is "a small ornate box", a bauble is "a glass trinket"), then describe it. If the object is a BODY PART, the image model will draw the whole limb unless told otherwise: say it is ONE single part, detached, cut cleanly at its base, with no hand, arm or body anywhere, and present it as a kept relic — strung on a cord, mounted, or lying on a cloth. NOT a landscape, NOT a person.',
-        'enchantment': 'Depict the SCENE the enchantment represents — the people, creatures, place, ritual, or event drawn from its flavor and rules text (e.g. an army of warriors growing stronger under a hopeful dawn, a blessing settling over a battlefield). Do NOT default to abstract swirling energy, a glowing aura, or a magical vortex — give it concrete subject matter.',
+        'enchantment': 'The card name is an event, effect or blessing, never a character: do not write the name as a person who stands or acts. Depict the SCENE the enchantment represents — the people, creatures, place, ritual, or event drawn from its flavor and rules text (e.g. an army of warriors growing stronger under a hopeful dawn, a blessing settling over a battlefield). Do NOT default to abstract swirling energy, a glowing aura, or a magical vortex — give it concrete subject matter.',
         'instant': 'Depict the dramatic moment of the spell being cast — the action and energy itself.',
         'sorcery': 'Depict the spell being cast — the ritual, the gathering of power.',
         'land': 'Depict the LOCATION — terrain, architecture, or natural formation. NO central character.',
@@ -997,7 +1016,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         light_line = (f"This medium ({medium_word}) is FLAT: no rendered light at all — do not write "
                       "glow, beam, shaft, ray, shimmer, soft light, warm light, shadow or lighting. "
                       "Make the drama with pose, scale, silhouette, colour contrast and pattern; "
-                      "state the colour of things directly (a red cushion, a gold ring).\n")
+                      "state each thing's colour directly as flat local colour.\n")
     elif medium_word:
         if any(w in medium_word for w in ('paint', 'watercolor', 'watercolour', 'oil')):
             how = 'painted light: opaque fills, soft brushed glow, no photographic realism'
@@ -1053,8 +1072,10 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         + f"Direction: {guidance}\n"
         + figure_line
         + light_line
-        + "One subject. Then camera and scale, one strong light, one moment, one "
-          "atmospheric detail. Three sentences, about sixty words.\n"
+        + ("One subject. Then camera and scale, one strong colour contrast, one moment, "
+           "one atmospheric detail. Three sentences, about sixty words.\n" if is_flat else
+           "One subject. Then camera and scale, one strong light, one moment, one "
+           "atmospheric detail. Three sentences, about sixty words.\n")
         + (f"User steer (OVERRIDES the reference description wherever they "
            f"conflict): {steer.strip()}\n" if steer and steer.strip() else "")
         + f"Reference description: {base_desc}\n"
@@ -1100,27 +1121,39 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         out = _strip_example_leak(out, card)
         out = _strip_unpaintable(out)
         if is_flat and _LIGHT_WORD_RE.search(out):
-            # ask for the same scene without rendered light; strip sentences
-            # only if the rewrite still carries light words
+            # ask for the same scene without rendered light, naming the words
+            # that broke the rule (a second pass quotes the survivors); strip
+            # sentences only if the rewrites still carry light words, since a
+            # dropped sentence is what shrinks a scene to one line
             try:
-                relit = mlx_llm.chat(
-                    messages=[
-                        {'role': 'system', 'content': system_msg},
-                        {'role': 'user', 'content': user_msg},
-                        {'role': 'assistant', 'content': out},
-                        {'role': 'user', 'content':
-                            "This medium is flat and has no rendered light. Rewrite the same scene "
-                            "keeping every subject, pose, colour and setting, but remove every word "
-                            "about light, glow, beams, shadows or shine. Same length."},
-                    ],
-                    model=local_model, max_tokens=220, temperature=0.4)
-                relit = _limit_scene_sentences(_strip_chat_preamble(relit), 3)
-                if len(relit.split()) >= 5 and _opens_with_subject(relit, card):
-                    out = relit
-                    print(f"  [prompt_gen] flat-media rewrite for {name}")
+                for _attempt in range(2):
+                    bad = sorted({m.group(0).lower() for m in _LIGHT_WORD_RE.finditer(out)})
+                    relit = mlx_llm.chat(
+                        messages=[
+                            {'role': 'system', 'content': system_msg},
+                            {'role': 'user', 'content': user_msg},
+                            {'role': 'assistant', 'content': out},
+                            {'role': 'user', 'content':
+                                "This medium is flat and has no rendered light. Rewrite the same scene "
+                                "keeping every subject, pose, colour and setting, but remove every word "
+                                "about light, glow, beams, shadows or shine. Same length, same number of "
+                                f"sentences. These words must not appear: {', '.join(bad)}."},
+                        ],
+                        model=local_model, max_tokens=220, temperature=0.4)
+                    relit = _limit_scene_sentences(_strip_chat_preamble(relit), 3)
+                    if len(relit.split()) >= 5 and _opens_with_subject(relit, card):
+                        out = relit
+                        print(f"  [prompt_gen] flat-media rewrite for {name} (pass {_attempt + 1})")
+                    if not _LIGHT_WORD_RE.search(out):
+                        break
             except Exception as e:
                 print(f"  [prompt_gen] flat-media rewrite failed: {e}")
+            out = _strip_unpaintable(out)       # the rewrite reintroduces "a testament to"
+            before = out
             out = _strip_light_words(out)
+            if out != before:
+                print(f"  [prompt_gen] flat-media strip for {name}: "
+                      f"{len(before.split())} -> {len(out.split())} words")
         out = _fix_invented_cyclops(out, base_desc)
         out = _limit_scene_sentences(out, 3)
         out = _fix_dangling_tail(out)
@@ -1129,7 +1162,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         # ring, a bird for a faerie). A cheap checklist pass judges the draft
         # against the card; one lower-temperature re-roll if it fails.
         if os.environ.get('SCENE_CHECK', '1') != '0':
-            problems = _scene_problems(out, card, local_model)
+            problems = _person_problems(out, card) or _scene_problems(out, card, local_model)
             if problems:
                 print(f"  [prompt_gen] scene check for {name}: {problems}")
                 redo = mlx_llm.chat(

@@ -110,9 +110,11 @@ decks/<deck-slug>/
   (`_hide_edge_marks`) instead of re-rolling.
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
-  unpaintable-abstraction strip → (flat media: rewrite without light words, then sentence-level
-  light strip) → invented-cyclops fix → sentence/word cap (3 sentences / 64 words) → dangling-tail
-  fix → tidy → scene checklist re-roll → empty guard. Flat media = ink/cel/comic/papyrus/fresco/
+  unpaintable-abstraction strip → (flat media: rewrite without light words naming the offending
+  words, up to two passes, unpaintable strip again, then sentence-level light strip as last resort) → invented-cyclops fix → sentence/word cap (3 sentences / 64 words) → dangling-tail
+  fix → tidy → scene checklist re-roll (deterministic `_person_problems` word check for artifact/land
+  first, then the LLM checklist) → empty guard. Writer instructions never carry concrete example
+  nouns — the writer parrots them into scenes (`test_flat_media_line_has_no_example_nouns`). Flat media = ink/cel/comic/papyrus/fresco/
   hieroglyph/woodblock/pixel/flat opaque paint (`is_flat` in `generate_subject_with_ai`).
   Idiom phrases about writing (glyph/symbol/lettering/text/script) are filtered
   (`_IDIOM_WRITING_WORDS`).

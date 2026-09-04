@@ -586,3 +586,29 @@ def test_idiom_phrases_drop_writing_words():
     import vision_analyzer as va
     out = va._idiom_phrases('bold black outline, hieroglyphic symbols, striped patterns, calligraphic lettering, symmetrical composition', 'Ancient Egyptian Hieroglyphs', 40)
     assert out == ['bold black outline', 'striped patterns', 'symmetrical composition']
+
+
+def test_flat_media_line_has_no_example_nouns():
+    """The writer parrots concrete example nouns into scenes (a red cushion and
+    a gold ring turned up in two unrelated cards). The flat-media instruction
+    must describe the rule without naming props."""
+    import re
+    src = open('prompt_generator.py').read()
+    block = src[src.index('This medium ({medium_word}) is FLAT'):]
+    block = block[:block.index('elif medium_word')]
+    assert not re.search(r'\((?:a|an) [a-z]+ [a-z]+', block), block
+
+
+def test_person_check_on_land_and_artifact():
+    from prompt_generator import _person_problems, _strip_unpaintable, _LIGHT_WORD_RE
+    land = {'name': 'Command Tower', 'card_type': 'land'}
+    assert 'her' in _person_problems("King Celestia stands tall atop Command Tower, her imposing form.", land)
+    assert _person_problems("A tower of golden stone rises over a lotus moat.", land) == ''
+    # words from the card's own name are allowed
+    assert _person_problems("The king's hall stands empty.", {'name': "King's Hall", 'card_type': 'land'}) == ''
+    assert _person_problems("A scribe reads.", {'name': 'X', 'card_type': 'enchantment'}) == ''
+    # an absolute phrase around an abstraction goes with it, leaving no fragment
+    out = _strip_unpaintable("A gold ring rests on a cloth, its delicate curves a testament to ancient ingenuity.")
+    assert out == "A gold ring rests on a cloth."
+    for w in ('bright sunlight', 'sparkled', 'shining', 'late afternoon sun'):
+        assert _LIGHT_WORD_RE.search(w), w
