@@ -166,7 +166,7 @@
     - [ ] Fake signatures on artist-named ink decks — PUBLIC-MATERIALS issue (a real artist name was rendered); text/lead/crop mitigations failed; the inspection pass flags them
     - [x] Writer backstop miss: subject-less draft with no opening-retry log (diagnose with the new draft log) — root cause H31 (stripper fed the style block), fixed
     - [x] Flat-media grammar validated on Alela (4/4 flat, in register, dramatic)
-    - [ ] Full five-deck validation on the final grammar (needs a GPU window while Drew is off the UI)
+    - [x] Full five-deck validation on the final grammar — the overnight m9 run (2026-09-03/04): five decks, two takes per card plus end-of-batch inspection, every sheet judged at full size; findings shipped in commit e02b9c3
     - [x] Object-card style-block window 0-9 vs 0-12 — answered by H47 below: no difference
     - [x] H38 — final inspection hides an edge signature/stray mark on an otherwise sound render by setting the card's frame art_zoom to 1.10 and recompositing (undo in Frame Designer) instead of re-rolling; commits 0bae70c (code + test, 468 passing) and 9871a91 (docs)
     - [x] Verify H38 end to end in the browser on the active deck — the final inspection zoomed Sol Ring and Anointed Procession to 1.10 and recomposited; verified
