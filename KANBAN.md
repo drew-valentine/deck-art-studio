@@ -167,11 +167,21 @@
     - [x] Writer backstop miss: subject-less draft with no opening-retry log (diagnose with the new draft log) — root cause H31 (stripper fed the style block), fixed
     - [x] Flat-media grammar validated on Alela (4/4 flat, in register, dramatic)
     - [ ] Full five-deck validation on the final grammar (needs a GPU window while Drew is off the UI)
-    - [ ] Object-card style-block window 0-9 vs 0-12 (queued)
+    - [x] Object-card style-block window 0-9 vs 0-12 — answered by H47 below: no difference
     - [x] H38 — final inspection hides an edge signature/stray mark on an otherwise sound render by setting the card's frame art_zoom to 1.10 and recompositing (undo in Frame Designer) instead of re-rolling; commits 0bae70c (code + test, 468 passing) and 9871a91 (docs)
     - [x] Verify H38 end to end in the browser on the active deck — the final inspection zoomed Sol Ring and Anointed Procession to 1.10 and recomposited; verified
     - [x] H39 — scene-writer fixes, commit 3b946ac: the flat-media instruction's example nouns ("a red cushion, a gold ring") were being parroted into unrelated cards and are gone (guarded by test); the light-word rewrite names the offending words and retries before any sentence is dropped, so flat-media prompts keep two full sentences; a deterministic person-word check runs on artifact/land scenes before the LLM checklist; enchantment names never become characters. Verified on the Egyptian demo deck: Command Tower, Anointed Procession and Sol Ring all render flat and on-style, Sol Ring no longer drifts to smooth digital paint.
-    - [ ] Cross-deck validation of the H38/H39 behaviour still needs a GPU window
+    - [x] Cross-deck validation of the H38/H39 behaviour — five-deck baseline run overnight 2026-09-03/04 with two takes per card plus end-of-batch inspection; every sheet judged at full size. Findings below (H41-H48) shipped in commit e02b9c3.
+    - [x] H41 — two takes that tie on defects are decided by the vision model on style: the reference and both takes go on one sheet, and it is asked twice with the takes swapped. Verified live.
+    - [x] H43 — composition / face / subject-present answers are recorded as `inspection.advisory` (`INSPECT_COMPOSITION=advisory|enforce|off`). Measured on 22 cards: 0 fires, 0 false positives. Stays advisory.
+    - [x] H44/H48 — lands and enchantments get a World line in the writer's user message, built from the style's staging; the same rule in the system message did nothing. The Temur land went from an Earth forest to a crystal-arch lagoon. The relic-presentation list is out of the artifact guidance (it was parroted as a floating cord), and handless creatures are no longer flagged for hands.
+    - [x] H45 — creature Body line: the first subtype names what the body is. A Bat God now renders as a bat.
+    - [x] H46 — coloured flat media: a scene naming no colour word gets one rewrite. The picture-book deck's cards went from bare line art to coloured.
+    - [x] Backstops — markdown markers, writer notes, headings and lettering clauses are stripped, and every strip runs once more after the last model call.
+    - [x] H42 rejected — LAB palette transfer only greys renders.
+    - [x] H47 rejected — object style-block window 0-9 vs 0-12 makes no difference.
+    - [ ] H51 — idiom phrases on object cards A/B (in flight)
+    - [ ] H52 — the analyst's Medium phrase after the bucket anchor, A/B on Sol Ring (in flight)
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
