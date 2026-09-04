@@ -137,6 +137,13 @@
     - Krark's Thumb: "a detached thumb" renders a whole hand; the artifact guidance now says a body-part object is one part, detached at its base, no hand, presented as a kept relic (strung, mounted, on a cloth). Fixed-seed test: digit / talisman phrasings work, jar grew a fist. (143762d)
     - Inspector refined to a count protocol with edge-strip confirmation; end-to-end loop verified on a real batch (Krark flagged → auto re-roll → final pass). Writer drafts are now logged before backstops (one subject-less draft slipped through with no retry logged — open).
     - Judging procedure: count limbs at full resolution before any pass; name the face shown for two-faced cards.
+  - Progress, 2026-09-03 (late night) — keep going:
+    - H31 root cause found: the franchise-sentence stripper was fed the whole style block on unnamed/artist decks, so every block word ("smoke", "bold", "deep", "hand") became a forbidden cast token and scene sentences containing them were deleted (Krark's coins-only prompt, an empty Arcane Signet prompt). Fixed: tokens only from a source the recalled kind/table says is a franchise. Verified on four Heads-I-Win prompts.
+    - H32: light described in the medium's terms — minor gain. H33 shipped: two takes pick their own winner by inspection. H34 shipped: unpaintable abstractions ("a testament to", "as if") cut from prompts.
+    - Writer hygiene: token budget 220 for three sentences, dangling-tail fix ("...a warm light that."), invented single-eye fix (a faerie had gained "a single, piercing emerald eye").
+    - H36 (flat media, no light vocabulary — drama from pose/scale/silhouette/colour/pattern; rewrite-then-strip of light words): Alela went from 1/4 papyrus (cinematic light pulled it to smooth digital) to 4/4 flat and in register with the drama intact.
+    - H37: writing words (glyph/symbol/lettering/text/script) filtered from the idiom; needs per-deck re-distill (Alela running).
+    - Coexistence: experiments hijacked Drew's live UI deck twice; scripts now run only on his active deck and abort on change. Cross-deck validation (m9) and the object-window test wait for a GPU window.
   - Scope:
     - [x] Wire `Flux1Redux` into `flux_worker` with a token-pooling hook
     - [x] Pass each deck's inspiration images as references
@@ -157,7 +164,10 @@
     - [x] Inspection trial catches the three-armed Krark / signatures — count protocol + edge-strip confirmation: 6/16 flagged, all true positives (Krark hands, Keiga doubled head, four signatures/text); 10 clean cards silent
     - [x] Scene grammar (wow) validated on five decks at fixed seeds
     - [ ] Fake signatures on artist-named ink decks — PUBLIC-MATERIALS issue (a real artist name was rendered); text/lead/crop mitigations failed; the inspection pass flags them
-    - [ ] Writer backstop miss: subject-less draft with no opening-retry log (diagnose with the new draft log)
+    - [x] Writer backstop miss: subject-less draft with no opening-retry log (diagnose with the new draft log) — root cause H31 (stripper fed the style block), fixed
+    - [x] Flat-media grammar validated on Alela (4/4 flat, in register, dramatic)
+    - [ ] Full five-deck validation on the final grammar (needs a GPU window while Drew is off the UI)
+    - [ ] Object-card style-block window 0-9 vs 0-12 (queued)
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
