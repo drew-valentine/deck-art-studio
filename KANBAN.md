@@ -200,7 +200,10 @@
     - [x] m16 — cartoon deck cards 19-36 (16 cards), two takes + inspection: zero final defects, about 14 of 16 in the reference's world (crystal-strewn acid-yellow scenes, wobbly-eyed dragons); misses: a stone artifact rendered as a red loop, lettering on one building. Sheet m16-temur-roar.jpg. Six-slice tally: about 104 of 121 cards on-style with sensible composition.
     - [x] 3dbe7ab — a leaked "Bold framing:" label is stripped.
     - [x] 87941cd — the object check accepts the gloss's own nouns as synonyms (a talisman drawn as a medallion passes); check in flight.
-    - [ ] m17 — Egyptian demo deck, all six cards, two takes + inspection (queued)
+    - [x] m17 — Egyptian demo deck, all six cards, two takes + inspection: 6 of 6 in the papyrus register with zero final defects (the sun-ring artifact remains the smoothest object but sits framed by hieroglyph columns). Sheet m17-demo-alela.jpg.
+    - [x] d637de3 — literal-object vocabulary widened to common artifact nouns (stone, cloak, boots, tome, …); a stone artifact with no entry had rendered as a red loop.
+    - [x] 3a34ff2 — object-check synonyms now come from a memoised model list (medallion, amulet, pendant) rather than the descriptive gloss; re-check in flight.
+    - [ ] h64 — stone artifact re-render with the widened vocabulary (in flight)
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
