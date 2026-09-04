@@ -721,3 +721,30 @@ def test_object_line_uses_a_memoised_gloss(monkeypatch):
 def test_dangling_verb_tail_is_cut():
     from prompt_generator import _fix_dangling_tail
     assert _fix_dangling_tail("The ring's filigree, its patterns dancing in the stillness, is.") == "The ring's filigree, its patterns dancing in the stillness."
+
+
+def test_light_strip_cuts_phrases_when_every_sentence_has_light():
+    from prompt_generator import _strip_light_words
+    out = _strip_light_words("Karazikar, a Beholder, stands tall with its ivory skin glistening in the desert sun, its forty eyes fixed on the horizon.")
+    assert 'glisten' not in out and out.startswith('Karazikar, a Beholder, stands tall') and 'forty eyes' in out
+
+
+def test_static_opening_detection():
+    from prompt_generator import _is_static_opening
+    assert _is_static_opening("Loran, a Human Artificer, stands tall in worn leather. Dust blows.")
+    assert not _is_static_opening("Krark lunges forward, his hand grasping a staff. Dust blows.")
+    assert not _is_static_opening("Keiga rears up over the waves, wings spread wide.")
+    assert not _is_static_opening("")
+
+
+def test_invented_names_are_stripped():
+    from prompt_generator import _strip_invented_names, _dictionary as _dict_words
+    if not _dict_words():
+        return
+    card = {'name': 'Beast Within', 'type_line': 'Instant'}
+    t = "Beast Within, a raging beast, bursts from a glade, its body tearing through the underbrush, as Benzir's voice echoes across the valley. The beast roars."
+    out = _strip_invented_names(t, card)
+    assert 'Benzir' not in out and out.startswith('Beast Within, a raging beast, bursts from a glade') and 'The beast roars.' in out
+    # real names from the card survive; dictionary capitals survive
+    t2 = "Keiga, the Tide Star, a Dragon Spirit, soars over the Pacific swell."
+    assert _strip_invented_names(t2, {'name': 'Keiga, the Tide Star', 'type_line': 'Legendary Creature — Dragon Spirit'}) == t2

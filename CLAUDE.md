@@ -120,7 +120,7 @@ decks/<deck-slug>/
   Ties on defects between takes are decided by `vision_analyzer.pick_take` (reference + both takes
   on one sheet, asked twice with the takes swapped; only a consistent answer counts). The inspector
   also answers `composition=yes/no`, `face=yes/no` (a creature render that is only a fist or a
-  back) and, for object cards, subject presence via an OPEN naming question (`_names_object`: "what is
+  back), `body=yes/no` (a floating head) and, for object cards, subject presence via an OPEN naming question (`_names_object`: "what is
   the objects you see" must contain the literal noun, since yes/no is answered yes for a goblet
   labelled a signet ring; measured 4/5 with no false positives, so for ARTIFACTS a miss is a real
   defect that re-rolls, `INSPECT_SUBJECT=0` to mute) — the rest recorded as
@@ -129,10 +129,15 @@ decks/<deck-slug>/
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
   unpaintable-abstraction strip → (flat media: rewrite without light words naming the offending
-  words, up to two passes, unpaintable strip again, then sentence-level light strip as last resort) → colour rewrite when a coloured flat style's scene names no colour word (`_names_a_colour`,
-  `_is_coloured_style`; bare line art otherwise) → invented-cyclops fix → sentence/word cap (3 sentences / 64 words) → dangling-tail
+  words, up to two passes, unpaintable strip again, then sentence-level light strip as last resort;
+  when every sentence carries light the phrases are cut from the first sentence instead) → moment rewrite when a creature's first sentence is a static posture (`_is_static_opening`,
+  MOMENT_REWRITE=0 mutes) → colour rewrite when a coloured flat style's SUBJECT sentence names no
+  colour word (`_names_a_colour`, `_is_coloured_style`; bare line art otherwise), followed by one
+  more light-word naming pass before any sentence strip → invented-cyclops fix → sentence/word cap (3 sentences / 64 words) → dangling-tail
   fix → tidy → scene checklist re-roll (deterministic `_person_problems` word check for artifact/land
-  first, then the LLM checklist) → final cleanup (unpaintable / cyclops / light strip / dangling / tidy run once more, because every
+  first, then the LLM checklist) → final cleanup (unpaintable / invented proper names (`_strip_invented_names`: a
+  capitalised non-dictionary word not in the card's name, type or flavor drops its clause) / cyclops /
+  light strip / dangling / tidy run once more, because every
   rewrite path can reintroduce what an earlier strip removed; `_tidy_prompt` also drops markdown
   markers, writer notes, sentence-initial labels ("Color contrast:"), parroted instruction phrases
   (`_INSTRUCTION_ECHO_RE`: "centered and large, with nothing cropped") and lettering clauses — a quoted

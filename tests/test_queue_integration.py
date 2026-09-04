@@ -566,3 +566,14 @@ def test_subject_missing_reroll_leads_with_the_literal_object(monkeypatch, tmp_p
     job = Job(id='j', type=INSPECT, deck_id='d', card_name='', params={'final': False, 'card_names': ['Arcane Signet']})
     ds._execute_inspect_job(job, ctx)
     assert queued == [('Arcane Signet', 'A signet ring, plain and unmistakable. A silver ring lies on a desk.')]
+
+
+def test_floating_head_is_a_body_advisory(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    reply = 'heads=1; arms=0; hands=0; copies=1; text=no; signature=no; subject=yes; hands_ok=yes; composition=yes; face=yes; body=no'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: reply))
+    monkeypatch.delenv('INSPECT_COMPOSITION', raising=False)
+    adv = {}
+    assert va.inspect_render('x.png', 'Gisela', 'creature', 'v', advisory=adv) == []
+    assert adv['composition'] == ['body not visible']

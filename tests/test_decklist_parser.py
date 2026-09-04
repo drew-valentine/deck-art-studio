@@ -752,6 +752,6 @@ def test_strip_light_words_drops_whole_sentences_only():
     out = _strip_light_words("A golden ring rests on a crimson cushion, its gemstone polished to a warm sheen. Bold stripes cross the cushion.")
     assert out == "Bold stripes cross the cushion."
     assert _strip_light_words("Keiga rises from the sea, spray flying.") == "Keiga rises from the sea, spray flying."
-    # the only sentence carrying light words is kept rather than emptying the prompt
-    assert _strip_light_words("A ring gleams.") == "A ring gleams."
+    # the only sentence carrying light words loses the light phrase, not the sentence
+    assert _strip_light_words("A ring gleams.") == "A ring."
     assert _tidy_prompt('The ring\'s ornate details.". Next.') == "The ring's ornate details. Next."

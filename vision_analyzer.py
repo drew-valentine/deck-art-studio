@@ -1837,7 +1837,7 @@ def _parse_counts(text: str) -> dict:
         m = _re.search(key + r'\s*[=:]\s*(\d+)', text, _re.IGNORECASE)
         if m:
             out[key] = int(m.group(1))
-    for key in ('text', 'signature', 'subject', 'hands_ok', 'composition', 'face'):
+    for key in ('text', 'signature', 'subject', 'hands_ok', 'composition', 'face', 'body'):
         m = _re.search(key + r'\s*[=:]\s*(yes|no)', text, _re.IGNORECASE)
         if m:
             out[key] = m.group(1).lower() == 'yes'
@@ -1875,8 +1875,10 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
             "composition=<yes/no: the picture reads as ONE clear scene with the named "
             "subject as the obvious focus, not a confusing jumble>; "
             "face=<yes/no: the main figure's face is visible, 'no' if there is no figure "
-            "or the picture is only a hand, a limb or a back>",
-            model=vision_model, max_tokens=110, temperature=0.0)
+            "or the picture is only a hand, a limb or a back>; "
+            "body=<yes/no: the main figure's body — torso and at least some limbs — is "
+            "visible, 'no' if it is only a floating head or face>",
+            model=vision_model, max_tokens=120, temperature=0.0)
     except Exception as e:
         print(f"  [inspect] vision read failed: {e}")
         return None
@@ -1924,6 +1926,9 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
         # a Krark render was a giant fist with no face: readable, on-style,
         # and not the card
         notes.append('face not visible')
+    if figure and c.get('body', True) is False and c.get('heads', 1) >= 1:
+        # Gisela rendered as a floating winged head over a city
+        notes.append('body not visible')
     if notes and mode != 'off':
         if mode == 'enforce':
             defects.extend(notes)

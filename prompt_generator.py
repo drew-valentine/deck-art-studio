@@ -656,7 +656,15 @@ def _strip_light_words(text: str) -> str:
         return text
     sentences = [x.strip() for x in re.split(r'(?<=[.!?])\s+', text.strip()) if x.strip()]
     kept = [x for x in sentences if not _LIGHT_WORD_RE.search(x)]
-    return ' '.join(kept) if kept else sentences[0]
+    if kept:
+        return ' '.join(kept)
+    # every sentence carries light: cut the light phrases out of the first
+    # rather than keep it whole ("its ivory skin glistening in the desert sun")
+    first = _LIGHT_WORD_RE.sub('', sentences[0])
+    first = re.sub(r'\b(?:in|under|by|with|of|from|against)\s+(?:the |a |an )?(?=[,.;])', '', first)
+    first = re.sub(r'\s*,\s*,', ',', first)
+    first = re.sub(r'\s+([.!?,;])', r'\1', first)
+    return re.sub(r'\s{2,}', ' ', first).strip()
 
 
 _LETTERING_RE = re.compile(
@@ -674,7 +682,7 @@ _INSTRUCTION_ECHO_RE = re.compile(
     r"(?:,\s*)?\b(?:(?:with )?nothing cropped|cent(?:er|re)?e?d and large|fill(?:s|ing)? (?:most of )?the frame|"
     r"(?:the whole )?face clearly visible|never a close-up[^,.;]*|(?:a )?wide establishing view[^,.;]*|"
     r"(?:with )?a clear focal landmark|(?:as )?the (?:obvious |single )?focal (?:point|subject)|"
-    r"(?:remains|stays|is) the focal point)\b", re.IGNORECASE)
+    r"(?:remains|stays|is) the focal point|cent(?:re|er) stage(?: as the focal subject)?)\b", re.IGNORECASE)
 
 
 _META_LINE_RE = re.compile(
@@ -1241,6 +1249,33 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             if out != before:
                 print(f"  [prompt_gen] flat-media strip for {name}: "
                       f"{len(before.split())} -> {len(out.split())} words")
+        if card_type in ('creature', 'planeswalker') and _is_static_opening(out) \
+                and os.environ.get('MOMENT_REWRITE', '1') != '0':
+            # H61: "stands tall / rests serenely" openings are the writer's
+            # default and read as plain; the grammar asks for a MOMENT. One
+            # rewrite asks for a decisive action in the first sentence.
+            try:
+                act = mlx_llm.chat(
+                    messages=[
+                        {'role': 'system', 'content': system_msg},
+                        {'role': 'user', 'content': user_msg},
+                        {'role': 'assistant', 'content': out},
+                        {'role': 'user', 'content':
+                            "The subject just stands there. Rewrite the same scene, same length, "
+                            "same colours and setting, but catch the subject mid-action at a "
+                            "decisive moment — a verb of motion, force or intent in the first "
+                            "sentence (lunges, rears, hurls, tears, wheels, crouches to spring). "
+                            "Keep the face visible. No light words."},
+                    ],
+                    model=local_model, max_tokens=220, temperature=0.6)
+                act = _limit_scene_sentences(_strip_chat_preamble(act), 3)
+                if len(act.split()) >= 12 and _opens_with_subject(act, card) and not _is_static_opening(act):
+                    out = _strip_unpaintable(act)
+                    if is_flat:
+                        out = _strip_light_words(out)
+                    print(f"  [prompt_gen] moment rewrite for {name}")
+            except Exception as e:
+                print(f"  [prompt_gen] moment rewrite failed: {e}")
         if is_flat and _is_coloured_style(style_hint) and not _names_a_colour(
                 re.split(r'(?<=[.!?])\s+', out.strip())[0] if out.strip() else ''):
             # the SUBJECT sentence must carry a colour: a figure with only its
@@ -1263,7 +1298,25 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                 recol = _limit_scene_sentences(_strip_chat_preamble(recol), 3)
                 if len(recol.split()) >= 5 and _opens_with_subject(recol, card) and _names_a_colour(
                         re.split(r'(?<=[.!?])\s+', recol.strip())[0]):
-                    out = _strip_light_words(_strip_unpaintable(recol)) if is_flat else recol
+                    out = _strip_unpaintable(recol)
+                    if is_flat and _LIGHT_WORD_RE.search(out):
+                        # ask once more, naming the light words, before any
+                        # sentence is dropped — dropping shrank prompts to 14 words
+                        bad = sorted({m.group(0).lower() for m in _LIGHT_WORD_RE.finditer(out)})
+                        relit2 = mlx_llm.chat(
+                            messages=[
+                                {'role': 'system', 'content': system_msg},
+                                {'role': 'user', 'content': user_msg},
+                                {'role': 'assistant', 'content': out},
+                                {'role': 'user', 'content':
+                                    "Rewrite the same scene, same length and colours, with these words "
+                                    f"removed and nothing about light or shine: {', '.join(bad)}."},
+                            ],
+                            model=local_model, max_tokens=220, temperature=0.4)
+                        relit2 = _limit_scene_sentences(_strip_chat_preamble(relit2), 3)
+                        if len(relit2.split()) >= 5 and _opens_with_subject(relit2, card):
+                            out = _strip_unpaintable(relit2)
+                        out = _strip_light_words(out)
                     print(f"  [prompt_gen] colour rewrite for {name}")
             except Exception as e:
                 print(f"  [prompt_gen] colour rewrite failed: {e}")
@@ -1297,6 +1350,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         # final cleanup: every rewrite path above (flat, colour, scene-check
         # redo) can reintroduce what an earlier strip removed
         out = _strip_unpaintable(out)
+        out = _strip_invented_names(out, card, safe_flavor)
         out = _fix_invented_cyclops(out, base_desc)
         if is_flat:
             out = _strip_light_words(out)
@@ -1451,7 +1505,9 @@ def _object_gloss(literal: str, local_model: str) -> str:
                        "No name, no colour, no sentence, just the description."}],
             model=local_model, max_tokens=30, temperature=0.0)
         gloss = _tidy_prompt(_strip_chat_preamble(reply or '')).strip().rstrip('.')
+        gloss = re.split(r'[.\n]', gloss)[0].strip()          # first clause only
         if len(gloss.split()) > 16 or len(gloss.split()) < 3:
+            print(f"  [prompt_gen] object gloss rejected for {key!r}: {reply!r}")
             gloss = ''
     except Exception as e:
         print(f"  [prompt_gen] object gloss failed: {e}")
@@ -1469,6 +1525,61 @@ def _object_line(card: dict, local_model: str) -> str:
     gloss = _object_gloss(lit, local_model)
     return (f"Object (REQUIRED): {lit}" + (f" — {gloss}" if gloss else '') +
             ". The first sentence says what it is in these plain words, shown whole.\n")
+
+
+_STATIC_VERB_RE = re.compile(
+    r"\b(?:stands?|standing|rests?|resting|sits?|sitting|lies|lying|poses?|posing|towers?|looms?|"
+    r"waits?|gazes?|stares?|is (?:seen|shown|depicted|pictured)|floats?|hovers?|perche[sd])\b", re.IGNORECASE)
+_ACTION_VERB_RE = re.compile(
+    r"\b(?:lunge|leap|charge|hurl|swing|strike|tear|rear|wheel|dive|spring|crouch|slash|roar|"
+    r"snarl|grip|clutch|drag|haul|burst|shatter|smash|claw|bite|snap|pounce|sprint|dash|stride|"
+    r"march|storm|surge|plunge|stab|thrust|fling|cast|conjure|summon|raise|lift|draw|unfurl|"
+    r"spread|beat|flap|soar|swoop|crash|scream|howl|bellow|grasp|seize|shove|kick|vault)\w*\b",
+    re.IGNORECASE)
+
+
+def _is_static_opening(text: str) -> bool:
+    """True when the FIRST sentence has a posture verb and no action verb."""
+    if not text:
+        return False
+    first = re.split(r'(?<=[.!?])\s+', text.strip())[0]
+    return bool(_STATIC_VERB_RE.search(first)) and not _ACTION_VERB_RE.search(first)
+
+
+def _strip_invented_names(text: str, card: dict, flavor: str = '') -> str:
+    """Drop the clause around an invented proper name ("as Benzir's voice
+    echoes") — a capitalised word that is neither a dictionary word nor part
+    of the card's name, type line or flavor text. The image model turns a
+    stray name into a stray person."""
+    if not text:
+        return text
+    words = _dictionary()
+    if not words:
+        return text
+    known = set(w.lower() for w in re.findall(r"[A-Za-z]+", ' '.join([
+        card.get('name') or '', card.get('type_line') or '', flavor or ''])))
+    out_sents = []
+    for sent in re.split(r'(?<=[.!?])\s+', text.strip()):
+        clauses = re.split(r'(,\s*)', sent)
+        kept = []
+        for c in clauses:
+            bad = False
+            for m in re.finditer(r"\b([A-Z][a-z]{3,})(?:'s)?\b", c):
+                w = m.group(1).lower()
+                if w in known or w in words or w.rstrip('s') in words:
+                    continue
+                bad = True
+                break
+            if not bad:
+                kept.append(c)
+        sent2 = ''.join(kept)
+        sent2 = re.sub(r'(?:,\s*)+$', '', sent2).strip()
+        sent2 = re.sub(r'^(?:,\s*)+', '', sent2)
+        if sent2 and not re.search(r'[.!?]$', sent2):
+            sent2 += '.'
+        if sent2 and len(sent2.split()) >= 2:
+            out_sents.append(sent2)
+    return ' '.join(out_sents)
 
 
 def _camera_line(card_type: str) -> str:
