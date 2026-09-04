@@ -197,7 +197,10 @@
     - [x] m14 — comic-ink deck, 17-card slice, two takes + inspection: 17 of 17 on-style with zero final defects, one consistent hand (bold ink, teal/red/pink palette, swirling smoke); both one-eyed legends rendered correctly one-eyed; several lands WOW-level. Sheet m14-heads-i-win-tails-you-lose-2.jpg. Running slice tally: m11 21/24, m12 15/17, m13 18/18, m14 17/17.
     - [x] m15 — fine-line deck cards 25-48 (22 cards, enchantments and artifacts), two takes + inspection: about 19 of 22 on-style with the same hand throughout; all three ring artifacts rendered as rings; two talismans rendered as engraved medallions were mis-flagged by the object check (literal noun not in the vision model's list) — synonym fix in progress; one enchantment has mid-image shop lettering (known edge-only text-check gap). Sheet m15-queen-marchesa-b3-v2.jpg.
     - [x] c5b956f — the flat-media light strip can no longer erase the subject sentence (a 74-word scene had shrunk to one line); sentences are dropped only when the subject survives and 60% of words remain, otherwise light clauses are cut.
-    - [ ] m16 — cartoon deck cards 19-36 slice (queued)
+    - [x] m16 — cartoon deck cards 19-36 (16 cards), two takes + inspection: zero final defects, about 14 of 16 in the reference's world (crystal-strewn acid-yellow scenes, wobbly-eyed dragons); misses: a stone artifact rendered as a red loop, lettering on one building. Sheet m16-temur-roar.jpg. Six-slice tally: about 104 of 121 cards on-style with sensible composition.
+    - [x] 3dbe7ab — a leaked "Bold framing:" label is stripped.
+    - [x] 87941cd — the object check accepts the gloss's own nouns as synonyms (a talisman drawn as a medallion passes); check in flight.
+    - [ ] m17 — Egyptian demo deck, all six cards, two takes + inspection (queued)
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
