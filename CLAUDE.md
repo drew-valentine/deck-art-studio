@@ -105,7 +105,9 @@ decks/<deck-slug>/
   VLM defect checklist over the batch's renders, verdict in `.meta.json['inspection']`, one
   automatic re-roll then a final record-only pass; `POST /api/decks/<id>/inspect`; RENDER_INSPECT=0.
   Inspector = count protocol (heads/arms/hands/copies + yes/no) with text/signature confirmed on the
-  top/bottom strips; with `takes>1` the final pass keeps the cleaner take (`_pick_cleaner_take`).
+  top/bottom strips; with `takes>1` the final pass keeps the cleaner take (`_pick_cleaner_take`);
+  a final-pass signature/text-only verdict sets `frame_overrides.art_zoom=1.10` and recomposites
+  (`_hide_edge_marks`) instead of re-rolling.
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
   unpaintable-abstraction strip → (flat media: rewrite without light words, then sentence-level
