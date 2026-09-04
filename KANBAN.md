@@ -191,7 +191,10 @@
     - [x] H60 — world features from the staging recall lead a land's render prompt. A seed A/B on the cartoon deck put crystal shards into both seeds where the base pair was a generic lake. On by default, person nouns filtered, WORLD_LEAD=0 mutes. Commit 328941a.
     - [x] m11 — fine-line ink deck, 24-card slice, two takes + inspection: about 21 of 24 on-style with sensible composition, eight or more WOW-level. Three final "text" verdicts (signatures, handled by the art zoom); one floating-head miss led to a new body-visible advisory (measurement queued).
     - [ ] m12 — cartoon deck, 18-card slice, two takes + inspection, in flight
-    - [ ] H61 — moment rewrite for creatures whose first sentence is a static posture (in flight on the m12 slice)
+    - [x] H61 — moment rewrite: a creature whose first sentence is a static posture gets one rewrite asking for a decisive action; on the cartoon deck's 18-card slice it correctly stayed idle because every creature opening already moved (MOMENT_REWRITE=0 mutes). Same commit: prompt erosion on flat media fixed (one more light-word naming pass before any sentence strip; single-sentence prompts lose the light phrase, not the sentence — the 18-card slice has no prompt under 28 words), a body-visible advisory for floating-head renders, invented proper names stripped by a dictionary check, one more parroted phrase stripped. Commit 006bde6.
+    - [ ] H62 — body-visible advisory measurement on the fine-line deck (in flight)
+    - [ ] m13 — picture-book deck 18-card slice (queued)
+    - [ ] m14 — comic-ink deck 18-card slice (queued)
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
