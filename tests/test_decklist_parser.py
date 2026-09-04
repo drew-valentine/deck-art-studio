@@ -718,10 +718,13 @@ def test_writer_describes_light_in_the_medium(monkeypatch):
     card = {'name': 'Sol Ring', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'}
     pg.generate_subject_with_ai(card, None, backend='local', local_model='m',
                                 style_hint='in the style of X — painted illustration, flat opaque paint, hand-painted texture')
-    assert 'Light in this medium (painted illustration)' in seen['user'] and 'painted light' in seen['user']
+    assert 'is FLAT: no rendered light' in seen['user']          # flat opaque paint counts as flat
     pg.generate_subject_with_ai(card, None, backend='local', local_model='m',
                                 style_hint='fine-line ink illustration, loose expressive hand-drawn linework')
-    assert 'hatched or solid-black shadows' in seen['user']
+    assert 'is FLAT: no rendered light' in seen['user']
+    pg.generate_subject_with_ai(card, None, backend='local', local_model='m',
+                                style_hint='oil painting, visible brushstrokes, painterly texture')
+    assert 'painted light' in seen['user']
     pg.generate_subject_with_ai(card, None, backend='local', local_model='m', style_hint='')
     assert 'Light in this medium' not in seen['user']
 

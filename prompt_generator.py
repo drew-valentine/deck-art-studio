@@ -854,9 +854,10 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         "sentences of about sixty words total: (1) the subject, opened as the OPENING "
         "RULE says, caught at a MOMENT — mid-action, or the instant before something "
         "happens; (2) a deliberate CAMERA and SCALE — a low angle so it fills the frame, "
-        "an extreme close-up, or the subject tiny against something vast — plus ONE "
-        "strong LIGHT with a named quality (rim-lit from behind, a single shaft through "
-        "dust, hard side light, glow from below); (3) ONE atmospheric detail that "
+        "an extreme close-up, or the subject tiny against something vast — plus, if the "
+        "medium renders light at all, ONE strong LIGHT with a named quality (rim-lit from "
+        "behind, a single shaft through dust, hard side light, glow from below); (3) ONE "
+        "atmospheric detail that "
         "carries the setting (spray, embers, drifting dust, rain on the lens) and "
         "nothing else. PAINTABLE ONLY: every clause must be something a painter can "
         "put on the canvas — no 'a testament to', 'a reminder of', 'symbolizing', "
@@ -952,20 +953,27 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     # smooth digital). Light is described the way THIS medium renders it.
     light_line = ''
     medium_word = (style_hint.split(' — ')[-1].split(',')[0].strip().lower() if style_hint else '')
-    if medium_word:
-        if any(w in medium_word for w in ('ink', 'line', 'drawn', 'pen', 'woodblock', 'etching')):
-            how = 'flat fills, hatched or solid-black shadows, and bare paper for highlights'
-        elif any(w in medium_word for w in ('cel', 'animation', 'cartoon', 'comic')):
-            how = 'hard-edged cel shadows, flat colour, and simple flat highlights'
-        elif any(w in medium_word for w in ('paint', 'papyrus', 'fresco', 'watercolor', 'watercolour', 'oil')):
+    hint_low = (style_hint or '').lower()
+    # FLAT media (ink, cel, comic, papyrus/fresco/hieroglyph, woodblock, pixel,
+    # flat opaque paint) have no rendered light: glow, beams, shafts and soft
+    # shadows pull the image model toward smooth digital painting. On these
+    # media drama comes from pose, scale, colour contrast and pattern, and the
+    # word "light" is banned from the scene entirely.
+    flat_words = ('ink', 'line', 'drawn', 'pen', 'woodblock', 'etching', 'cel', 'animation',
+                  'cartoon', 'comic', 'papyrus', 'fresco', 'hieroglyph', 'pixel', 'flat')
+    is_flat = any(w in medium_word for w in flat_words) or 'flat opaque' in hint_low or 'flat cel' in hint_low
+    if medium_word and is_flat:
+        light_line = (f"This medium ({medium_word}) is FLAT: no rendered light at all — do not write "
+                      "glow, beam, shaft, ray, shimmer, soft light, warm light, shadow or lighting. "
+                      "Make the drama with pose, scale, silhouette, colour contrast and pattern; "
+                      "state the colour of things directly (a red cushion, a gold ring).\n")
+    elif medium_word:
+        if any(w in medium_word for w in ('paint', 'watercolor', 'watercolour', 'oil')):
             how = 'painted light: opaque fills, soft brushed glow, no photographic realism'
-        elif any(w in medium_word for w in ('pixel',)):
-            how = 'dithered pixel shading and flat colour bands'
         else:
-            how = ''
-        if how:
-            light_line = (f"Light in this medium ({medium_word}): describe light and shadow as {how}; "
-                          "never lens, bokeh, volumetric, HDR or photographic terms.\n")
+            how = 'one strong light with a named quality'
+        light_line = (f"Light in this medium ({medium_word}): describe light and shadow as {how}; "
+                      "never lens, bokeh, volumetric, HDR or photographic terms.\n")
 
     if figure_idiom and figure_idiom.strip() and card_type in ('creature', 'planeswalker'):
         figure_line = (f"Figure idiom (REQUIRED in the first sentence): describe the creature's "
