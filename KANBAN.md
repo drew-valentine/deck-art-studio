@@ -169,7 +169,9 @@
     - [ ] Full five-deck validation on the final grammar (needs a GPU window while Drew is off the UI)
     - [ ] Object-card style-block window 0-9 vs 0-12 (queued)
     - [x] H38 — final inspection hides an edge signature/stray mark on an otherwise sound render by setting the card's frame art_zoom to 1.10 and recompositing (undo in Frame Designer) instead of re-rolling; commits 0bae70c (code + test, 468 passing) and 9871a91 (docs)
-    - [ ] Verify H38 end to end in the browser on the active deck (final inspection run queued), then the cross-deck validation still needs a GPU window
+    - [x] Verify H38 end to end in the browser on the active deck — the final inspection zoomed Sol Ring and Anointed Procession to 1.10 and recomposited; verified
+    - [x] H39 — scene-writer fixes, commit 3b946ac: the flat-media instruction's example nouns ("a red cushion, a gold ring") were being parroted into unrelated cards and are gone (guarded by test); the light-word rewrite names the offending words and retries before any sentence is dropped, so flat-media prompts keep two full sentences; a deterministic person-word check runs on artifact/land scenes before the LLM checklist; enchantment names never become characters. Verified on the Egyptian demo deck: Command Tower, Anointed Procession and Sol Ring all render flat and on-style, Sol Ring no longer drifts to smooth digital paint.
+    - [ ] Cross-deck validation of the H38/H39 behaviour still needs a GPU window
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
