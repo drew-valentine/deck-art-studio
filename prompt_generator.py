@@ -632,6 +632,35 @@ def _fix_invented_cyclops(text: str, anchor: str) -> str:
     return _SINGLE_EYE_RE.sub(lambda m: re.sub(r'\b(single|one|lone|solitary|sole),?\s*', '', m.group(0), flags=re.IGNORECASE) + 's', text)
 
 
+_LIGHT_WORD_RE = re.compile(
+    r'\b(?:glow(?:s|ing)?|beams?|sunbeams?|shafts? of|rays? of|shimmer(?:s|ing)?|illuminat\w*|'
+    r'gleam(?:s|ing)?|sheen|(?:warm|soft|golden|pale|dim|harsh|hard|rim|back)[- ]lit|'
+    r'(?:warm|soft|golden|pale|dim|harsh|hard|rim|back|side|low)[- ]light\w*|lit by|lighting|'
+    r'shadows?|halo|luminous|radiant|radiating|bathed in)\b', re.IGNORECASE)
+
+
+def _strip_light_words(text: str) -> str:
+    """Flat media (ink, cel, papyrus...) have no rendered light; a clause about
+    glow, beams or shadows drags the render toward smooth digital painting.
+    Drop the comma segments that carry light words; a sentence left with
+    nothing disappears."""
+    if not text:
+        return text
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    kept_sents = []
+    for sent in sentences:
+        end = sent[-1] if sent and sent[-1] in '.!?' else ''
+        body = sent[:-1] if end else sent
+        segs = [g.strip() for g in re.split(r'[,;]', body) if g.strip()]
+        keep = [g for g in segs if not _LIGHT_WORD_RE.search(g)]
+        if not keep:
+            continue
+        rebuilt = ', '.join(keep)
+        rebuilt = rebuilt[0].upper() + rebuilt[1:]
+        kept_sents.append(rebuilt + (end or '.'))
+    return ' '.join(kept_sents)
+
+
 def _strip_unpaintable(text: str) -> str:
     """Drop trailing abstractions the image model cannot draw ("..., a grim
     reminder of the flip to be ignored", "..., as if the very thought...").
@@ -1068,6 +1097,8 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         out = _strip_franchise_sentences(out, franchise_name)   # output backstop
         out = _strip_example_leak(out, card)
         out = _strip_unpaintable(out)
+        if is_flat:
+            out = _strip_light_words(out)
         out = _fix_invented_cyclops(out, base_desc)
         out = _limit_scene_sentences(out, 3)
         out = _fix_dangling_tail(out)

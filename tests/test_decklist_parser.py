@@ -687,8 +687,8 @@ def test_scene_check_rerolls_an_invented_subject(monkeypatch):
 def test_franchise_stripping_only_uses_a_franchise_name(monkeypatch):
     import sys, types
     import prompt_generator as pg
-    draft = ("Krark's Thumb, a severed goblin thumb, sits in deep shadow as smoke curls past. "
-             "A bold shaft of light finds it.")
+    draft = ("Krark's Thumb, a severed goblin thumb, sits in a deep alcove as smoke curls past. "
+             "A bold red cloth lies under it.")
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda messages, **kw: draft))
     card = {'name': "Krark's Thumb", 'type_line': 'Legendary Artifact', 'oracle_text': '', 'card_type': 'artifact'}
     # unnamed deck: the style block is the hint; nothing may be stripped
@@ -699,7 +699,7 @@ def test_franchise_stripping_only_uses_a_franchise_name(monkeypatch):
     out = pg.generate_subject_with_ai(card, None, backend='local', local_model='m',
                                       style_hint='Dr. Seuss hand drawn illustration — ink illustration',
                                       style_source_name='Dr. Seuss hand drawn illustration', style_source_kind='artist')
-    assert out.startswith("Krark's Thumb") and 'shadow' in out
+    assert out.startswith("Krark's Thumb") and 'alcove' in out
     # franchise deck: a sentence naming the cast IS stripped
     draft2 = "Krark's Thumb sits on a bench. Rick grabs it from the shelf."
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda messages, **kw: draft2))
@@ -745,3 +745,12 @@ def test_dangling_tail_and_invented_cyclops():
     assert _fix_invented_cyclops("Alela sits, her single, piercing emerald eye shimmering.", "a faerie warlock") == \
         "Alela sits, her piercing emerald eyes shimmering."
     assert _fix_invented_cyclops("Okaun glares with his single eye.", "Okaun, a cyclops with one eye") == "Okaun glares with his single eye."
+
+
+def test_strip_light_words_keeps_the_rest():
+    from prompt_generator import _strip_light_words
+    out = _strip_light_words("A golden ring rests on a crimson cushion, its gemstone polished to a warm sheen. Bold stripes cross the cushion.")
+    assert out == "A golden ring rests on a crimson cushion. Bold stripes cross the cushion."
+    out2 = _strip_light_words("Sunbeams illuminate the scene, while the priest raises the crown.")
+    assert out2 == "While the priest raises the crown."
+    assert _strip_light_words("Keiga rises from the sea, spray flying.") == "Keiga rises from the sea, spray flying."
