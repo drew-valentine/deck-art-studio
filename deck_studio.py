@@ -4365,6 +4365,25 @@ def _pick_cleaner_take(name, card, raw_path, defects, ctx, vmodel, inspect_rende
     return prev_defects
 
 
+def _inspect_subject_hint(card) -> str:
+    """What the inspector should look for: the literal object for an artifact
+    ("a signet ring"), the creature's first subtype for a figure ("a dragon
+    spirit"), else ''. Same pure helpers the writer uses — no card tables."""
+    ctype = card.get('card_type', '')
+    name = (card.get('name') or '').split(' // ')[0]
+    if ctype == 'artifact':
+        try:
+            from prompt_generator import _literal_object_from_name
+            return _literal_object_from_name(name) or ''
+        except Exception:
+            return ''
+    if ctype == 'creature':
+        tl = card.get('type_line') or ''
+        sub = tl.split('—', 1)[1].strip() if '—' in tl else ''
+        return f"a {sub.lower()}" if sub else ''
+    return ''
+
+
 def _inspiration_paths(ctx):
     """Existing inspiration image paths for a job context, oldest first."""
     deck_dir = ctx.get('deck_dir')
@@ -4414,7 +4433,8 @@ def _execute_inspect_job(job, ctx):
             bad = []
             for face_label, path in faces:
                 advisory = {}
-                defects = inspect_render(path, name, card.get('card_type', ''), vmodel, advisory=advisory)
+                defects = inspect_render(path, name, card.get('card_type', ''), vmodel, advisory=advisory,
+                                         subject_hint=_inspect_subject_hint(card))
                 if advisory.get('composition'):
                     print(f"  [inspect] {name} ({face_label}) composition advisory: "
                           f"{', '.join(advisory['composition'])}")

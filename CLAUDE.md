@@ -118,7 +118,10 @@ decks/<deck-slug>/
   Ties on defects between takes are decided by `vision_analyzer.pick_take` (reference + both takes
   on one sheet, asked twice with the takes swapped; only a consistent answer counts). The inspector
   also answers `composition=yes/no`, `face=yes/no` (a creature render that is only a fist or a
-  back) and, for object/place cards, subject presence — recorded as
+  back) and, for object cards, subject presence via an OPEN naming question (`_names_object`: "what is
+  the objects you see" must contain the literal noun, since yes/no is answered yes for a goblet
+  labelled a signet ring; measured 4/5 with no false positives, so for ARTIFACTS a miss is a real
+  defect that re-rolls, `INSPECT_SUBJECT=0` to mute) — the rest recorded as
   `inspection.advisory` by default (`INSPECT_COMPOSITION=advisory|enforce|off`) until the
   false-positive rate is known.
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
@@ -129,7 +132,9 @@ decks/<deck-slug>/
   fix → tidy → scene checklist re-roll (deterministic `_person_problems` word check for artifact/land
   first, then the LLM checklist) → final cleanup (unpaintable / cyclops / light strip / dangling / tidy run once more, because every
   rewrite path can reintroduce what an earlier strip removed; `_tidy_prompt` also drops markdown
-  markers, writer notes and lettering clauses — a quoted 'A' on a ring becomes letters in the art)
+  markers, writer notes, sentence-initial labels ("Color contrast:"), parroted instruction phrases
+  (`_INSTRUCTION_ECHO_RE`: "centered and large, with nothing cropped") and lettering clauses — a quoted
+  'A' on a ring becomes letters in the art)
   → empty guard. Writer instructions never carry concrete example
   nouns — the writer parrots them into scenes (`test_flat_media_line_has_no_example_nouns`). Flat media = ink/cel/comic/papyrus/fresco/
   hieroglyph/woodblock/pixel/flat opaque paint (`is_flat` in `generate_subject_with_ai`).

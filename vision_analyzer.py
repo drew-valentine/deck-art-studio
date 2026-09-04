@@ -1845,7 +1845,7 @@ def _parse_counts(text: str) -> dict:
 
 
 def inspect_render(image_path, card_name: str, card_type: str, vision_model: str,
-                   advisory: dict | None = None) -> list:
+                   advisory: dict | None = None, subject_hint: str = '') -> list:
     """Defect checklist over a finished render, by the vision model. Asking
     the model to LIST defects made it echo the whole label list; asking it to
     COUNT (heads, arms, hands, copies of the subject) and answer yes/no
@@ -1855,7 +1855,10 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
     if image_path is None or not vision_model:
         return None
     figure = card_type in ('creature', 'planeswalker')
-    subj = 'a creature or character' if figure else 'an object, place or scene'
+    # the card NAME means nothing to the vision model ("Arcane Signet" passed
+    # on a goblet); the literal subject — "a signet ring", "a dragon spirit" —
+    # is what it can actually check for
+    subj = (subject_hint or '').strip() or ('a creature or character' if figure else 'an object, place or scene')
     try:
         import mlx_llm
         reply = mlx_llm.vision(
@@ -1867,7 +1870,7 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
             "copies=<how many times the main subject appears>; "
             "text=<yes/no: any letters, words, numerals, handwriting or logo>; "
             "signature=<yes/no: an artist signature or copyright mark>; "
-            "subject=<yes/no: the named subject is clearly present>; "
+            f"subject=<yes/no: {subj} is clearly present and recognisable>; "
             "hands_ok=<yes/no: every visible hand looks natural with five fingers>; "
             "composition=<yes/no: the picture reads as ONE clear scene with the named "
             "subject as the obvious focus, not a confusing jumble>; "
@@ -1908,6 +1911,13 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
     notes = []
     if not figure and c.get('subject', True) is False:
         notes.append('subject missing')
+    elif card_type == 'artifact' and subject_hint and os.environ.get('INSPECT_SUBJECT', '1') != '0':
+        # yes/no is answered yes for a goblet labelled "a signet ring"; an
+        # open LIST question is not. Measured on five object renders: both
+        # wrong objects caught or one missed, no true ring ever flagged — so
+        # this one is a real DEFECT (re-roll), not an advisory.
+        if not _names_object(image_path, subject_hint, vision_model):
+            defects.append('subject missing')
     if c.get('composition', True) is False:
         notes.append('confusing composition')
     if figure and c.get('face', True) is False and c.get('heads', 1) >= 1:
@@ -1920,6 +1930,32 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
         elif advisory is not None:
             advisory['composition'] = notes
     return defects
+
+
+def _names_object(image_path, subject_hint: str, vision_model: str) -> bool:
+    """Ask the model to LIST the objects it sees (open recall, not yes/no)
+    and check the literal noun of the expected subject ('ring' for 'a signet
+    ring') is among them. A single-answer "main object" question was fooled
+    by a companion prop (a feather beside a ring). True on any read failure
+    (never punish on a broken read)."""
+    import re as _re
+    words = [w for w in _re.findall(r'[a-z]+', (subject_hint or '').lower()) if w not in ('a', 'an', 'the', 'of')]
+    if not words:
+        return True
+    noun = words[-1]
+    try:
+        import mlx_llm
+        reply = mlx_llm.vision(
+            str(image_path),
+            "List the objects you can see in this picture, largest first, up to five, as a "
+            "comma-separated list of plain nouns. Nothing else.",
+            model=vision_model, max_tokens=40, temperature=0.0)
+    except Exception as e:
+        print(f"  [inspect] object naming failed: {e}")
+        return True
+    ans = (reply or '').lower()
+    stem = noun[:-1] if noun.endswith('s') else noun
+    return stem in ans
 
 
 def pick_take(ref_paths, a_path, b_path, card_name: str, vision_model: str):

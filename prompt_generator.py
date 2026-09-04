@@ -595,7 +595,7 @@ def hint_without_palette(block: str) -> str:
 
 
 _UNPAINTABLE_RE = re.compile(
-    r'(?:,\s*(?:its|his|her|their) [^,.;]*?)?(?:,\s*)?\b(?:a (?:grim |silent |quiet |living |stark |bitter )?(?:testament|reminder|symbol|beacon|echo|metaphor) (?:to|of|for)[^,.;]*'
+    r'(?:,\s*(?:its|his|her|their) [^,.;]*?)?(?:,\s*)?\b(?:an? (?:[a-z-]+ ){0,2}?(?:testament|reminder|symbol|beacon|echo|metaphor|nod|homage|tribute) (?:to|of|for)[^,.;]*'
     r'|as if [^,.;]*|seem(?:s|ing)? to [^,.;]*|symboli[sz]ing [^,.;]*'
     r'|(?:hinting|speaking|whispering) (?:at|of) [^,.;]*)', re.IGNORECASE)
 
@@ -665,6 +665,16 @@ _LETTERING_RE = re.compile(
     r"[A-Za-z'\u2018\u2019-]+){0,8}", re.IGNORECASE)
 
 
+# The writer copies instruction phrases into scenes ("The copper ring fills
+# the frame, centered and large, with nothing cropped."). Clauses made of
+# those phrases are dropped; the scene keeps its actual content.
+_INSTRUCTION_ECHO_RE = re.compile(
+    r"(?:,\s*)?\b(?:(?:with )?nothing cropped|cent(?:er|re)?e?d and large|fill(?:s|ing)? (?:most of )?the frame|"
+    r"(?:the whole )?face clearly visible|never a close-up[^,.;]*|(?:a )?wide establishing view[^,.;]*|"
+    r"(?:with )?a clear focal landmark|(?:as )?the (?:obvious |single )?focal (?:point|subject)|"
+    r"(?:remains|stays|is) the focal point)\b", re.IGNORECASE)
+
+
 _META_LINE_RE = re.compile(
     r'\s*(?:^|\n|(?<=[.!?]))\s*(?:[-*•]\s*)?(?:The |This )?(?:focal (?:subject|point)|main subject|'
     r'subject of the (?:scene|image)|note|scene description|composition)\b\s*(?:is|are|should|must|remains|:)[^.!?\n]*[.!?]?',
@@ -679,7 +689,15 @@ def _tidy_prompt(text: str) -> str:
         return text
     out = _META_LINE_RE.sub(' ', text)
     out = re.sub(r'[*#_]+', '', out)                 # markdown bold / headings
-    out = re.sub(r'(?:(?<=[.!?])\s*|^)(?:Scene|Title|Prompt|Description|Caption)\s*:\s*', ' ', out)  # inline labels
+    out = re.sub(r'(?:(?<=[.!?])\s*|^)(?:The |A )?(?:Scene|Title|Prompt|Description|Caption|Moment|Colou?r contrast|'
+                 r'Contrast|Camera|Framing|Light(?:ing)?|Mood|Atmosphere|World|Body|Setting|Subject|Detail|Note|'
+                 r'Composition|Palette|Style)\s*:\s+(?=[A-Za-z])', ' ', out, flags=re.IGNORECASE)  # my own labels
+    out = _INSTRUCTION_ECHO_RE.sub('', out)          # parroted framing instructions
+    # a stripped clause can strand its conjunction: ", while the ring." -> "."
+    out = re.sub(r',?\s*\b(?:while|as|and|but|where|with)\s+(?:the |a |an |its |his |her )?[A-Za-z-]+\s*(?=[.!?]|$)', '', out)
+    # a trailing fragment after a comma ("Caught in a moment of repose, the ring.")
+    out = re.sub(r',\s*(?:the|a|an|its|his|her)\s+[A-Za-z-]+\s*(?=[.!?]\s*$)', '', out)
+    out = re.sub(r'\s{2,}', ' ', out).strip()
     out = _LETTERING_RE.sub('', out)                 # "a small silver 'A' on its face"
     out = re.sub(r'["\u201c\u201d]+', '', out)
     out = re.sub(r'\.{2,}', '.', out)
@@ -743,7 +761,8 @@ def _limit_scene_sentences(text: str, max_sentences: int = 3, max_words: int = 6
 _PERSON_WORD_RE = re.compile(
     r"\b(?:he|she|her|his|him|man|woman|men|women|king|queen|lord|lady|figures?|person|people|"
     r"soldiers?|warriors?|priests?|priestess|scribes?|hands?|onlookers?|crowd|leaders?|child|children|"
-    r"servants?|guards?|travell?ers?|villagers?|monks?)\b", re.IGNORECASE)
+    r"servants?|guards?|travell?ers?|villagers?|monks?|scholars?|wizards?|mages?|sages?|elders?|"
+    r"knights?|merchants?|farmers?|hunters?|sailors?|pilgrims?|worshippers?)\b", re.IGNORECASE)
 
 
 def _person_problems(draft: str, card: dict) -> str:
@@ -1219,7 +1238,10 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             if out != before:
                 print(f"  [prompt_gen] flat-media strip for {name}: "
                       f"{len(before.split())} -> {len(out.split())} words")
-        if is_flat and _is_coloured_style(style_hint) and not _names_a_colour(out):
+        if is_flat and _is_coloured_style(style_hint) and not _names_a_colour(
+                re.split(r'(?<=[.!?])\s+', out.strip())[0] if out.strip() else ''):
+            # the SUBJECT sentence must carry a colour: a figure with only its
+            # forest coloured renders as bare line art in a coloured forest
             # H46: on coloured flat media (coloured figures on white paper, cel,
             # comic) a scene with no colour word renders as bare line art —
             # three of four cards on a picture-book deck came out uncoloured.
@@ -1231,12 +1253,13 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                         {'role': 'assistant', 'content': out},
                         {'role': 'user', 'content':
                             "Rewrite the same scene, same length, naming the flat colour of the "
-                            "subject and of each main object (its clothing, skin, the ground, "
-                            "the sky) in plain colour words. No light words."},
+                            "subject ITSELF in the first sentence (its skin, fur, clothing or "
+                            "material) and of each main object in plain colour words. No light words."},
                     ],
                     model=local_model, max_tokens=220, temperature=0.4)
                 recol = _limit_scene_sentences(_strip_chat_preamble(recol), 3)
-                if len(recol.split()) >= 5 and _opens_with_subject(recol, card) and _names_a_colour(recol):
+                if len(recol.split()) >= 5 and _opens_with_subject(recol, card) and _names_a_colour(
+                        re.split(r'(?<=[.!?])\s+', recol.strip())[0]):
                     out = _strip_light_words(_strip_unpaintable(recol)) if is_flat else recol
                     print(f"  [prompt_gen] colour rewrite for {name}")
             except Exception as e:

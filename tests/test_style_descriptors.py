@@ -678,3 +678,27 @@ def test_tidy_strips_inline_labels():
     from prompt_generator import _tidy_prompt
     t = "Keiga spreads its wings against waves. Scene: As she glides, her scales a bright blue-green."
     assert _tidy_prompt(t) == "Keiga spreads its wings against waves. As she glides, her scales a bright blue-green."
+
+
+def test_unpaintable_strip_takes_any_adjective():
+    from prompt_generator import _strip_unpaintable
+    assert _strip_unpaintable("A ring lies on a desk, a whimsical echo of forgotten days.") == "A ring lies on a desk."
+    assert _strip_unpaintable("A ring lies on a desk, an odd little nod to the past.") == "A ring lies on a desk."
+
+
+def test_tidy_strips_generic_labels_and_instruction_echo():
+    from prompt_generator import _tidy_prompt
+    t = "Glissa strides through a forest. Color contrast: The deep green hues of the floor contrast with her grey skin."
+    assert _tidy_prompt(t) == "Glissa strides through a forest. The deep green hues of the floor contrast with her grey skin."
+    t = "The copper ring fills the frame, centered and large, with nothing cropped. The green study is behind it, while the ring remains the focal point."
+    out = _tidy_prompt(t)
+    assert 'nothing cropped' not in out and 'centered and large' not in out and 'focal point' not in out
+    assert out.startswith("The copper ring") and "green study" in out
+
+
+def test_tidy_strips_the_moment_label_and_trailing_fragment():
+    from prompt_generator import _tidy_prompt
+    t = "A silver signet ring sits atop a cushion. The Moment: Caught in a moment of repose, the ring."
+    assert _tidy_prompt(t) == "A silver signet ring sits atop a cushion. Caught in a moment of repose."
+    assert _tidy_prompt("Sol Ring: a gold ring rests on cloth.") == "Sol Ring: a gold ring rests on cloth."
+    assert _tidy_prompt("A knight rides on, his cloak blue.") == "A knight rides on, his cloak blue."

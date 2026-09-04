@@ -324,7 +324,7 @@ def test_inspect_job_rerolls_defective_cards_once(monkeypatch, tmp_path):
     cards = [{'name': 'Keiga, the Tide Star', 'card_type': 'creature'}, {'name': 'Sol Ring', 'card_type': 'artifact'}]
     ctx = {'cards': cards, 'raw_art_dir': raw, 'deck_name': 'D'}
     verdicts = {'Keiga, the Tide Star': ['doubled head'], 'Sol Ring': []}
-    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None: verdicts[name])
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='': verdicts[name])
     monkeypatch.setattr(ds, 'has_second_art_face', lambda c: False)
     monkeypatch.setattr(ds, '_ollama_work_start', lambda: None)
     monkeypatch.setattr(ds, '_ollama_work_done', lambda: None)
@@ -372,7 +372,7 @@ def test_inspection_keeps_the_cleaner_take(monkeypatch, tmp_path):
     card = {'name': 'Keiga, the Tide Star', 'card_type': 'creature'}
     ctx = {'cards': [card], 'raw_art_dir': raw, 'composite_dir': comp, 'versions_dir': vroot, 'deck_name': 'D'}
     verdicts = {'keiga_the_tide_star.png': ['doubled head'], 'v1_raw.png': []}
-    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None: verdicts[path.name])
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='': verdicts[path.name])
     monkeypatch.setattr(ds, 'has_second_art_face', lambda c: False)
     monkeypatch.setattr(ds, '_ollama_work_start', lambda: None)
     monkeypatch.setattr(ds, '_ollama_work_done', lambda: None)
@@ -398,7 +398,7 @@ def test_final_inspection_hides_edge_signature_by_zoom(monkeypatch, tmp_path):
     deck_json = tmp_path / 'deck.json'; json.dump({'cards': [dict(card)]}, open(deck_json, 'w'))
     ctx = {'cards': [card], 'raw_art_dir': raw, 'composite_dir': comp, 'versions_dir': tmp_path / 'v',
            'deck_dir': tmp_path, 'meta': {}, 'deck_name': 'D'}
-    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None: ['signature'])
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='': ['signature'])
     monkeypatch.setattr(ds, 'has_second_art_face', lambda c: False)
     monkeypatch.setattr(ds, '_ollama_work_start', lambda: None)
     monkeypatch.setattr(ds, '_ollama_work_done', lambda: None)
@@ -442,7 +442,7 @@ def test_tied_takes_are_decided_by_style_pick(monkeypatch, tmp_path):
     import vision_analyzer as va
     from generation_queue import Job, INSPECT
     raw, comp, ctx = _two_take_ctx(tmp_path, monkeypatch)
-    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None: [])
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='': [])
     asked = []
     monkeypatch.setattr(va, 'pick_take', lambda refs, a, b, name, vm: (asked.append((len(refs), a.name, b.name)) or 'b'))
     job = Job(id='j', type=INSPECT, deck_id='d', card_name='', params={'final': True, 'takes': 2, 'card_names': ['Keiga, the Tide Star']})
@@ -508,3 +508,42 @@ def test_hidden_face_is_a_composition_advisory(monkeypatch):
     assert adv['composition'] == ['face not visible']
     adv = {}
     assert va.inspect_render('x.png', 'Sol Ring', 'artifact', 'v', advisory=adv) == [] and adv == {}
+
+
+def test_inspect_subject_hint_is_literal():
+    import deck_studio as ds
+    assert ds._inspect_subject_hint({'name': 'Arcane Signet', 'card_type': 'artifact'}) == 'a signet ring'
+    assert ds._inspect_subject_hint({'name': 'Keiga, the Tide Star', 'card_type': 'creature', 'type_line': 'Legendary Creature — Dragon Spirit'}) == 'a dragon spirit'
+    assert ds._inspect_subject_hint({'name': 'Command Tower', 'card_type': 'land'}) == ''
+
+
+def test_inspect_question_uses_the_subject_hint(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    seen = []
+    def vision(path, prompt, **k):
+        seen.append(prompt); return 'heads=0; arms=0; hands=0; copies=1; text=no; signature=no; subject=no; hands_ok=yes; composition=yes; face=no'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=vision))
+    monkeypatch.delenv('INSPECT_COMPOSITION', raising=False)
+    adv = {}
+    va.inspect_render('x.png', 'Arcane Signet', 'artifact', 'v', advisory=adv, subject_hint='a signet ring')
+    assert 'a signet ring is clearly present' in seen[0] and adv['composition'] == ['subject missing']
+
+
+def test_open_naming_question_catches_a_wrong_object(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    answers = iter([
+        'heads=0; arms=0; hands=0; copies=1; text=no; signature=no; subject=yes; hands_ok=yes; composition=yes; face=no',
+        'a golden goblet',
+        'heads=0; arms=0; hands=0; copies=1; text=no; signature=no; subject=yes; hands_ok=yes; composition=yes; face=no',
+        'a silver signet ring on a stone',
+    ])
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: next(answers)))
+    monkeypatch.delenv('INSPECT_COMPOSITION', raising=False)
+    adv = {}
+    assert va.inspect_render('x.png', 'Arcane Signet', 'artifact', 'v', advisory=adv, subject_hint='a signet ring') == ['subject missing']
+    assert adv == {}
+    adv = {}
+    assert va.inspect_render('x.png', 'Arcane Signet', 'artifact', 'v', advisory=adv, subject_hint='a signet ring') == []
+    assert adv == {}
