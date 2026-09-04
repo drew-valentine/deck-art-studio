@@ -547,3 +547,22 @@ def test_open_naming_question_catches_a_wrong_object(monkeypatch):
     adv = {}
     assert va.inspect_render('x.png', 'Arcane Signet', 'artifact', 'v', advisory=adv, subject_hint='a signet ring') == []
     assert adv == {}
+
+
+def test_subject_missing_reroll_leads_with_the_literal_object(monkeypatch, tmp_path):
+    import deck_studio as ds
+    import vision_analyzer as va
+    from generation_queue import Job, INSPECT
+    raw = tmp_path / 'raw_art'; raw.mkdir(); (raw / 'arcane_signet.png').write_bytes(b'x')
+    card = {'name': 'Arcane Signet', 'card_type': 'artifact'}
+    ctx = {'cards': [card], 'raw_art_dir': raw, 'deck_name': 'D', 'prompts': {'Arcane Signet': 'A silver ring lies on a desk.'}}
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='': ['subject missing'])
+    monkeypatch.setattr(ds, 'has_second_art_face', lambda c: False)
+    monkeypatch.setattr(ds, '_ollama_work_start', lambda: None)
+    monkeypatch.setattr(ds, '_ollama_work_done', lambda: None)
+    queued = []
+    monkeypatch.setattr(ds, '_enqueue_art', lambda deck_id, name, **k: queued.append((name, k.get('custom_prompt'))))
+    monkeypatch.setattr(ds, '_enqueue_inspection', lambda *a, **k: None)
+    job = Job(id='j', type=INSPECT, deck_id='d', card_name='', params={'final': False, 'card_names': ['Arcane Signet']})
+    ds._execute_inspect_job(job, ctx)
+    assert queued == [('Arcane Signet', 'A signet ring, plain and unmistakable. A silver ring lies on a desk.')]

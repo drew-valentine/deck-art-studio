@@ -91,7 +91,9 @@ decks/<deck-slug>/
   in the writer's hint become scene content. Writer rules: one subject in the foreground, two
   sentences of ~60 words (cap 64, whole sentences) following the scene grammar — subject at a moment, camera + scale + one named light, one atmospheric detail; rules-text zones (library/graveyard) are never scenery. Creatures also get a Body line
   (`_body_line`: the FIRST subtype names what the body is — a Bat God is a bat) and every type a
-  Framing line (`_camera_line`: face visible / whole object / establishing view); lands are built
+  Framing line (`_camera_line`: face visible / whole object / establishing view); artifacts get an
+  Object line with a model-derived plain gloss of the literal object (`_object_gloss`, memoised,
+  `OBJECT_GLOSS=0` mutes) and a 'subject missing' re-roll leads the scene with that object; lands are built
   from the style's world (its plants, skies, architecture), never a generic version of the terrain;
   artifact guidance never lists relic presentations (a listed "strung on a cord" was parroted).
   Also recalled at distillation, each with an UNKNOWN escape: `style_source_kind`
@@ -102,7 +104,7 @@ decks/<deck-slug>/
   references to double blocks 0-14 (figure design), other types 0-9; `_assemble_flux_prompt` order =
   lead + colour-coverage clause, subject sentence, full block, rest of scene; `/api/generate` takes
   `seed` for like-for-like A/Bs (experiment hooks: FLUX_PROMPT_ORDER, STYLE_BLOCKS_DOUBLE,
-  FIGURE_IDIOM, FIGURE_IDIOM_ALL, SCENE_CHECK, REDUX_EDGE_CROP, FLUX_LEAD_OVERRIDE, FLUX_GUARD_EXTRA).
+  FIGURE_IDIOM, FIGURE_IDIOM_ALL, WORLD_LEAD, SCENE_CHECK, REDUX_EDGE_CROP, FLUX_LEAD_OVERRIDE, FLUX_GUARD_EXTRA).
   Block medium = declaration → stored-evidence keyword vote → LLM; the analyst's own short `Medium:`
   phrase matching the voted bucket (`_evidence_medium_phrase`, e.g. 'papyrus parchment' filed under
   'painted illustration') is inserted right after the bucket anchor. Colour coverage

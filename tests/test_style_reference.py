@@ -394,3 +394,11 @@ def test_style_block_window_by_card_type(monkeypatch):
     assert ds._style_block_window('artifact') is None          # worker default (0-9)
     monkeypatch.setenv('STYLE_BLOCKS_DOUBLE', '0-12')
     assert ds._style_block_window('land') == {'double': list(range(0, 13)), 'single': []}
+
+
+def test_world_features_from_staging():
+    import deck_studio as ds
+    st = ("Scenes are staged in a fantastical, otherworldly landscape with vibrant colors and surreal "
+          "elements, featuring glowing plants and floating crystals. The tone is whimsical and surreal.")
+    assert ds._world_features(st) == ['glowing plants', 'floating crystals']
+    assert ds._world_features('') == []

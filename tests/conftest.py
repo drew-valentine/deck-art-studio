@@ -207,3 +207,4 @@ def _scene_check_off_by_default(monkeypatch):
     """The writer's H21 checklist pass adds an LLM call; tests that fake a
     single chat reply opt in explicitly with SCENE_CHECK=1."""
     monkeypatch.setenv('SCENE_CHECK', '0')
+    monkeypatch.setenv('OBJECT_GLOSS', '0')

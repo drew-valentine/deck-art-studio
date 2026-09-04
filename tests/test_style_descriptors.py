@@ -702,3 +702,22 @@ def test_tidy_strips_the_moment_label_and_trailing_fragment():
     assert _tidy_prompt(t) == "A silver signet ring sits atop a cushion. Caught in a moment of repose."
     assert _tidy_prompt("Sol Ring: a gold ring rests on cloth.") == "Sol Ring: a gold ring rests on cloth."
     assert _tidy_prompt("A knight rides on, his cloak blue.") == "A knight rides on, his cloak blue."
+
+
+def test_object_line_uses_a_memoised_gloss(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    calls = []
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda **k: (calls.append(1) or 'a finger ring with a flat engraved top.')))
+    monkeypatch.setenv('OBJECT_GLOSS', '1')
+    pg._OBJECT_GLOSS.clear()
+    line = pg._object_line({'name': 'Arcane Signet', 'card_type': 'artifact'}, 'm')
+    assert line.startswith('Object (REQUIRED): a signet ring — a finger ring with a flat engraved top.')
+    pg._object_line({'name': 'Arcane Signet', 'card_type': 'artifact'}, 'm')
+    assert len(calls) == 1
+    assert pg._object_line({'name': 'Command Tower', 'card_type': 'land'}, 'm') == ''
+
+
+def test_dangling_verb_tail_is_cut():
+    from prompt_generator import _fix_dangling_tail
+    assert _fix_dangling_tail("The ring's filigree, its patterns dancing in the stillness, is.") == "The ring's filigree, its patterns dancing in the stillness."

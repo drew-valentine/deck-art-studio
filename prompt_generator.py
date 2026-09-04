@@ -600,7 +600,8 @@ _UNPAINTABLE_RE = re.compile(
     r'|(?:hinting|speaking|whispering) (?:at|of) [^,.;]*)', re.IGNORECASE)
 
 
-_DANGLING_RE = re.compile(r'\s*\b(that|which|and|as|while|with|of|the|a|an|but|or|to|whose|where|for|in|on|at|by)\s*([.!?])\s*$', re.IGNORECASE)
+_DANGLING_RE = re.compile(r'\s*\b(that|which|and|as|while|with|of|the|a|an|but|or|to|whose|where|for|in|on|at|by|'
+                          r'is|are|was|were|has|have|had|its|his|her|their)\s*([.!?])\s*$', re.IGNORECASE)
 
 
 def _fix_dangling_tail(text: str) -> str:
@@ -643,6 +644,7 @@ _LIGHT_WORD_RE = re.compile(
     r'silhouetted against|backlit|candlelit|moonlit|sunlit|lamplight|candlelight|firelight|torchlight|'
     r'sunlight|sunshine|sparkl\w*|shin(?:e|es|ing|y)|glossy|polished|lustrous|metallic sheen|highlights?|'
     r'glisten\w*|(?:fading|failing|dying|first|last|morning|evening|late) light|in the light of|'
+    r'(?:dimly|brightly|softly|warmly|harshly|faintly)[- ]lit|dim light|'
     r'brightly lit|(?:afternoon|morning|evening|midday) sun)\b', re.IGNORECASE)
 
 
@@ -1150,6 +1152,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         + f"Direction: {guidance}\n"
         + figure_line
         + _body_line(card)
+        + _object_line(card, local_model)
         + _camera_line(card_type)
         + (f"World (REQUIRED): this {card_type} exists in the style's own world — {staging.strip()} "
            "Build the setting from that world's plants, skies, rock and buildings, and put one of "
@@ -1423,6 +1426,49 @@ def _body_line(card: dict) -> str:
     kind = subtypes[0].lower()
     return (f"Body: this creature is a {kind} — give it a {kind}'s head, face, eyes and limbs "
             f"(not a human face with {kind} parts). Say so in the first sentence.\n")
+
+
+_OBJECT_GLOSS = {}
+
+
+def _object_gloss(literal: str, local_model: str) -> str:
+    """H59: what the literal object LOOKS like, in plain words the image model
+    knows ("a signet ring" -> "a finger ring with a flat engraved top"). The
+    term alone is not enough: signets rendered as a goblet and a jewelled
+    box. Model knowledge, memoised per phrase — no object tables."""
+    key = (literal or '').strip().lower()
+    if not key or os.environ.get('OBJECT_GLOSS', '1') == '0':
+        return ''
+    if key in _OBJECT_GLOSS:
+        return _OBJECT_GLOSS[key]
+    gloss = ''
+    try:
+        import mlx_llm
+        reply = mlx_llm.chat(
+            messages=[{'role': 'user', 'content':
+                       f"In at most 12 plain words, say what {key} looks like — its shape, size "
+                       "and where it is worn or used — for someone who has never heard the term. "
+                       "No name, no colour, no sentence, just the description."}],
+            model=local_model, max_tokens=30, temperature=0.0)
+        gloss = _tidy_prompt(_strip_chat_preamble(reply or '')).strip().rstrip('.')
+        if len(gloss.split()) > 16 or len(gloss.split()) < 3:
+            gloss = ''
+    except Exception as e:
+        print(f"  [prompt_gen] object gloss failed: {e}")
+    _OBJECT_GLOSS[key] = gloss
+    print(f"  [prompt_gen] object gloss for {key!r}: {gloss!r}")
+    return gloss
+
+
+def _object_line(card: dict, local_model: str) -> str:
+    if card.get('card_type') != 'artifact':
+        return ''
+    lit = _literal_object_from_name((card.get('name') or '').split(' // ')[0])
+    if not lit:
+        return ''
+    gloss = _object_gloss(lit, local_model)
+    return (f"Object (REQUIRED): {lit}" + (f" — {gloss}" if gloss else '') +
+            ". The first sentence says what it is in these plain words, shown whole.\n")
 
 
 def _camera_line(card_type: str) -> str:

@@ -1894,6 +1894,28 @@ def _with_figure_idiom(subject: str, idiom, max_phrases: int = 3) -> str:
     return ' '.join([first] + sents[1:])
 
 
+_WORLD_GENERIC = {'colors', 'colours', 'elements', 'tones', 'mood', 'details', 'detail', 'atmosphere',
+                  'space', 'perspective', 'background', 'lighting', 'light', 'tone', 'register', 'figures',
+                  'composition', 'style', 'scene', 'scenes', 'shapes', 'symbols'}
+
+
+def _world_features(staging: str) -> list:
+    """Concrete world features named in the staging recall ("... featuring
+    glowing plants and floating crystals" -> ['glowing plants', 'floating
+    crystals']). Short noun phrases only; generic art-talk words dropped."""
+    import re as _re
+    text = (staging or '').split('The tone')[0]
+    out = []
+    for m in _re.finditer(r'(?:with|featuring|of|among|amid|under|full of)\s+([^.;:]+)', text, _re.IGNORECASE):
+        for part in _re.split(r',|\band\b|\b(?:with|featuring|among|amid|under|full of)\b', m.group(1)):
+            words = [w for w in _re.findall(r"[A-Za-z-]+", part.lower()) if w not in ('a', 'an', 'the', 'its', 'their')]
+            if 1 <= len(words) <= 3 and words[-1] not in _WORLD_GENERIC and len(words[-1]) > 3:
+                phrase = ' '.join(words)
+                if phrase not in out:
+                    out.append(phrase)
+    return out
+
+
 def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '') -> str:
     """Order: style lead, the scene's FIRST sentence (the subject), the rest of
     the style block, the rest of the scene, feedback. FLUX weights early
@@ -2003,6 +2025,12 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
         _idiom_types = ('creature', 'planeswalker', 'artifact', 'land', 'enchantment', 'instant', 'sorcery')
     if card_type in _idiom_types and os.environ.get('FIGURE_IDIOM', '1') != '0':
         subject = _with_figure_idiom(subject, (_meta.get('style_idiom') or []))
+    # --- H60 experiment hook: the style's WORLD features lead a land's scene
+    # in the render prompt itself (early tokens), not only in the writer's hint
+    if card_type in ('land', 'enchantment') and os.environ.get('WORLD_LEAD', '0') == '1':
+        feats = _world_features(_meta.get('style_staging') or '')
+        if feats:
+            subject = f"{', '.join(feats[:3])}. {subject}"
 
     # --- Card Back override (avoid FLUX rendering a literal physical card back) ---
     if card_name.lower().startswith('card back'):
@@ -4421,6 +4449,7 @@ def _execute_inspect_job(job, ctx):
     cards_by_name = {c['name']: c for c in ctx['cards']}
     raw_dir = ctx['raw_art_dir']
     rerolls = []
+    reroll_prompts = {}
     _ollama_work_start()
     try:
         for i, name in enumerate(names):
@@ -4457,6 +4486,13 @@ def _execute_inspect_job(job, ctx):
                     print(f"  [inspect] {name} ({face_label}): {', '.join(defects)}")
             if bad and not final:
                 rerolls.append(name)
+                if any('subject missing' in d for _, d in bad):
+                    # H58: the wrong object was drawn — re-roll with the literal
+                    # object LEADING the scene sentence, not just a new seed
+                    lit = _inspect_subject_hint(card)
+                    base = (ctx.get('prompts') or {}).get(name, '')
+                    if lit and base:
+                        reroll_prompts[name] = f"{lit[:1].upper()}{lit[1:]}, plain and unmistakable. {base}"
             elif bad and final:
                 # H38: an edge signature / stray mark on an otherwise sound
                 # render is hidden by cropping the art window, not by another roll
@@ -4467,7 +4503,7 @@ def _execute_inspect_job(job, ctx):
     if rerolls:
         for name in rerolls:
             _enqueue_art(job.deck_id, name, face='all', deck_name=job.deck_name,
-                         label=f'{name} (re-roll)')
+                         custom_prompt=reroll_prompts.get(name), label=f'{name} (re-roll)')
         _enqueue_inspection(job.deck_id, rerolls, final=True)
         print(f"  [inspect] re-queued {len(rerolls)} card(s): {', '.join(rerolls)}")
     job.progress = {'message': f'Inspected {len(names)}; {len(rerolls)} re-queued', 'pct': 100}
