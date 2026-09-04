@@ -386,3 +386,28 @@ def test_inspection_keeps_the_cleaner_take(monkeypatch, tmp_path):
     assert (raw / 'keiga_the_tide_star.png').read_bytes() == b'take1'      # the clean take is current
     assert (comp / 'keiga_the_tide_star.png').read_bytes() == b'take1c'
     assert queued == []                                                       # clean: no re-roll
+
+
+def test_final_inspection_hides_edge_signature_by_zoom(monkeypatch, tmp_path):
+    import json
+    import deck_studio as ds
+    import vision_analyzer as va
+    raw = tmp_path / 'raw_art'; raw.mkdir(); comp = tmp_path / 'composites'; comp.mkdir()
+    (raw / 'sol_ring.png').write_bytes(b'x')
+    card = {'name': 'Sol Ring', 'card_type': 'artifact'}
+    deck_json = tmp_path / 'deck.json'; json.dump({'cards': [dict(card)]}, open(deck_json, 'w'))
+    ctx = {'cards': [card], 'raw_art_dir': raw, 'composite_dir': comp, 'versions_dir': tmp_path / 'v',
+           'deck_dir': tmp_path, 'meta': {}, 'deck_name': 'D'}
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm: ['signature'])
+    monkeypatch.setattr(ds, 'has_second_art_face', lambda c: False)
+    monkeypatch.setattr(ds, '_ollama_work_start', lambda: None)
+    monkeypatch.setattr(ds, '_ollama_work_done', lambda: None)
+    monkeypatch.setattr(ds.backend_config, 'load_config', lambda: {'ollama_vision_model': 'v'})
+    rendered = []
+    monkeypatch.setattr(ds, 'render_composite_for_card', lambda *a, **k: rendered.append(a[0]['name']))
+    monkeypatch.setattr(ds, '_enqueue_art', lambda *a, **k: (_ for _ in ()).throw(AssertionError('no re-roll on the final pass')))
+    job = ds.Job(type=ds.INSPECT, deck_id='d', card_name='', params={'card_names': ['Sol Ring'], 'final': True})
+    ds._execute_inspect_job(job, ctx)
+    assert card['frame_overrides']['art_zoom'] == ds.EDGE_MARK_ZOOM
+    assert json.load(open(deck_json))['cards'][0]['frame_overrides']['art_zoom'] == ds.EDGE_MARK_ZOOM
+    assert rendered == ['Sol Ring']

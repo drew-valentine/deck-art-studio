@@ -4273,6 +4273,45 @@ def _enqueue_inspection(deck_id, card_names, final=False, label=None, takes=1):
     return gen_queue.enqueue(job)
 
 
+EDGE_MARK_ZOOM = 1.10     # crops ~5% off every edge, where signatures and marks sit
+
+
+def _hide_edge_marks(name, card, ctx):
+    """Zoom the card's art window so the border strip carrying a signature or
+    stray mark falls outside the frame, persist the override on the deck's
+    card record, and recomposite. The user can undo it in the Frame Designer."""
+    try:
+        ov = dict(card.get('frame_overrides') or {})
+        if float(ov.get('art_zoom') or 1.0) >= EDGE_MARK_ZOOM:
+            return False
+        ov['art_zoom'] = EDGE_MARK_ZOOM
+        card['frame_overrides'] = ov
+        cards = ctx['cards']
+        with persist_lock:
+            deck_json = ctx['deck_dir'] / 'deck.json'
+            data = json.load(open(deck_json))
+            for c in data.get('cards', []):
+                if c.get('name') == name:
+                    c['frame_overrides'] = ov
+            with open(deck_json, 'w') as f:
+                json.dump(data, f, indent=2)
+        slug = name_to_slug(name)
+        raw_path = ctx['raw_art_dir'] / f'{slug}.png'
+        comp_path = ctx['composite_dir'] / f'{slug}.png'
+        render_composite_for_card(card, raw_path, comp_path,
+                                  deck_fs=(ctx['meta'] or {}).get('frame_settings'),
+                                  raw_art_dir=ctx['raw_art_dir'])
+        if ctx.get('deck_id') == active_deck_id or ctx['deck_dir'].name == active_deck_id:
+            for c in cards_db:
+                if c.get('name') == name:
+                    c['frame_overrides'] = ov
+        print(f"  [inspect] {name}: edge mark hidden with art zoom {EDGE_MARK_ZOOM}")
+        return True
+    except Exception as e:
+        print(f"  [inspect] could not hide edge mark on {name}: {e}")
+        return False
+
+
 def _pick_cleaner_take(name, card, raw_path, defects, ctx, vmodel, inspect_render):
     """Compare the current render with the latest archived take (the previous
     take of a multi-take batch). If the archived one has fewer defects,
@@ -4364,6 +4403,11 @@ def _execute_inspect_job(job, ctx):
                     print(f"  [inspect] {name} ({face_label}): {', '.join(defects)}")
             if bad and not final:
                 rerolls.append(name)
+            elif bad and final:
+                # H38: an edge signature / stray mark on an otherwise sound
+                # render is hidden by cropping the art window, not by another roll
+                if all(set(d) <= {'signature', 'text'} for _, d in bad):
+                    _hide_edge_marks(name, card, ctx)
     finally:
         _ollama_work_done()
     if rerolls:
