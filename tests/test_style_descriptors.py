@@ -763,3 +763,8 @@ def test_bold_framing_label_is_stripped():
     from prompt_generator import _tidy_prompt
     t = "Eshki bursts from the water. Bold framing: Eshki, its bare chest a sharp contrast against the mist."
     assert _tidy_prompt(t) == "Eshki bursts from the water. Eshki, its bare chest a sharp contrast against the mist."
+
+
+def test_unpaintable_strip_takes_that_clauses():
+    from prompt_generator import _strip_unpaintable
+    assert _strip_unpaintable("The stone lies undisturbed, a stillness that belies the power it holds, its grey a contrast to the moss.") == "The stone lies undisturbed, its grey a contrast to the moss."

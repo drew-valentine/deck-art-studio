@@ -618,6 +618,7 @@ def hint_without_palette(block: str) -> str:
 _UNPAINTABLE_RE = re.compile(
     r'(?:,\s*(?:its|his|her|their) [^,.;]*?)?(?:,\s*)?\b(?:an? (?:[a-z-]+ ){0,2}?(?:testament|reminder|symbol|beacon|echo|metaphor|nod|homage|tribute) (?:to|of|for)[^,.;]*'
     r'|as if [^,.;]*|seem(?:s|ing)? to [^,.;]*|symboli[sz]ing [^,.;]*'
+    r'|an? [a-z]+ that (?:belies|speaks|hints|suggests|betrays|hides|recalls|promises)[^,.;]*'
     r'|(?:hinting|speaking|whispering) (?:at|of) [^,.;]*)', re.IGNORECASE)
 
 
