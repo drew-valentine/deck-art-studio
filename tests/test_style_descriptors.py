@@ -768,3 +768,17 @@ def test_bold_framing_label_is_stripped():
 def test_unpaintable_strip_takes_that_clauses():
     from prompt_generator import _strip_unpaintable
     assert _strip_unpaintable("The stone lies undisturbed, a stillness that belies the power it holds, its grey a contrast to the moss.") == "The stone lies undisturbed, its grey a contrast to the moss."
+
+
+def test_body_line_carries_a_memoised_gloss(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    monkeypatch.setenv('OBJECT_GLOSS', '1')
+    pg._BODY_GLOSS.clear()
+    calls = []
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda **k: (calls.append(1) or 'a small slender winged humanoid with pointed ears.')))
+    card = {'card_type': 'creature', 'type_line': 'Legendary Creature — Faerie Warlock'}
+    line = pg._body_line(card, 'm')
+    assert 'is a faerie — a small slender winged humanoid with pointed ears' in line
+    pg._body_line(card, 'm')
+    assert len(calls) == 1

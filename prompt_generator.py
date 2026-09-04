@@ -1206,7 +1206,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         + (f"Flavor text (use this as the THEMATIC ANCHOR for the scene): {safe_flavor}\n" if safe_flavor else "")
         + f"Direction: {guidance}\n"
         + figure_line
-        + _body_line(card)
+        + _body_line(card, local_model)
         + _object_line(card, local_model)
         + _camera_line(card_type)
         + (f"World (REQUIRED): this {card_type} exists in the style's own world — {staging.strip()} "
@@ -1511,7 +1511,40 @@ def _strip_franchise_sentences(text: str, style_hint: str) -> str:
     return ' '.join(kept).strip()
 
 
-def _body_line(card: dict) -> str:
+_BODY_GLOSS = {}
+
+
+def _body_gloss(kind: str, local_model: str) -> str:
+    """What a creature of this kind looks like, in plain words ("a faerie" ->
+    "a small slender winged humanoid with pointed ears"). Memoised per kind;
+    model knowledge, no creature tables. A faerie on a papyrus deck rendered
+    bird-legged when the Body line only named the kind."""
+    key = (kind or '').strip().lower()
+    if not key or not local_model or os.environ.get('OBJECT_GLOSS', '1') == '0':
+        return ''
+    if key in _BODY_GLOSS:
+        return _BODY_GLOSS[key]
+    gloss = ''
+    try:
+        import mlx_llm
+        reply = mlx_llm.chat(
+            messages=[{'role': 'user', 'content':
+                       f"In at most 12 plain words, describe the body of a {key} (a fantasy creature "
+                       "type): its build, head, limbs and any wings or tail. No name, no colour, "
+                       "no sentence, just the description."}],
+            model=local_model, max_tokens=30, temperature=0.0)
+        gloss = _tidy_prompt(_strip_chat_preamble(reply or '')).strip().rstrip('.')
+        gloss = re.split(r'[.\n]', gloss)[0].strip()
+        if not 3 <= len(gloss.split()) <= 24:
+            gloss = ''
+    except Exception as e:
+        print(f"  [prompt_gen] body gloss failed: {e}")
+    _BODY_GLOSS[key] = gloss
+    print(f"  [prompt_gen] body gloss for {key!r}: {gloss!r}")
+    return gloss
+
+
+def _body_line(card: dict, local_model: str = '') -> str:
     """H45: the first creature subtype names WHAT the body is — Magic writes
     race/animal first, class second ("Bat God" is a bat, "Human Wizard" a
     human). The writer otherwise gives a Bat God a woman's face with wings.
@@ -1525,7 +1558,9 @@ def _body_line(card: dict) -> str:
     if not subtypes:
         return ''
     kind = subtypes[0].lower()
-    return (f"Body: this creature is a {kind} — give it a {kind}'s head, face, eyes and limbs "
+    gloss = _body_gloss(kind, local_model)
+    return (f"Body: this creature is a {kind}" + (f" — {gloss}" if gloss else '') +
+            f" — give it a {kind}'s head, face, eyes and limbs "
             f"(not a human face with {kind} parts). Say so in the first sentence.\n")
 
 
