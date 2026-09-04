@@ -682,3 +682,27 @@ def test_scene_check_rerolls_an_invented_subject(monkeypatch):
     replies2 = iter(["A signet ring rests on an altar. Candles flicker.", "OK"])
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda messages, **kw: next(replies2)))
     assert pg.generate_subject_with_ai(card, None, backend='local', local_model='m').startswith('A signet ring rests')
+
+
+def test_franchise_stripping_only_uses_a_franchise_name(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    draft = ("Krark's Thumb, a severed goblin thumb, sits in deep shadow as smoke curls past. "
+             "A bold shaft of light finds it.")
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda messages, **kw: draft))
+    card = {'name': "Krark's Thumb", 'type_line': 'Legendary Artifact', 'oracle_text': '', 'card_type': 'artifact'}
+    # unnamed deck: the style block is the hint; nothing may be stripped
+    out = pg.generate_subject_with_ai(card, None, backend='local', local_model='m',
+                                      style_hint='comic book art, bold ink outlines, swirling smoke, deep shadows')
+    assert out.startswith("Krark's Thumb") and 'smoke' in out and 'bold' in out
+    # artist deck: name words ("hand", "drawn") are not cast tokens
+    out = pg.generate_subject_with_ai(card, None, backend='local', local_model='m',
+                                      style_hint='Dr. Seuss hand drawn illustration — ink illustration',
+                                      style_source_name='Dr. Seuss hand drawn illustration', style_source_kind='artist')
+    assert out.startswith("Krark's Thumb") and 'shadow' in out
+    # franchise deck: a sentence naming the cast IS stripped
+    draft2 = "Krark's Thumb sits on a bench. Rick grabs it from the shelf."
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda messages, **kw: draft2))
+    out = pg.generate_subject_with_ai(card, None, backend='local', local_model='m',
+                                      style_source_name='Rick and Morty', style_source_kind='franchise')
+    assert 'Rick grabs' not in out and out.startswith("Krark's Thumb")

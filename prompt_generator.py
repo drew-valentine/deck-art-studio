@@ -732,7 +732,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                               local_model: str = 'llama3.1:8b',
                               style_hint: str = '', steer: str = '',
                               style_source_name: str = '', staging: str = '',
-                              figure_idiom: str = '') -> str:
+                              figure_idiom: str = '', style_source_kind: str = '') -> str:
     """Use an LLM to generate a subject description tailored to the deck's style.
 
     Sends the LLM a rule-based description as a reference anchor plus
@@ -922,8 +922,13 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     # cast into the art — combined with the style name at render time, actual
     # show characters appear in card art. Sentences naming style-source tokens
     # are stripped from the anchor before the scene writer ever sees them.
-    safe_flavor = _strip_franchise_sentences(flavor,
-                                             style_source_name or style_hint)
+    # Only a FRANCHISE's own name yields cast tokens. Passing the style hint
+    # here turned every word of the style block ("smoke", "bold", "deep",
+    # "hand") into a forbidden token on unnamed and artist decks, and scene
+    # sentences containing them were silently deleted.
+    franchise_name = (style_source_name
+                      if franchise_style_phrase(style_source_name, style_source_kind) else '')
+    safe_flavor = _strip_franchise_sentences(flavor, franchise_name)
 
     # Rules text is game mechanics, not imagery: "exile cards from the top of
     # your library" made an enchantment a library twice. Only creatures and
@@ -977,7 +982,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             if _opens_with_subject(retry, card):
                 out = retry
             print(f"  [prompt_gen] opening rule retry for {name}: {'kept' if out is retry else 'draft kept'}")
-        out = _strip_franchise_sentences(out, style_source_name or style_hint)   # output backstop
+        out = _strip_franchise_sentences(out, franchise_name)   # output backstop
         out = _strip_example_leak(out, card)
         out = _limit_scene_sentences(out, 3)
         # H21: writer variance is the dominant failure now (a chair inside a

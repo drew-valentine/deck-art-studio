@@ -4184,7 +4184,8 @@ def _execute_prompt_job(job, ctx):
                         local_model=bcfg['ollama_model'], style_hint=style_hint,
                         steer=(job.feedback or ''),
                         style_source_name=style_name, staging=staging,
-                        figure_idiom=figure_idiom)
+                        figure_idiom=figure_idiom,
+                        style_source_kind=(data.get('style_source_kind') or ''))
                     break
                 except Exception as e:
                     err_str = str(e)
