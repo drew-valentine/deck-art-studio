@@ -640,25 +640,25 @@ _LIGHT_WORD_RE = re.compile(
 
 
 def _strip_light_words(text: str) -> str:
-    """Flat media (ink, cel, papyrus...) have no rendered light; a clause about
-    glow, beams or shadows drags the render toward smooth digital painting.
-    Drop the comma segments that carry light words; a sentence left with
-    nothing disappears."""
+    """Last resort for flat media: drop whole sentences that still carry light
+    words (the rewrite request below handles the normal case). Never leaves
+    fragments behind."""
     if not text:
         return text
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    kept_sents = []
-    for sent in sentences:
-        end = sent[-1] if sent and sent[-1] in '.!?' else ''
-        body = sent[:-1] if end else sent
-        segs = [g.strip() for g in re.split(r'[,;]', body) if g.strip()]
-        keep = [g for g in segs if not _LIGHT_WORD_RE.search(g)]
-        if not keep:
-            continue
-        rebuilt = ', '.join(keep)
-        rebuilt = rebuilt[0].upper() + rebuilt[1:]
-        kept_sents.append(rebuilt + (end or '.'))
-    return ' '.join(kept_sents)
+    sentences = [x.strip() for x in re.split(r'(?<=[.!?])\s+', text.strip()) if x.strip()]
+    kept = [x for x in sentences if not _LIGHT_WORD_RE.search(x)]
+    return ' '.join(kept) if kept else sentences[0]
+
+
+def _tidy_prompt(text: str) -> str:
+    """Strip stray quotes and doubled punctuation the small model leaves."""
+    if not text:
+        return text
+    out = re.sub(r'["\u201c\u201d]+', '', text)
+    out = re.sub(r'\.{2,}', '.', out)
+    out = re.sub(r'\s+([.!?,;])', r'\1', out)
+    out = re.sub(r'\s{2,}', ' ', out).strip()
+    return out
 
 
 def _strip_unpaintable(text: str) -> str:
@@ -1097,11 +1097,32 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         out = _strip_franchise_sentences(out, franchise_name)   # output backstop
         out = _strip_example_leak(out, card)
         out = _strip_unpaintable(out)
-        if is_flat:
+        if is_flat and _LIGHT_WORD_RE.search(out):
+            # ask for the same scene without rendered light; strip sentences
+            # only if the rewrite still carries light words
+            try:
+                relit = mlx_llm.chat(
+                    messages=[
+                        {'role': 'system', 'content': system_msg},
+                        {'role': 'user', 'content': user_msg},
+                        {'role': 'assistant', 'content': out},
+                        {'role': 'user', 'content':
+                            "This medium is flat and has no rendered light. Rewrite the same scene "
+                            "keeping every subject, pose, colour and setting, but remove every word "
+                            "about light, glow, beams, shadows or shine. Same length."},
+                    ],
+                    model=local_model, max_tokens=220, temperature=0.4)
+                relit = _limit_scene_sentences(_strip_chat_preamble(relit), 3)
+                if len(relit.split()) >= 5 and _opens_with_subject(relit, card):
+                    out = relit
+                    print(f"  [prompt_gen] flat-media rewrite for {name}")
+            except Exception as e:
+                print(f"  [prompt_gen] flat-media rewrite failed: {e}")
             out = _strip_light_words(out)
         out = _fix_invented_cyclops(out, base_desc)
         out = _limit_scene_sentences(out, 3)
         out = _fix_dangling_tail(out)
+        out = _tidy_prompt(out)
         # H21: writer variance is the dominant failure now (a chair inside a
         # ring, a bird for a faerie). A cheap checklist pass judges the draft
         # against the card; one lower-temperature re-roll if it fails.

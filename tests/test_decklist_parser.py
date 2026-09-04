@@ -747,10 +747,11 @@ def test_dangling_tail_and_invented_cyclops():
     assert _fix_invented_cyclops("Okaun glares with his single eye.", "Okaun, a cyclops with one eye") == "Okaun glares with his single eye."
 
 
-def test_strip_light_words_keeps_the_rest():
-    from prompt_generator import _strip_light_words
+def test_strip_light_words_drops_whole_sentences_only():
+    from prompt_generator import _strip_light_words, _tidy_prompt
     out = _strip_light_words("A golden ring rests on a crimson cushion, its gemstone polished to a warm sheen. Bold stripes cross the cushion.")
-    assert out == "A golden ring rests on a crimson cushion. Bold stripes cross the cushion."
-    out2 = _strip_light_words("Sunbeams illuminate the scene, while the priest raises the crown.")
-    assert out2 == "While the priest raises the crown."
+    assert out == "Bold stripes cross the cushion."
     assert _strip_light_words("Keiga rises from the sea, spray flying.") == "Keiga rises from the sea, spray flying."
+    # the only sentence carrying light words is kept rather than emptying the prompt
+    assert _strip_light_words("A ring gleams.") == "A ring gleams."
+    assert _tidy_prompt('The ring\'s ornate details.". Next.') == "The ring's ornate details. Next."
