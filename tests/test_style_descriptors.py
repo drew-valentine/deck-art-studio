@@ -792,3 +792,16 @@ def test_tidy_strips_quoted_slogans_and_camera_directions():
     out = _tidy_prompt(t)
     assert ',,' not in out and 'camera' not in out and out.startswith('Invasion of Zendikar, stands proudly')
     assert _tidy_prompt("A ring sits on a cloth.") == "A ring sits on a cloth."
+
+
+def test_rune_clauses_are_stripped_as_lettering():
+    from prompt_generator import _tidy_prompt
+    t = "A golden signet ring, its surface etched with intricate runes, rests on a pedestal, its band a deep yellow."
+    out = _tidy_prompt(t)
+    assert out == 'A golden signet ring, rests on a pedestal, its band a deep yellow.'
+
+
+def test_light_words_catch_casting_with_adjectives():
+    from prompt_generator import _LIGHT_WORD_RE
+    assert _LIGHT_WORD_RE.search('embers dance, casting a warm, golden tone on the ring')
+    assert not _LIGHT_WORD_RE.search('the wizard casts a spell of binding')

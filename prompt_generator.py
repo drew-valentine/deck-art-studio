@@ -662,7 +662,7 @@ _LIGHT_WORD_RE = re.compile(
     r'gleam(?:s|ing)?|sheen|(?:warm|soft|golden|pale|dim|harsh|hard|rim|back)[- ]lit|'
     r'(?:warm|soft|golden|pale|dim|harsh|hard|rim|back|side|low)[- ]light\w*|lit by|lighting|'
     r'shadows?|halo|luminous|radiant|radiating|bathed in|sun ?sets?|sunset|sunrise|dawn|dusk|'
-    r'burnished|glint(?:s|ing)?|cast(?:s|ing)? (?:a |an |the |long |deep |soft )?(?:glow|light|shadow|tone|beam)\w*|'
+    r'burnished|glint(?:s|ing)?|cast(?:s|ing)? (?:a |an |the )?(?:[a-z]+,? ){0,3}?(?:glow|light|shadow|tone|beam|hue)s?\b|'
     r'silhouetted against|backlit|candlelit|moonlit|sunlit|lamplight|candlelight|firelight|torchlight|'
     r'sunlight|sunshine|sparkl\w*|shin(?:e|es|ing|y)|glossy|polished|lustrous|metallic sheen|highlights?|'
     r'glisten\w*|(?:fading|failing|dying|first|last|morning|evening|late) light|in the light of|'
@@ -716,7 +716,7 @@ def _cut_light_phrases(sentence: str) -> str:
 
 _LETTERING_RE = re.compile(
     r"(?:,\s*)?\b(?:with|bearing|showing|displaying|marked with|engraved with|stamped with|etched with)\s+"
-    r"(?:a |an |the )?[^.;]{0,60}?(?:\b(?:letters?|initials?|monogram|inscription|lettering|numerals?|"
+    r"(?:a |an |the )?[^.;]{0,60}?(?:\b(?:letters?|initials?|monogram|inscriptions?|lettering|numerals?|runes?|glyphs?|sigils?|symbols?|"
     r"words?|glyphs? of text)\b|the (?:letter|word) '?[A-Za-z]'?|['\u2018\u2019][A-Za-z]['\u2018\u2019])"
     r"(?:\s+(?!(?:rests?|sits?|lies?|stands?|hangs?|floats?|rises?|glows?)\b)"
     r"[A-Za-z'\u2018\u2019-]+){0,8}", re.IGNORECASE)
@@ -763,6 +763,7 @@ def _tidy_prompt(text: str) -> str:
     out = re.sub(r',\s*(?:the|a|an|its|his|her)\s+[A-Za-z-]+\s*(?=[.!?]\s*$)', '', out)
     out = re.sub(r'\s{2,}', ' ', out).strip()
     out = _LETTERING_RE.sub('', out)                 # "a small silver 'A' on its face"
+    out = re.sub(r',\s*(?:its|his|her|their)\s+[a-z]+\s*,', ',', out)   # ", its surface," left behind
     out = re.sub(r'["\u201c\u201d]+', '', out)
     out = re.sub(r'\.{2,}', '.', out)
     out = re.sub(r'\s+([.!?,;])', r'\1', out)
