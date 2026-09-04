@@ -636,7 +636,9 @@ _LIGHT_WORD_RE = re.compile(
     r'\b(?:glow(?:s|ing)?|beams?|sunbeams?|shafts? of|rays? of|shimmer(?:s|ing)?|illuminat\w*|'
     r'gleam(?:s|ing)?|sheen|(?:warm|soft|golden|pale|dim|harsh|hard|rim|back)[- ]lit|'
     r'(?:warm|soft|golden|pale|dim|harsh|hard|rim|back|side|low)[- ]light\w*|lit by|lighting|'
-    r'shadows?|halo|luminous|radiant|radiating|bathed in)\b', re.IGNORECASE)
+    r'shadows?|halo|luminous|radiant|radiating|bathed in|sun ?sets?|sunset|sunrise|dawn|dusk|'
+    r'burnished|glint(?:s|ing)?|cast(?:s|ing)? (?:a |an |the |long |deep |soft )?(?:glow|light|shadow|tone|beam)\w*|'
+    r'silhouetted against|backlit|candlelit|moonlit|sunlit|lamplight|candlelight|firelight|torchlight)\b', re.IGNORECASE)
 
 
 def _strip_light_words(text: str) -> str:
