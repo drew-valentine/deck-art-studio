@@ -188,8 +188,10 @@
     - [x] H55 — colour rewrite triggers on the subject sentence (figure itself coloured on the picture-book deck); instruction labels, parroted framing phrases, stranded fragments stripped; abstraction strip takes any adjective. Commit f733e29.
     - [x] H59 — artifacts get an Object line with a model-derived plain gloss of the literal object ("a signet ring — a finger ring with a flat engraved top"), memoised per phrase, no object tables; five of five object cards across the five decks now render as real rings in their deck's style (before: two of five were a goblet or a jewelled box). Object cards are no longer the weak class. Commit 6742381.
     - [x] H58 — when the inspector's object check fails, the re-roll leads the scene with the literal object instead of only changing the seed. Commit 6742381.
-    - [ ] H60 — style world features lead the land render prompt (WORLD_LEAD hook), seed A/B in flight
-    - [ ] m11/m12 — 24-card and 18-card deck slices with two takes + inspection, in flight
+    - [x] H60 — world features from the staging recall lead a land's render prompt. A seed A/B on the cartoon deck put crystal shards into both seeds where the base pair was a generic lake. On by default, person nouns filtered, WORLD_LEAD=0 mutes. Commit 328941a.
+    - [x] m11 — fine-line ink deck, 24-card slice, two takes + inspection: about 21 of 24 on-style with sensible composition, eight or more WOW-level. Three final "text" verdicts (signatures, handled by the art zoom); one floating-head miss led to a new body-visible advisory (measurement queued).
+    - [ ] m12 — cartoon deck, 18-card slice, two takes + inspection, in flight
+    - [ ] H61 — moment rewrite for creatures whose first sentence is a static posture (in flight on the m12 slice)
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
