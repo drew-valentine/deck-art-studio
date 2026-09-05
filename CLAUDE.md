@@ -114,6 +114,9 @@ decks/<deck-slug>/
   'painted illustration') is inserted right after the bucket anchor. Colour coverage
   is measured from reference pixels (`pixel_palette`); character-heavy references (VLM yes/no,
   `prominent_character`) default the deck to Medium unless `style_reference.user_set`.
+  Signature bleed (H73): local renders are 8% taller and the bottom band is cropped before saving
+  (`SIGNATURE_BLEED`, default 0.08, 0 disables) — the only signature mitigation that measured clean
+  (0/8 on an artist-named deck vs ~40% signed); the inspector's edge zoom remains the backstop.
   End-of-batch inspection (`INSPECT` job, `_execute_inspect_job`, `vision_analyzer.inspect_render`):
   VLM defect checklist over the batch's renders, verdict in `.meta.json['inspection']`, one
   automatic re-roll then a final record-only pass; `POST /api/decks/<id>/inspect`; RENDER_INSPECT=0.

@@ -414,3 +414,14 @@ def test_franchise_lead_and_guard_are_card_type_aware():
     assert render_style_lead('Rick & Morty', '', 'franchise', 'enchantment').endswith('original unnamed figures only')
     assert render_style_lead('Moebius', '', 'artist', 'artifact') == 'in the style of Moebius'
     assert 'card_type' in ds._assemble_flux_prompt.__code__.co_varnames
+
+
+def test_signature_bleed_size(monkeypatch):
+    import deck_studio as ds
+    monkeypatch.setenv('SIGNATURE_BLEED', '0')
+    assert ds._bleed_size('1024x1280', ds._signature_bleed()) == ('1024x1280', None)
+    monkeypatch.delenv('SIGNATURE_BLEED', raising=False)
+    assert ds._signature_bleed() == 0.08
+    monkeypatch.setenv('SIGNATURE_BLEED', '0.08')
+    size, crop = ds._bleed_size('1024x1280', ds._signature_bleed())
+    assert size == '1024x1392' and crop == (1024, 1280)

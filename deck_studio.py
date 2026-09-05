@@ -1991,6 +1991,23 @@ def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '', car
     return out + (f' {extra}.' if extra else '') + tail
 
 
+def _signature_bleed() -> float:
+    try:
+        return max(0.0, min(0.25, float(os.environ.get('SIGNATURE_BLEED', '0.08') or 0)))
+    except ValueError:
+        return 0.0
+
+
+def _bleed_size(size_str: str, bleed: float):
+    """(size to render, (w, h) to crop back to) for a bottom bleed fraction;
+    the rendered height rounds up to a multiple of 16. No bleed -> (size, None)."""
+    if not bleed:
+        return size_str, None
+    w, h = [int(x) for x in size_str.split('x')]
+    extra = int(-(-h * bleed // 16) * 16)          # ceil to a multiple of 16
+    return f"{w}x{h + extra}", (w, h)
+
+
 def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_override=None,
                     deck_meta=None, deck_dir=None, seed=None, card_type=None):
     """Generate an image with the local FLUX model (mflux). Returns a PIL Image.
@@ -2386,12 +2403,22 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
 
         # ── Generate the image ──
         if backend == 'local':
+            # H73: render 8% taller and drop the bottom band, where the image
+            # model signs picture-book art, so the RAW art is clean. Measured on
+            # eight lands of an artist-named deck: 0/8 signed vs ~40% before;
+            # text / lead / token-crop mitigations had all failed.
+            # SIGNATURE_BLEED=0 disables, up to 0.25.
+            bleed = _signature_bleed()
+            gen_size, crop_to = _bleed_size(actual_size or model_cfg['size'], bleed)
             result_image = _generate_local(card_name, model_cfg, full_prompt,
                                            status_dict=_status,
-                                           size_override=actual_size,
+                                           size_override=gen_size,
                                            deck_meta=_meta, seed=seed,
                                            card_type=(card or {}).get('card_type'),
                                            deck_dir=_raw_art_dir.parent)
+            if crop_to and result_image is not None:
+                cw, ch = crop_to
+                result_image = result_image.crop((0, 0, cw, ch))
         else:
             result_image = _generate_openai(card_name, model_cfg, full_prompt,
                                             status_dict=_status,
