@@ -163,7 +163,7 @@
     - [x] m8 final validation on shipped defaults — see verdict; criterion stays open
     - [x] Inspection trial catches the three-armed Krark / signatures — count protocol + edge-strip confirmation: 6/16 flagged, all true positives (Krark hands, Keiga doubled head, four signatures/text); 10 clean cards silent
     - [x] Scene grammar (wow) validated on five decks at fixed seeds
-    - [ ] Fake signatures on artist-named ink decks — PUBLIC-MATERIALS issue (a real artist name was rendered); text/lead/crop mitigations failed; the inspection pass flags them
+    - [ ] Fake signatures on artist-named ink decks — PUBLIC-MATERIALS issue (a real artist name was rendered); text/lead/crop mitigations failed; the inspection pass flags them. UPDATE: H73 removes them at generation time (0/8 measured); the inspection zoom remains the backstop. Owner to confirm on a full-deck rerun before closing.
     - [x] Writer backstop miss: subject-less draft with no opening-retry log (diagnose with the new draft log) — root cause H31 (stripper fed the style block), fixed
     - [x] Flat-media grammar validated on Alela (4/4 flat, in register, dramatic)
     - [x] Full five-deck validation on the final grammar — the overnight m9 run (2026-09-03/04): five decks, two takes per card plus end-of-batch inspection, every sheet judged at full size; findings shipped in commit e02b9c3
@@ -214,6 +214,7 @@
     - [x] H69 — the franchise render lead is card-type aware: creatures keep "original character designs", artifacts and lands get "no people, no characters" plus a guard line, enchantments and spells get "original unnamed figures only"; quoted slogans, camera directions and doubled punctuation are stripped from prompts. Re-rendered on the owner's deck: the goblin's thumb is a single detached thumb on a cord (a long-standing complaint), the saga a gear city with unnamed workers. Sheet h69-heads-i-win.jpg. Commit 39345c6.
     - [x] H70 — regression check of the card-type-aware lead on the cartoon deck's non-figure cards: crystal-meadow landscape and dragon both WOW-level, ring correct.
     - [x] H71 — rune, glyph, sigil and symbol clauses count as lettering and are stripped (a signet's seal face had been lettered from "etched with intricate runes"); "casting a warm, golden tone" joins the flat-media light words; the re-rendered signet is a clean ring on a crystal pedestal. Sheet h71-signet.jpg. Commit 027fa23.
+    - [x] H73 — signature bleed: local renders are 8% taller and the bottom band is cropped before saving; measured on eight lands of the artist-named picture-book deck: 0 of 8 signed versus about 40% on the owner's rerun, compositions intact; on by default (SIGNATURE_BLEED=0 disables). The first signature mitigation that measured clean (H24 lead and H28 token-crop had failed). Commit 1d98552. Sheet h73-bleed.jpg.
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
