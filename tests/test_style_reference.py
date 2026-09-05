@@ -403,6 +403,7 @@ def test_world_features_from_staging():
     assert ds._world_features(st) == ['glowing plants', 'floating crystals']
     assert ds._world_features('') == []
     assert ds._world_features('Scenes are staged with symbolic figures and towering pylons.') == ['towering pylons']
+    assert ds._world_features('Scenes are staged in a whimsical setting with colorful, abstract buildings and intricate, surreal architecture.') == ['abstract buildings', 'surreal architecture']
 
 
 def test_franchise_lead_and_guard_are_card_type_aware():

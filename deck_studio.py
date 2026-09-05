@@ -1911,6 +1911,10 @@ def _world_features(staging: str) -> list:
             words = [w for w in _re.findall(r"[A-Za-z-]+", part.lower()) if w not in ('a', 'an', 'the', 'its', 'their')]
             if not (1 <= len(words) <= 3) or words[-1] in _WORLD_GENERIC or len(words[-1]) <= 3:
                 continue
+            # a bare adjective ("colorful", "intricate") is not a feature
+            if len(words) == 1 and (words[0].endswith(('ful', 'ate', 'ing', 'ous', 'ical', 'ive', 'less', 'ish'))
+                                    or words[0] in ('abstract', 'surreal', 'vibrant', 'whimsical', 'strange')):
+                continue
             try:
                 from prompt_generator import _PERSON_WORD_RE
                 if _PERSON_WORD_RE.search(' '.join(words)):
@@ -2040,7 +2044,10 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     # --- H60: the style's WORLD features lead a land's scene in the render
     # prompt itself (early tokens), not only in the writer's hint. Seed A/B on a
     # cartoon deck: crystal shards appeared in both seeds; WORLD_LEAD=0 mutes.
-    if card_type in ('land', 'enchantment', 'instant', 'sorcery') and os.environ.get('WORLD_LEAD', '1') != '0':
+    # Off by default since the user saw a whole deck's lands share one backdrop
+    # (the same "abstract buildings" opened every prompt); the writer's World
+    # line varies per card, this lead did not. WORLD_LEAD=1 re-enables.
+    if card_type in ('land', 'enchantment', 'instant', 'sorcery') and os.environ.get('WORLD_LEAD', '0') == '1':
         feats = _world_features(_meta.get('style_staging') or '')
         if feats:
             subject = f"{', '.join(feats[:3])}. {subject}"
