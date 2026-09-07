@@ -602,15 +602,21 @@ def hint_without_palette(block: str) -> str:
     import re as _re
     if not block:
         return ''
+    from vision_analyzer import _COLOR_WORDS
+    modifiers = {'deep', 'dusty', 'muted', 'pale', 'bright', 'soft', 'rich', 'dark', 'light', 'vivid',
+                 'warm', 'cool', 'faded', 'washed', 'bold', 'desaturated', 'acid', 'neon', 'earthy', 'burnt'}
+    def _is_hue(part):
+        toks = _re.findall(r'[a-z]+', part.lower())
+        return bool(toks) and all(t in _COLOR_WORDS or t in modifiers for t in toks) and any(t in _COLOR_WORDS for t in toks)
     parts = [p.strip() for p in block.split(',')]
     out, skipping = [], False
     for p in parts:
         if p.lower().startswith('palette of'):
             skipping = True          # the clause runs across several commas
             continue
-        if skipping and p and p == p.lower() and len(p.split()) <= 3 and not _re.search(r'\b(lines?|ink|shading|outlines?|textures?|brush|pen|strokes?|detail|anatomy|eyes|faces|forms|hair)\b', p):
-            continue                 # still inside the hue list
-        skipping = False
+        if skipping and _is_hue(p):
+            continue                 # still inside the hue list: only colour words
+        skipping = False             # the first non-hue part ends the clause (idiom phrases follow it)
         out.append(p)
     return ', '.join(x for x in out if x)
 

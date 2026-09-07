@@ -639,3 +639,21 @@ def test_record_steer_persists_and_clears(tmp_path):
     assert ctx['cards'][0]['steer'] == 'a beautiful zombie elf'
     ds._record_steer(ctx, 'Glissa, the Traitor', '')
     assert 'steer' not in json.load(open(tmp_path / 'deck.json'))['cards'][0]
+
+
+def test_inspect_subject_hint_uses_the_front_face_type():
+    import deck_studio as ds
+    card = {'name': 'Brightcap Badger // Fungus Frolic', 'card_type': 'creature',
+            'type_line': 'Creature — Badger Druid // Instant — Adventure'}
+    assert ds._inspect_subject_hint(card) == 'a badger druid'
+
+
+def test_names_object_uses_the_head_noun(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: 'pendant, cord, cloth'))
+    assert va._names_object('x.png', 'a pendant on a cord', 'v')
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: 'cord, cloth'))
+    assert not va._names_object('x.png', 'a pendant on a cord', 'v')
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: 'engine, pipes'))
+    assert va._names_object('x.png', 'an engine of brass and iron', 'v')

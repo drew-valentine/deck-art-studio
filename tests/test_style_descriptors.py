@@ -840,3 +840,11 @@ def test_steer_survives_rewrites():
     kept = "Glissa, the Traitor, a beautiful zombie elf with a serene face, steps through the wood."
     assert _ensure_steer_in_prompt(kept, 'Glissa is a beautiful zombie elf', card) == kept
     assert _ensure_steer_in_prompt(t, '', card) == t
+
+
+def test_hint_without_palette_stops_at_the_hue_list():
+    from prompt_generator import hint_without_palette
+    block = ('fine-line ink illustration, flat color fills, palette of soft pink, muted green, deep brown, '
+             'dusty orange, exaggerated proportions, stiff elegant poses, recurring spirals')
+    assert hint_without_palette(block) == ('fine-line ink illustration, flat color fills, exaggerated proportions, '
+                                           'stiff elegant poses, recurring spirals')

@@ -238,6 +238,8 @@ class _Engine:
         request (no references -> the text tokens alone, same as txt2img), so
         once Redux is loaded we never reload for a reference-less deck; a
         resident txt2img model is replaced only when references first arrive."""
+        if want_redux and getattr(self, "_redux_broken", False):
+            want_redux = False                      # Redux failed to load once; txt2img serves everything
         if self._flux is not None and self._model_key == model_key and (
                 self._kind == "redux" or not want_redux):
             return
@@ -245,6 +247,36 @@ class _Engine:
         from mflux.models.common.config.model_config import ModelConfig
         cfg = self._model_config(model_key)
         if want_redux:
+            try:
+                self._load_redux(model_key, cfg, ModelConfig)
+            except Exception as e:
+                # A broken Redux cache or a monkey-patch failure must not take
+                # every generation down: fall back to plain txt2img for the
+                # worker's lifetime and say so in the log.
+                _log(f"Redux load failed ({e!r}); falling back to txt2img without references")
+                self._redux_broken = True
+                self._free()
+                want_redux = False
+        if want_redux:
+            pass                                    # loaded above
+        else:
+            from mflux.models.flux.variants.txt2img.flux import Flux1
+            _log(f"loading FLUX txt2img ({model_key}) ...")
+            self._flux = Flux1(model_config=ModelConfig.schnell(),
+                               quantize=cfg["quantize"], model_path=cfg["repo"])
+            self._kind = "txt2img"
+        self._model_key = model_key
+        # Register the progress callback EXACTLY ONCE per loaded model. mflux's
+        # CallbackRegistry.register() just appends (no dedupe), so registering per
+        # generate would accumulate callbacks for the worker's lifetime — a slow
+        # leak that makes the progress line flap and stdout grow unbounded. The
+        # single callback reads the current step total from the Config mflux passes
+        # each loop, so it stays correct across requests with different step counts.
+        self._register_progress(self._flux)
+        _log(f"FLUX {self._kind} ready")
+
+    def _load_redux(self, model_key, cfg, ModelConfig):
+        if True:
             _install_redux_pooling()
             _install_block_mask()
             # mflux hardcodes the gated official repo for the Redux weights;
@@ -261,21 +293,6 @@ class _Engine:
             self._flux = Flux1Redux(model_config=ModelConfig.schnell(),
                                     quantize=cfg["quantize"], model_path=cfg["repo"])
             self._kind = "redux"
-        else:
-            from mflux.models.flux.variants.txt2img.flux import Flux1
-            _log(f"loading FLUX txt2img ({model_key}) ...")
-            self._flux = Flux1(model_config=ModelConfig.schnell(),
-                               quantize=cfg["quantize"], model_path=cfg["repo"])
-            self._kind = "txt2img"
-        self._model_key = model_key
-        # Register the progress callback EXACTLY ONCE per loaded model. mflux's
-        # CallbackRegistry.register() just appends (no dedupe), so registering per
-        # generate would accumulate callbacks for the worker's lifetime — a slow
-        # leak that makes the progress line flap and stdout grow unbounded. The
-        # single callback reads the current step total from the Config mflux passes
-        # each loop, so it stays correct across requests with different step counts.
-        self._register_progress(self._flux)
-        _log(f"FLUX {self._kind} ready")
 
     def _ensure_txt2img(self, model_key):
         self._ensure_model(model_key, want_redux=False)

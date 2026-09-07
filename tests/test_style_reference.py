@@ -433,3 +433,11 @@ def test_block_without_idiom_keeps_medium_and_palette():
     out = ds._block_without_idiom(block, ['exaggerated facial expressions', 'chunky rounded anatomy'])
     assert out == 'ink illustration, clean linework, palette of light blue, pastel purple, wobbly lines'
     assert ds._block_without_idiom(block, []) == block
+
+
+def test_recognized_source_without_kind_is_treated_as_franchise():
+    import deck_studio as ds
+    assert ds._effective_source_kind({'style_source': '', 'style_source_kind': ''}) == 'franchise'
+    assert ds._effective_source_kind({'style_source': 'Moebius', 'style_source_kind': 'artist'}) == 'artist'
+    assert ds._effective_source_kind({'style_source': 'Moebius', 'style_source_kind': ''}) == ''
+    assert ds._effective_source_kind({'style_source': '', 'style_source_kind': 'movement'}) == 'movement'

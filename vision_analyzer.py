@@ -1994,7 +1994,10 @@ def _names_object(image_path, subject_hint: str, vision_model: str, alternates=(
     by a companion prop (a feather beside a ring). True on any read failure
     (never punish on a broken read)."""
     import re as _re
-    words = [w for w in _re.findall(r'[a-z]+', (subject_hint or '').lower()) if w not in ('a', 'an', 'the', 'of')]
+    # the HEAD noun: the last word before the first preposition ("a pendant
+    # on a cord" -> pendant, "an engine of brass and iron" -> engine)
+    head = _re.split(r'\b(?:on|of|with|in|from|for|around|over|under|at|by)\b', (subject_hint or '').lower(), 1)[0]
+    words = [w for w in _re.findall(r'[a-z]+', head) if w not in ('a', 'an', 'the')]
     if not words:
         return True
     noun = words[-1]

@@ -1845,6 +1845,21 @@ def _effective_style_source(meta) -> str:
          if isinstance(im, dict)])
 
 
+def _effective_source_kind(meta) -> str:
+    """The source kind for de-naming. A DECLARED source keeps its recalled
+    kind (an artist's name passes through by design). A source that was only
+    RECOGNIZED by the analyst with no recalled kind is treated as a franchise:
+    the name never reaches the image model or the writer verbatim, and the
+    franchise firewall stays armed. (Review finding: an unknown-kind
+    recognized source went out as "in the style of X".)"""
+    m = meta or {}
+    kind = (m.get('style_source_kind') or '').strip()
+    declared = bool((m.get('style_source') or '').strip())
+    if not declared and not kind:
+        return 'franchise'
+    return kind
+
+
 # Which FLUX double blocks the references are shown to, by card type. Blocks
 # 0-9 carry medium / palette / stroke and never leak a reference's cast; the
 # middle double blocks (~10-14) carry FIGURE DESIGN — with them open a dragon
@@ -2066,13 +2081,17 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     _idiom_types = ('creature', 'planeswalker')
     if os.environ.get('FIGURE_IDIOM_ALL', '0') == '1':      # H51 experiment hook
         _idiom_types = ('creature', 'planeswalker', 'artifact', 'land', 'enchantment', 'instant', 'sorcery')
-    _steered = next((c.get('steer') for c in (cards_db or []) if c.get('name') == card_name.replace(BACK_FACE_SUFFIX, '')), '')
-    if not _steered:
-        try:
-            _dd = json.load(open(Path(deck_dir) / 'deck.json')) if deck_dir else {}
-            _steered = next((c.get('steer') for c in _dd.get('cards', []) if c.get('name') == card_name.replace(BACK_FACE_SUFFIX, '')), '')
-        except Exception:
-            _steered = ''
+    _base_name = card_name.replace(BACK_FACE_SUFFIX, '')
+    _steered = ''
+    try:
+        # the JOB's deck decides (a queued render for deck B must not inherit a
+        # steer set on the same card name in the active deck A)
+        _dd = json.load(open(Path(deck_dir) / 'deck.json')) if deck_dir else {}
+        _steered = next((c.get('steer') for c in _dd.get('cards', []) if c.get('name') == _base_name), '') or ''
+    except Exception:
+        _steered = ''
+    if not _steered and deck_dir and Path(deck_dir).name == active_deck_id:
+        _steered = next((c.get('steer') for c in (cards_db or []) if c.get('name') == _base_name), '') or ''
     if card_type in _idiom_types and os.environ.get('FIGURE_IDIOM', '1') != '0' and not (_steered or '').strip():
         # a user direction owns the figure's appearance (see _record_steer)
         subject = _with_figure_idiom(subject, (_meta.get('style_idiom') or []))
@@ -2115,7 +2134,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
         # genre phrase + original-characters guard. Artist names pass through.
         from prompt_generator import render_style_lead
         lead = render_style_lead(style_source, lineage=(_meta.get('style_lineage') or ''), card_type=card_type,
-                                 kind=(_meta.get('style_source_kind') or ''))
+                                 kind=_effective_source_kind(_meta))
         # experiment hook only (H24 A/B): replace the lead's phrase wholesale
         if os.environ.get('FLUX_LEAD_OVERRIDE'):
             lead = f"in the style of {os.environ['FLUX_LEAD_OVERRIDE']}"
@@ -4303,7 +4322,7 @@ def _execute_prompt_job(job, ctx):
         # biases scenes toward the show's trademark settings (labs, portals,
         # garages), which are character attractors at render time.
         from prompt_generator import franchise_style_phrase
-        style_hint = (franchise_style_phrase(style_name, data.get('style_source_kind') or '')
+        style_hint = (franchise_style_phrase(style_name, _effective_source_kind(data))
                       or style_name)
         # The block's palette clause is for the image model; in the writer's
         # hint it turns into scene content ("coral-colored stone").
@@ -4328,7 +4347,7 @@ def _execute_prompt_job(job, ctx):
                         steer=(job.feedback or ''),
                         style_source_name=style_name, staging=staging,
                         figure_idiom=figure_idiom,
-                        style_source_kind=(data.get('style_source_kind') or ''))
+                        style_source_kind=_effective_source_kind(data))
                     break
                 except Exception as e:
                     err_str = str(e)
@@ -4512,7 +4531,7 @@ def _inspect_subject_hint(card) -> str:
         except Exception:
             return ''
     if ctype == 'creature':
-        tl = card.get('type_line') or ''
+        tl = (card.get('type_line') or '').split(' // ')[0]        # the front face only
         sub = tl.split('—', 1)[1].strip() if '—' in tl else ''
         return f"a {sub.lower()}" if sub else ''
     return ''
