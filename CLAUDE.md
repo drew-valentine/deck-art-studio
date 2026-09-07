@@ -159,6 +159,12 @@ decks/<deck-slug>/
   hieroglyph/woodblock/pixel/flat opaque paint (`is_flat` in `generate_subject_with_ai`).
   Idiom phrases about writing (glyph/symbol/lettering/text/script) are filtered
   (`_IDIOM_WRITING_WORDS`).
+  USER STEER PRECEDENCE: a steer is the FIRST user-message line ("USER DIRECTION (HIGHEST PRIORITY)"),
+  every labelled line yields to it, the Body line and figure idiom are dropped, the moment rewrite is
+  skipped, `_ensure_steer_in_prompt` re-injects the steer's own words if any rewrite lost them, the
+  steer is persisted on the card (`_record_steer`) and the render side then omits the figure idiom and
+  the block's idiom phrases (`_block_without_idiom`). Any new writer line must be checked against a
+  steer before shipping — one REQUIRED Body line silently overrode "a beautiful zombie elf".
   STANDING RULE: deck-agnostic and style-agnostic — a new style must work with zero code
   changes; derive facts from the declaration, model knowledge and vision reads, never tables.
 - **18 GB memory rule**: FLUX and the LLM/VLM cannot be co-resident. `mlx_llm.unload()` is

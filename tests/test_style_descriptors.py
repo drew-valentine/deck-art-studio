@@ -779,7 +779,7 @@ def test_body_line_carries_a_memoised_gloss(monkeypatch):
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda **k: (calls.append(1) or 'a small slender winged humanoid with pointed ears.')))
     card = {'card_type': 'creature', 'type_line': 'Legendary Creature — Faerie Warlock'}
     line = pg._body_line(card, 'm')
-    assert 'is a faerie — a small slender winged humanoid with pointed ears' in line
+    assert 'is a faerie warlock — a small slender winged humanoid with pointed ears' in line
     pg._body_line(card, 'm')
     assert len(calls) == 1
 
@@ -805,3 +805,38 @@ def test_light_words_catch_casting_with_adjectives():
     from prompt_generator import _LIGHT_WORD_RE
     assert _LIGHT_WORD_RE.search('embers dance, casting a warm, golden tone on the ring')
     assert not _LIGHT_WORD_RE.search('the wizard casts a spell of binding')
+
+
+def test_body_line_uses_the_whole_subtype_and_yields_to_a_steer(monkeypatch):
+    import prompt_generator as pg
+    monkeypatch.setenv('OBJECT_GLOSS', '0')
+    card = {'card_type': 'creature', 'type_line': 'Legendary Creature — Phyrexian Zombie Elf'}
+    assert 'is a phyrexian zombie elf' in pg._body_line(card)
+    assert pg._body_line(card, steer_present=True) == ''
+
+
+def test_steer_leads_the_user_message(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    seen = []
+    def chat(messages, **kw):
+        seen.append(messages); return 'Glissa, the Traitor, a Phyrexian Zombie Elf, a beautiful pale elf, steps through the wood. Leaves fall.'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    card = {'name': 'Glissa, the Traitor', 'type_line': 'Legendary Creature — Phyrexian Zombie Elf', 'oracle_text': '', 'card_type': 'creature'}
+    out = pg.generate_subject_with_ai(card, None, backend='local', local_model='m', steer='Glissa is a beautiful zombie elf')
+    user = seen[0][1]['content']
+    assert user.startswith('USER DIRECTION (HIGHEST PRIORITY') and 'beautiful zombie elf' in user
+    assert 'beautiful' in out
+
+
+def test_steer_survives_rewrites():
+    from prompt_generator import _ensure_steer_in_prompt, _steer_phrase
+    card = {'name': 'Glissa, the Traitor', 'type_line': 'Legendary Creature — Phyrexian Zombie Elf'}
+    assert _steer_phrase('Glissa is a beautiful zombie elf', card) == 'a beautiful zombie elf'
+    assert _steer_phrase('make her a beautiful zombie elf', card) == 'a beautiful zombie elf'
+    t = "Glissa, the Traitor, a Phyrexian Zombie Elf, lunges forward, her slender limbs unfolding. Her leafy disguise blends with the foliage."
+    out = _ensure_steer_in_prompt(t, 'Glissa is a beautiful zombie elf', card)
+    assert out.startswith('Glissa, the Traitor — a beautiful zombie elf —')
+    kept = "Glissa, the Traitor, a beautiful zombie elf with a serene face, steps through the wood."
+    assert _ensure_steer_in_prompt(kept, 'Glissa is a beautiful zombie elf', card) == kept
+    assert _ensure_steer_in_prompt(t, '', card) == t

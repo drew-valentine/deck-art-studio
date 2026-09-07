@@ -1928,6 +1928,16 @@ def _world_features(staging: str) -> list:
     return out
 
 
+def _block_without_idiom(block: str, idiom) -> str:
+    """The style block minus its figure-idiom phrases (medium, coverage,
+    palette and motifs stay)."""
+    drop = {p.strip().lower() for p in (idiom or []) if p and p.strip()}
+    if not block or not drop:
+        return block
+    kept = [p for p in (x.strip() for x in block.split(',')) if p and p.lower() not in drop]
+    return ', '.join(kept)
+
+
 def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '', card_type: str = '') -> str:
     """Order: style lead, the scene's FIRST sentence (the subject), the rest of
     the style block, the rest of the scene, feedback. FLUX weights early
@@ -2056,7 +2066,15 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     _idiom_types = ('creature', 'planeswalker')
     if os.environ.get('FIGURE_IDIOM_ALL', '0') == '1':      # H51 experiment hook
         _idiom_types = ('creature', 'planeswalker', 'artifact', 'land', 'enchantment', 'instant', 'sorcery')
-    if card_type in _idiom_types and os.environ.get('FIGURE_IDIOM', '1') != '0':
+    _steered = next((c.get('steer') for c in (cards_db or []) if c.get('name') == card_name.replace(BACK_FACE_SUFFIX, '')), '')
+    if not _steered:
+        try:
+            _dd = json.load(open(Path(deck_dir) / 'deck.json')) if deck_dir else {}
+            _steered = next((c.get('steer') for c in _dd.get('cards', []) if c.get('name') == card_name.replace(BACK_FACE_SUFFIX, '')), '')
+        except Exception:
+            _steered = ''
+    if card_type in _idiom_types and os.environ.get('FIGURE_IDIOM', '1') != '0' and not (_steered or '').strip():
+        # a user direction owns the figure's appearance (see _record_steer)
         subject = _with_figure_idiom(subject, (_meta.get('style_idiom') or []))
     # --- H60: the style's WORLD features lead a land's scene in the render
     # prompt itself (early tokens), not only in the writer's hint. Seed A/B on a
@@ -2107,6 +2125,11 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
         # reconciled with the named style if one was given). Works for ANY style,
         # named or not. We use ONLY these — NOT the SDXL-era vision tokens, whose
         # mislabeled medium and warm palette pull back toward generic fantasy.
+        if (_steered or '').strip():
+            # the user's direction owns the figure; the block's figure idiom
+            # ("exaggerated facial expressions, chunky rounded anatomy") would
+            # pull a steered "beautiful" face back toward the deck's caricature
+            flux_style_prompt = _block_without_idiom(flux_style_prompt, _meta.get('style_idiom') or [])
         style_bits.append(flux_style_prompt)
     else:
         # No recognized source (or no canonical descriptors yet) — use the full
@@ -4210,6 +4233,41 @@ def _execute_art_job(job, ctx):
         cards_revision = int(time.time() * 1000)
 
 
+def _record_steer(ctx, name, steer):
+    """Persist the user's direction on the card (deck.json + the live card)
+    so the render side knows the appearance is user-owned and skips the
+    style's figure idiom; an empty steer clears it."""
+    base = name.replace(BACK_FACE_SUFFIX, '')
+    steer = (steer or '').strip()
+    with persist_lock:
+        deck_json = ctx['deck_dir'] / 'deck.json'
+        try:
+            data = json.load(open(deck_json))
+        except (OSError, ValueError):
+            return
+        for c in data.get('cards', []):
+            if c.get('name') == base:
+                if steer:
+                    c['steer'] = steer
+                else:
+                    c.pop('steer', None)
+        with open(deck_json, 'w') as f:
+            json.dump(data, f, indent=2)
+    for c in ctx.get('cards') or []:
+        if c.get('name') == base:
+            if steer:
+                c['steer'] = steer
+            else:
+                c.pop('steer', None)
+    if ctx.get('deck_id') == active_deck_id:
+        for c in cards_db:
+            if c['name'] == base:
+                if steer:
+                    c['steer'] = steer
+                else:
+                    c.pop('steer', None)
+
+
 def _write_deck_prompt(ctx, key, prompt):
     ppath = ctx['deck_dir'] / "art_prompts.json"
     with persist_lock:
@@ -4285,6 +4343,7 @@ def _execute_prompt_job(job, ctx):
         else:
             prompt = generate_prompt(unit, None)
         _write_deck_prompt(ctx, job.card_name, prompt)
+        _record_steer(ctx, job.card_name, job.feedback)
         job.progress = {'message': 'Prompt ready', 'pct': 100, 'result': prompt}
     finally:
         _ollama_work_done()

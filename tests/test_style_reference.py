@@ -425,3 +425,11 @@ def test_signature_bleed_size(monkeypatch):
     monkeypatch.setenv('SIGNATURE_BLEED', '0.08')
     size, crop = ds._bleed_size('1024x1280', ds._signature_bleed())
     assert size == '1024x1392' and crop == (1024, 1280)
+
+
+def test_block_without_idiom_keeps_medium_and_palette():
+    import deck_studio as ds
+    block = 'ink illustration, clean linework, palette of light blue, pastel purple, exaggerated facial expressions, chunky rounded anatomy, wobbly lines'
+    out = ds._block_without_idiom(block, ['exaggerated facial expressions', 'chunky rounded anatomy'])
+    assert out == 'ink illustration, clean linework, palette of light blue, pastel purple, wobbly lines'
+    assert ds._block_without_idiom(block, []) == block

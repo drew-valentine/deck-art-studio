@@ -627,3 +627,15 @@ def test_category_question_rescues_a_synonym_miss(monkeypatch):
     ])
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: next(answers)))
     assert va.inspect_render('x.png', 'Talisman of Hierarchy', 'artifact', 'v', subject_hint='a talisman') == []
+
+
+def test_record_steer_persists_and_clears(tmp_path):
+    import json
+    import deck_studio as ds
+    (tmp_path / 'deck.json').write_text(json.dumps({'cards': [{'name': 'Glissa, the Traitor'}]}))
+    ctx = {'deck_dir': tmp_path, 'deck_id': 'x', 'cards': [{'name': 'Glissa, the Traitor'}]}
+    ds._record_steer(ctx, 'Glissa, the Traitor', 'a beautiful zombie elf')
+    assert json.load(open(tmp_path / 'deck.json'))['cards'][0]['steer'] == 'a beautiful zombie elf'
+    assert ctx['cards'][0]['steer'] == 'a beautiful zombie elf'
+    ds._record_steer(ctx, 'Glissa, the Traitor', '')
+    assert 'steer' not in json.load(open(tmp_path / 'deck.json'))['cards'][0]

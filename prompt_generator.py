@@ -1168,7 +1168,10 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         light_line = (f"Light in this medium ({medium_word}): describe light and shadow as {how}; "
                       "never lens, bokeh, volumetric, HDR or photographic terms.\n")
 
-    if figure_idiom and figure_idiom.strip() and card_type in ('creature', 'planeswalker'):
+    if figure_idiom and figure_idiom.strip() and card_type in ('creature', 'planeswalker') \
+            and not (steer and steer.strip()):
+        # a user direction owns the subject's appearance; the style's figure
+        # idiom ("exaggerated features, chunky anatomy") would fight it
         figure_line = (f"Figure idiom (REQUIRED in the first sentence): describe the creature's "
                        f"eyes, face and body in this artist's terms — {figure_idiom.strip()} — "
                        "keeping its identity and creature type exactly as given.\n")
@@ -1209,12 +1212,19 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     # your library" made an enchantment a library twice. Only creatures and
     # planeswalkers get it (keywords like flying / menace are visual).
     rules_line = f"Rules: {oracle}\n" if card_type in ('creature', 'planeswalker') and oracle else ""
+    has_steer = bool(steer and steer.strip())
     user_msg = (
-        f"Card: {name}\nType: {type_line}\n{rules_line}"
+        (f"USER DIRECTION (HIGHEST PRIORITY — every line below yields to it, including Body, "
+         f"Object, Framing and World; the subject's appearance follows it exactly): {steer.strip()}\n"
+         "Render that direction as concrete visual detail in the FIRST sentence — face, skin, "
+         "hair, build, bearing, dress — not as a bare adjective; if it says beautiful, describe a "
+         "beautiful face and figure in plain words and drop anything grotesque.\n"
+         if has_steer else "")
+        + f"Card: {name}\nType: {type_line}\n{rules_line}"
         + (f"Flavor text (use this as the THEMATIC ANCHOR for the scene): {safe_flavor}\n" if safe_flavor else "")
         + f"Direction: {guidance}\n"
         + figure_line
-        + _body_line(card, local_model)
+        + _body_line(card, local_model, steer_present=has_steer)
         + _object_line(card, local_model)
         + _camera_line(card_type)
         + (f"World: this {card_type} exists in the style's own world — {staging.strip()} "
@@ -1307,7 +1317,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                 print(f"  [prompt_gen] flat-media strip for {name}: "
                       f"{len(before.split())} -> {len(out.split())} words")
         if card_type in ('creature', 'planeswalker') and _is_static_opening(out) \
-                and os.environ.get('MOMENT_REWRITE', '1') != '0':
+                and os.environ.get('MOMENT_REWRITE', '1') != '0' and not (steer and steer.strip()):
             # H61: "stands tall / rests serenely" openings are the writer's
             # default and read as plain; the grammar asks for a MOMENT. One
             # rewrite asks for a decisive action in the first sentence.
@@ -1412,6 +1422,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         if is_flat:
             out = _strip_light_words(out)
         out = _tidy_prompt(_fix_dangling_tail(out))
+        out = _ensure_steer_in_prompt(out, steer, card)
         if len(out.split()) < 5:
             # the backstops can strip a draft down to nothing (a franchise
             # sentence, a fragment); never persist an empty prompt
@@ -1563,12 +1574,14 @@ def _body_gloss(kind: str, local_model: str) -> str:
     return gloss
 
 
-def _body_line(card: dict, local_model: str = '') -> str:
+def _body_line(card: dict, local_model: str = '', steer_present: bool = False) -> str:
     """H45: the first creature subtype names WHAT the body is — Magic writes
     race/animal first, class second ("Bat God" is a bat, "Human Wizard" a
     human). The writer otherwise gives a Bat God a woman's face with wings.
     Deterministic, no creature tables."""
-    if card.get('card_type') != 'creature':
+    if card.get('card_type') != 'creature' or steer_present:
+        # with a user direction the user owns the appearance entirely; the
+        # Body line's own anatomy ideas (wings for a corrupted elf) fought it
         return ''
     type_line = card.get('type_line', '') or ''
     if '—' not in type_line:
@@ -1576,11 +1589,16 @@ def _body_line(card: dict, local_model: str = '') -> str:
     subtypes = type_line.split('—', 1)[1].strip().split()
     if not subtypes:
         return ''
-    kind = subtypes[0].lower()
-    gloss = _body_gloss(kind, local_model)
-    return (f"Body: this creature is a {kind}" + (f" — {gloss}" if gloss else '') +
-            f" — give it a {kind}'s head, face, eyes and limbs "
-            f"(not a human face with {kind} parts). Say so in the first sentence.\n")
+    # the WHOLE subtype phrase, not its first word: "Phyrexian Zombie Elf" is
+    # an elf corrupted by Phyrexia, and 'phyrexian' alone glossed as a winged
+    # skull-headed monster that overrode the user's own direction
+    kind = ' '.join(subtypes).lower()
+    # with a user direction the user has described the appearance: no model
+    # gloss (a gloss for a corrupted elf added horns and a tail over the steer)
+    gloss = '' if steer_present else _body_gloss(kind, local_model)
+    head = "Body (yields to the USER DIRECTION above): " if steer_present else "Body: "
+    return (f"{head}this creature is a {kind}" + (f" — {gloss}" if gloss else '') +
+            f" — give it that creature's head, face, eyes and limbs. Say so in the first sentence.\n")
 
 
 _OBJECT_GLOSS = {}
@@ -1728,6 +1746,46 @@ def _camera_line(card_type: str) -> str:
     if card_type == 'land':
         return "Framing (REQUIRED): a wide establishing view of the place with a clear focal landmark.\n"
     return ''
+
+
+_STEER_STOP = frozenset({'a', 'an', 'the', 'is', 'are', 'was', 'be', 'with', 'and', 'of', 'in', 'on',
+                         'to', 'as', 'very', 'make', 'her', 'his', 'its', 'their', 'she', 'he', 'it',
+                         'this', 'that', 'should', 'looks', 'look', 'like', 'more', 'less', 'not'})
+
+
+def _steer_phrase(steer: str, card: dict) -> str:
+    """The steer minus a leading '<Name> is' / 'make her' lead-in."""
+    name = (card.get('name') or '').split(' // ')[0]
+    t = (steer or '').strip().rstrip('.')
+    first = name.split(',')[0].strip()
+    t = re.sub(r'^(?:' + re.escape(name) + '|' + re.escape(first) + r')\s*(?:is|should be|looks like|as)\s+', '', t, flags=re.IGNORECASE)
+    t = re.sub(r'^(?:make|render|draw|show)\s+(?:her|him|it|them|' + re.escape(first) + r')\s+(?:as\s+)?', '', t, flags=re.IGNORECASE)
+    return t.strip()
+
+
+def _ensure_steer_in_prompt(text: str, steer: str, card: dict) -> str:
+    """Deterministic guarantee that the user's direction survives every
+    rewrite: if fewer than half of its content words appear in the prompt,
+    the direction is injected as an appositive right after the card's name
+    (or prepended). Rewrites had kept 'lunges forward' and dropped
+    'beautiful' — the one word the user typed."""
+    if not text or not steer or not steer.strip():
+        return text
+    phrase = _steer_phrase(steer, card)
+    # words the card already carries ("zombie", "elf" from the type line) do
+    # not count as the direction surviving; "beautiful" is the user's word
+    own = set(re.findall(r'[a-z]+', ((card.get('name') or '') + ' ' + (card.get('type_line') or '')).lower()))
+    words = [w for w in re.findall(r'[a-z]+', phrase.lower()) if w not in _STEER_STOP and len(w) > 2 and w not in own]
+    if not words:
+        return text
+    low = text.lower()
+    present = sum(1 for w in words if re.search(r'\b' + re.escape(w[:5]) + r'\w*', low))
+    if present * 2 >= len(words):
+        return text
+    name = (card.get('name') or '').split(' // ')[0]
+    if name and name in text:
+        return text.replace(name, f"{name} — {phrase} —", 1)
+    return f"{phrase[:1].upper()}{phrase[1:]}: {text}"
 
 
 def _ensure_creature_type_in_prompt(text: str, card: dict) -> str:
