@@ -8527,6 +8527,7 @@ header .separator {
 .queue-type.art { background: rgba(240,192,64,0.18); color: var(--gold); }
 .queue-type.prompt { background: rgba(33,150,243,0.18); color: var(--queued); }
 .queue-type.flavor { background: rgba(76,175,80,0.18); color: var(--success); }
+.queue-type.inspect { background: rgba(171,71,188,0.18); color: #ce93d8; }
 .queue-type.analyze { background: rgba(156,39,176,0.20); color: #ce93d8; }
 .queue-row-main { flex: 1; min-width: 0; }
 .queue-row-card {
@@ -9900,7 +9901,9 @@ function toggleQueueDrawer(force) {
   document.getElementById('queueScrim').classList.toggle('open', _queueOpen);
 }
 
-function _queueTypeLabel(t) { return t === 'art' ? 'Art' : t === 'prompt' ? 'Prompt' : t === 'analyze' ? 'Style' : 'Flavor'; }
+function _queueTypeLabel(t) {
+  return ({art: 'Art', prompt: 'Prompt', analyze: 'Style', flavor: 'Flavor', inspect: 'Inspect'})[t] || (t || 'Job');
+}
 
 function _queueRowHtml(job, kind) {
   // kind: 'running' | 'queued' | 'recent'
