@@ -1016,7 +1016,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         'enchantment': 'The card name is an event, effect or blessing, never a character: do not write the name as a person who stands or acts. Depict the SCENE the enchantment represents — the people, creatures, place, ritual, or event drawn from its flavor and rules text (e.g. an army of warriors growing stronger under a hopeful dawn, a blessing settling over a battlefield). Do NOT default to abstract swirling energy, a glowing aura, or a magical vortex — give it concrete subject matter.',
         'instant': 'Depict the dramatic moment of the spell being cast — the action and energy itself.',
         'sorcery': 'Depict the spell being cast — the ritual, the gathering of power.',
-        'land': 'Depict the LOCATION — terrain, architecture, or natural formation. NO central character.',
+        'land': 'Depict the LOCATION — terrain, architecture, or natural formation. NO central character. If the NAME names an event or a force (a blast, a storm, a flood, an eruption, a fumarole, a rift), show that event HAPPENING NOW at its peak — never the calm before or the aftermath.',
         'creature': 'Depict the creature itself as the single focal point.',
         'planeswalker': 'Depict the planeswalker character in a dramatic pose.',
     }
@@ -1232,7 +1232,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         + figure_line
         + _body_line(card, local_model, steer_present=has_steer)
         + _object_line(card, local_model)
-        + _camera_line(card_type)
+        + _camera_line(card_type, name)
         + (f"World: this {card_type} exists in the style's own world — {staging.strip()} "
            "Let that world colour the plants, sky, rock and light of the card's OWN subject; use at "
            "most one of its signature features, and only where the card's name allows it — a forest "
@@ -1322,6 +1322,29 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             if out != before:
                 print(f"  [prompt_gen] flat-media strip for {name}: "
                       f"{len(before.split())} -> {len(out.split())} words")
+        if _is_anticipation_or_past(out) and os.environ.get('MOMENT_REWRITE', '1') != '0':
+            # H74: the picture is a single present instant; a threat, a
+            # "soon", or a past-tense narration renders as the calm version
+            try:
+                now = mlx_llm.chat(
+                    messages=[
+                        {'role': 'system', 'content': system_msg},
+                        {'role': 'user', 'content': user_msg},
+                        {'role': 'assistant', 'content': out},
+                        {'role': 'user', 'content':
+                            "A picture shows ONE instant. Rewrite the same scene in the PRESENT tense "
+                            "with the event happening right now at full force — not threatening, "
+                            "about to, or afterwards. Same subject, colours and setting, same length."},
+                    ],
+                    model=local_model, max_tokens=220, temperature=0.5)
+                now = _limit_scene_sentences(_strip_chat_preamble(now), 3)
+                if len(now.split()) >= 12 and _opens_with_subject(now, card) and not _is_anticipation_or_past(now):
+                    out = _strip_unpaintable(now)
+                    if is_flat:
+                        out = _strip_light_words(out)
+                    print(f"  [prompt_gen] present-moment rewrite for {name}")
+            except Exception as e:
+                print(f"  [prompt_gen] present-moment rewrite failed: {e}")
         if card_type in ('creature', 'planeswalker') and _is_static_opening(out) \
                 and os.environ.get('MOMENT_REWRITE', '1') != '0' and not (steer and steer.strip()):
             # H61: "stands tall / rests serenely" openings are the writer's
@@ -1695,6 +1718,25 @@ _ACTION_VERB_RE = re.compile(
     re.IGNORECASE)
 
 
+_ANTICIPATION_RE = re.compile(
+    r"\b(?:threaten(?:s|ing|ed)? to|about to|on the (?:verge|brink|edge) of|poised to|ready to|"
+    r"waiting to|prepar(?:es|ing) to|set to|soon to|will (?:soon )?\w+|is going to|the calm before)\b",
+    re.IGNORECASE)
+_PAST_OPENING_RE = re.compile(
+    r"^(?:[^.!?]{0,80}?\b(?:stood|rose|loomed|towered|sat|lay|rested|hung|stretched|sprawled|glowed|"
+    r"tumbled|trembled|shook|erupted|burst|roared|raged|blazed|churned|surged|fell|flew|swept|"
+    r"cascaded|swirled|rushed|crashed|exploded|spread|crumbled)\b)", re.IGNORECASE)
+
+
+def _is_anticipation_or_past(text: str) -> bool:
+    """The scene describes what is ABOUT to happen, or narrates in the past
+    ('stood tall… threatening to unleash another blast' drew a calm mesa)."""
+    if not text:
+        return False
+    first = re.split(r'(?<=[.!?])\s+', text.strip())[0]
+    return bool(_ANTICIPATION_RE.search(text)) or bool(_PAST_OPENING_RE.search(first))
+
+
 def _is_static_opening(text: str) -> bool:
     """True when the FIRST sentence has a posture verb and no action verb."""
     if not text:
@@ -1739,7 +1781,19 @@ def _strip_invented_names(text: str, card: dict, flavor: str = '') -> str:
     return ' '.join(out_sents)
 
 
-def _camera_line(card_type: str) -> str:
+_EVENT_NOUN_RE = re.compile(
+    r"\b(?:blast|explosion|eruption|storm|tempest|hurricane|tornado|cyclone|flood|deluge|tsunami|"
+    r"quake|earthquake|avalanche|landslide|wildfire|inferno|blaze|rift|fumarole|geyser|maelstrom|"
+    r"cataclysm|collapse|surge|wave|lightning|thunder)s?\b", re.IGNORECASE)
+
+
+def _event_in_name(name: str) -> str:
+    """The event or force a card NAME is built on ('Blast Zone' -> 'blast'), else ''."""
+    m = _EVENT_NOUN_RE.search((name or '').split(' // ')[0])
+    return m.group(0).lower() if m else ''
+
+
+def _camera_line(card_type: str, name: str = '') -> str:
     """H53: a deterministic framing requirement per Magic card type, in the
     user message (where the writer obeys). Loose "camera and scale" wording
     gave a goblin as a giant fist with no face and a dragon cropped to a
@@ -1750,6 +1804,11 @@ def _camera_line(card_type: str) -> str:
     if card_type == 'artifact':
         return "Framing (REQUIRED): the whole object, centred and large, nothing cropped.\n"
     if card_type == 'land':
+        ev = _event_in_name(name)
+        if ev:
+            # a land named for an event: the event, not the terrain, is the picture
+            return (f"Framing (REQUIRED): the {ev} itself fills the frame at full force, seen close — "
+                    "the terrain is what it happens to, not the subject.\n")
         return "Framing (REQUIRED): a wide establishing view of the place with a clear focal landmark.\n"
     return ''
 

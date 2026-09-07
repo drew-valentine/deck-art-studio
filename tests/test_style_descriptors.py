@@ -848,3 +848,19 @@ def test_hint_without_palette_stops_at_the_hue_list():
              'dusty orange, exaggerated proportions, stiff elegant poses, recurring spirals')
     assert hint_without_palette(block) == ('fine-line ink illustration, flat color fills, exaggerated proportions, '
                                            'stiff elegant poses, recurring spirals')
+
+
+def test_anticipation_and_past_tense_are_detected():
+    from prompt_generator import _is_anticipation_or_past
+    assert _is_anticipation_or_past("Blast Zone, a colossal volcanic peak, stood tall amidst the landscape. The ground trembled, threatening to unleash another blast.")
+    assert _is_anticipation_or_past("The volcano is about to erupt, its slopes quiet.")
+    assert not _is_anticipation_or_past("Blast Zone erupts, hurling purple rock and turquoise fire skyward as the peak tears itself apart.")
+    assert not _is_anticipation_or_past("")
+
+
+def test_event_named_land_frames_the_event():
+    from prompt_generator import _camera_line, _event_in_name
+    assert _event_in_name('Blast Zone') == 'blast' and _event_in_name('Wandering Fumarole') == 'fumarole'
+    assert _event_in_name('Forest') == ''
+    assert 'the blast itself fills the frame' in _camera_line('land', 'Blast Zone')
+    assert 'establishing view' in _camera_line('land', 'Forest')
