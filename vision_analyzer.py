@@ -1833,7 +1833,7 @@ def _parse_counts(text: str) -> dict:
     subject=yes; hands_ok=yes' (order-free, tolerant of prose around it)."""
     import re as _re
     out = {}
-    for key in ('heads', 'arms', 'hands', 'copies'):
+    for key in ('heads', 'arms', 'hands', 'copies', 'wings'):
         m = _re.search(key + r'\s*[=:]\s*(\d+)', text, _re.IGNORECASE)
         if m:
             out[key] = int(m.group(1))
@@ -1845,7 +1845,7 @@ def _parse_counts(text: str) -> dict:
 
 
 def inspect_render(image_path, card_name: str, card_type: str, vision_model: str,
-                   advisory: dict | None = None, subject_hint: str = '') -> list:
+                   advisory: dict | None = None, subject_hint: str = '', flies: bool | None = None) -> list:
     """Defect checklist over a finished render, by the vision model. Asking
     the model to LIST defects made it echo the whole label list; asking it to
     COUNT (heads, arms, hands, copies of the subject) and answer yes/no
@@ -1867,6 +1867,7 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
             "EXACTLY this format and nothing else:\n"
             "heads=<number of heads on the main figure, 0 if no figure>; "
             "arms=<number of arms on the main figure>; hands=<number of hands>; "
+            "wings=<number of wings on the main figure, 0 if none>; "
             "copies=<how many times the main subject appears>; "
             "text=<yes/no: any letters, words, numerals, handwriting or logo>; "
             "signature=<yes/no: an artist signature or copyright mark>; "
@@ -1899,6 +1900,16 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
             defects.append('subject missing')
         if c.get('copies', 1) > 1:        # a procession or a crowd is a scene, not a defect
             defects.append('duplicated subject')
+        if flies is False and c.get('wings', 0) > 0 and os.environ.get('INSPECT_WINGS', '1') != '0':
+            # the rules text has no flying: a winged render is the wrong creature
+            defects.append('wings on a flightless creature')
+        if subject_hint and os.environ.get('INSPECT_SUBJECT', '1') != '0' and c.get('subject', True) is not False:
+            # yes/no said the subject is present; a dragon passed as a human
+            # shaman that way. The open list + category second opinion that
+            # already guards artifacts now guards creatures too.
+            if not _names_object(image_path, subject_hint, vision_model, alternates=_object_alternates(subject_hint)) \
+                    and not _object_category_matches(image_path, subject_hint, vision_model):
+                defects.append('subject missing')
     # Text / signature: the whole-image yes/no fires on almost every card.
     # Confirm on the edge strips where marks actually sit — a crop with real
     # letters in it is an easy yes, a crop without is an easy no.

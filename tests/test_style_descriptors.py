@@ -864,3 +864,15 @@ def test_event_named_land_frames_the_event():
     assert _event_in_name('Forest') == ''
     assert 'the blast itself fills the frame' in _camera_line('land', 'Blast Zone')
     assert 'establishing view' in _camera_line('land', 'Forest')
+
+
+def test_flightless_creatures_lose_their_wings():
+    from prompt_generator import _strip_wings, _card_flies, _body_line
+    fox = {'name': 'Filigree Familiar', 'card_type': 'creature', 'type_line': 'Artifact Creature — Fox', 'oracle_text': 'When this creature enters, you gain 2 life.'}
+    t = "Filigree Familiar, a cunning Fox with green eyes and a fluffy golden body, hangs from a dim blue sky by its retractable yellow wings. Its tail curls."
+    out = _strip_wings(t, fox)
+    assert 'wing' not in out and out.startswith('Filigree Familiar, a cunning Fox') and 'Its tail curls.' in out
+    assert not _card_flies(fox) and _card_flies({'oracle_text': 'Flying\nWhen this enters, draw a card.'})
+    assert 'NO wings' in _body_line(fox)
+    bird = {'card_type': 'creature', 'type_line': 'Creature — Bird', 'oracle_text': 'Flying'}
+    assert _strip_wings("A bird spreads its wings.", bird) == "A bird spreads its wings."

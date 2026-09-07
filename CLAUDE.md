@@ -91,7 +91,10 @@ decks/<deck-slug>/
   in the writer's hint become scene content. Writer rules: one subject in the foreground, two
   sentences of ~60 words (cap 64, whole sentences) following the scene grammar — subject at a moment, camera + scale + one named light, one atmospheric detail; rules-text zones (library/graveyard) are never scenery. Creatures also get a Body line
   (`_body_line`: the FIRST subtype names what the body is — a Bat God is a bat — plus a model-derived
-  plain gloss of that kind's build, `_body_gloss`, memoised) and every type a
+  plain gloss of that kind's build, `_body_gloss`, memoised; wings only when the rules say flying —
+  `_card_flies`, `_strip_wings` in the final cleanup, and the inspector counts wings and flags a winged
+  flightless creature; creatures also get the open-list + category subject check, since a serpent-dragon
+  passed the yes/no as a Human Shaman) and every type a
   Framing line (`_camera_line`: face visible / whole object / establishing view); artifacts get an
   Object line with a model-derived plain gloss of the literal object (`_object_gloss`, memoised,
   `OBJECT_GLOSS=0` mutes) and a 'subject missing' re-roll leads the scene with that object; lands, enchantments, instants and sorceries are built

@@ -4518,6 +4518,17 @@ def _pick_cleaner_take(name, card, raw_path, defects, ctx, vmodel, inspect_rende
     return prev_defects
 
 
+def _card_flies_for_inspect(card):
+    """True/False for a creature from its rules text; None for other types."""
+    if card.get('card_type') not in ('creature', 'planeswalker'):
+        return None
+    try:
+        from prompt_generator import _card_flies
+        return bool(_card_flies(card))
+    except Exception:
+        return None
+
+
 def _inspect_subject_hint(card) -> str:
     """What the inspector should look for: the literal object for an artifact
     ("a signet ring"), the creature's first subtype for a figure ("a dragon
@@ -4588,7 +4599,7 @@ def _execute_inspect_job(job, ctx):
             for face_label, path in faces:
                 advisory = {}
                 defects = inspect_render(path, name, card.get('card_type', ''), vmodel, advisory=advisory,
-                                         subject_hint=_inspect_subject_hint(card))
+                                         subject_hint=_inspect_subject_hint(card), flies=_card_flies_for_inspect(card))
                 if advisory.get('composition'):
                     print(f"  [inspect] {name} ({face_label}) composition advisory: "
                           f"{', '.join(advisory['composition'])}")

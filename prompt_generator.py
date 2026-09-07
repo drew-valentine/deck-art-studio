@@ -1446,6 +1446,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         # final cleanup: every rewrite path above (flat, colour, scene-check
         # redo) can reintroduce what an earlier strip removed
         out = _strip_unpaintable(out)
+        out = _strip_wings(out, card)
         out = _strip_invented_names(out, card, safe_flavor)
         out = _fix_invented_cyclops(out, base_desc)
         if is_flat:
@@ -1603,6 +1604,36 @@ def _body_gloss(kind: str, local_model: str) -> str:
     return gloss
 
 
+def _card_flies(card: dict) -> bool:
+    """Flying (or flash-in-the-air keywords that imply wings) in the RULES text."""
+    text = ((card.get('oracle_text') or '') + ' ' + (card.get('keywords') and ' '.join(card.get('keywords')) or '')).lower()
+    return bool(re.search(r'\b(?:flying|flies)\b', text))
+
+
+_WING_CLAUSE_RE = re.compile(
+    r"(?:,\s*)?(?:\b(?:with|by|on|from|its|her|his|their)\s+)?[^,.;]*\b(?:wings?|winged|wingspan|flies|flying|"
+    r"soars?|soaring|hovers?|hovering|airborne|aloft|in flight|takes? (?:to the|flight))\b[^,.;]*", re.IGNORECASE)
+
+
+def _strip_wings(text: str, card: dict) -> str:
+    """A creature whose rules do not say flying gets no wings and no flight."""
+    if not text or card.get('card_type') not in ('creature', 'planeswalker') or _card_flies(card):
+        return text
+    if not _WING_CLAUSE_RE.search(text):
+        return text
+    sents = []
+    for sent in re.split(r'(?<=[.!?])\s+', text.strip()):
+        cleaned = _WING_CLAUSE_RE.sub('', sent)
+        cleaned = re.sub(r',\s*,', ',', cleaned)
+        cleaned = re.sub(r'\s+([.!?,;])', r'\1', cleaned)
+        cleaned = re.sub(r'^\s*,\s*', '', cleaned).strip()
+        if cleaned and len(cleaned.split()) >= 3:
+            if not re.search(r'[.!?]$', cleaned):
+                cleaned += '.'
+            sents.append(cleaned)
+    return ' '.join(sents) if sents else text
+
+
 def _body_line(card: dict, local_model: str = '', steer_present: bool = False) -> str:
     """H45: the first creature subtype names WHAT the body is — Magic writes
     race/animal first, class second ("Bat God" is a bat, "Human Wizard" a
@@ -1626,8 +1657,11 @@ def _body_line(card: dict, local_model: str = '', steer_present: bool = False) -
     # gloss (a gloss for a corrupted elf added horns and a tail over the steer)
     gloss = '' if steer_present else _body_gloss(kind, local_model)
     head = "Body (yields to the USER DIRECTION above): " if steer_present else "Body: "
+    # wings follow the RULES: a fox with no flying grew "retractable yellow wings"
+    wings = ("It has wings and is in the air." if _card_flies(card)
+             else "It has NO wings and stays on the ground; never give it wings or let it fly.")
     return (f"{head}this creature is a {kind}" + (f" — {gloss}" if gloss else '') +
-            f" — give it that creature's head, face, eyes and limbs. Say so in the first sentence.\n")
+            f" — give it that creature's head, face, eyes and limbs. {wings} Say so in the first sentence.\n")
 
 
 _OBJECT_GLOSS = {}
