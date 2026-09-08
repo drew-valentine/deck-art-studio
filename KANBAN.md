@@ -2,6 +2,12 @@
 
 ## Backlog
 
+- [ ] H81 — revisit the flat-media light ban on ink/comic decks | Priority: P2 | Created: 2026-09-07 | Owner: unassigned
+  - PARKED 2026-09-08 on the H78 verdict: the strips are not where the composition loss is, so the gate this item was waiting on came back negative. Kept here in case a later experiment points at the light ban again.
+  - The flat-media path strips light vocabulary, and the strip-then-rewrite passes are the largest single source of prompt shortening. Ink and comic decks lose drama words the render could have used.
+  - Method if unparked: like-for-like fixed-seed A/B on one ink deck and one comic deck, with the ban relaxed from "no light words" to "no rendered light gradients".
+  - Acceptance: Given a flat-media deck, when the relaxed ban is used, then scenes keep the flat register (no drift to smooth digital paint) and the blind judge does not prefer the fully-banned version.
+
 - [ ] BUG: Planeswalker frame style drops adventure/split half rules text | Priority: P3 | Found: 2026-07-06 | Owner: unassigned
   - Found during the split-header full-style review. Pre-existing on main (verified by rendering Murderous Rider // Swift End in the planeswalker style from main — only the creature half's Lifelink/dies text renders in the loyalty-style ability bands; the Swift End adventure half is silently omitted).
   - Root cause area: the planeswalker style's text renderer (`_create_pw_frame_text_svg` in `card_frame_renderer.py`) renders `card.oracle_text` into loyalty-style ability bands and never checks `card.split_faces`, unlike the other styles which route through `_render_split_rules_svg`.
@@ -80,33 +86,30 @@
 
 ## Ready
 
-- [ ] H80 — objects in a place (Object line adds scale + surroundings) | Priority: P1 | Created: 2026-09-07 | Owner: unassigned
-  - Object cards still read as a product shot on a bare ground. The Object line says what the thing is but never how big it is or what it sits in.
-  - Scope: extend the Object line with the object's scale and its immediate surroundings, built from the deck's own world (per the standing deck-agnostic rule — derived from the style, never a table of props).
-  - Acceptance: Given an artifact card, when its scene is written, then the prompt names the object's scale and what it rests on or in, and the render still passes the inspector's literal-object check.
-  - Sequencing only: run after the H78 verdict, since that decides how much of the gap is prompt length.
-
-- [ ] H81 — revisit the flat-media light ban on ink/comic decks (only if H78 points there) | Priority: P2 | Created: 2026-09-07 | Owner: unassigned
-  - The flat-media path strips light vocabulary, and the strip-then-rewrite passes are the largest single source of prompt shortening. Ink and comic decks lose drama words the render could have used.
-  - Gate: run only if H78 shows the loss is in the strips rather than in raw prompt length. Otherwise stays parked.
-  - Method if run: like-for-like fixed-seed A/B on one ink deck and one comic deck, with the ban relaxed from "no light words" to "no rendered light gradients".
-  - Acceptance: Given a flat-media deck, when the relaxed ban is used, then scenes keep the flat register (no drift to smooth digital paint) and the blind judge does not prefer the fully-banned version.
+- [ ] (empty — H80 folded into H79, H81 parked to Backlog on the H78 verdict)
 
 ## In Progress
 
-- [ ] H78 — long v1.49 prose vs current short prompt, fixed seed 1001, current pipeline (12 cards across three decks) + blind judge | Priority: P0 | Started: 2026-09-07 | Owner: drew-valentine
-  - Branch: `feat/night-composition`
-  - Purpose: separate "prompts got shorter" from "the strips earned their keep". Both arms render on the current pipeline (Redux references, style block, render lead, guards) and differ only in the scene prose — the archived v1.49.0 prompt against today's.
-  - Method: 12 cards across three decks, seed 1001 on both arms via POST `/api/generate`, then a blind vision judge on paired sheets with the arms swapped.
-  - Renders go through the API, and every card is reverted to its pre-experiment version afterwards, so the owner's decks are left as they were found.
-  - Read-out: long arm wins → the fix is prompt length, and H79 is already aimed there. Arms tie → the strips are not the cause and H81 stays parked.
+- [ ] H83 — fix the four broken prompts H79's validation exposed | Priority: P0 | Started: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, committed 1041bd5.
+  - Cause: 4 of 12 H79 prompts came out broken — the subject was lost from the opening, and the light strip left fragments behind.
+  - Shipped in that commit: the opening check counts only the literal object's head noun ("stone" had let "sits atop a pedestal of weathered stone" pass for Phyrexian Altar, which then rendered a goblet); `_ensure_subject_opening` now runs for every card type, not some; light cuts remove whole noun phrases and the leading descriptive tails that produced fragments like "the soft of afternoon".
+  - Validation: rendering now — the same 12 cards at seed 1001, judged against the H78 and H79 sheets.
 
-- [ ] H79 — scenes keep their setting | Priority: P0 | Started: 2026-09-07 | Owner: drew-valentine
-  - Branch: `feat/night-composition`, committed 831a073.
-  - Shipped in that commit: a required Setting line (category words only, and it yields to a user steer); the user message's closing instruction now matches the scene grammar (it asked for "two short sentences" while the grammar asked for three of about sixty words); rewrites ask for full length instead of "the same length"; stub and restarted sentences are dropped; and a scene under 35 words or of a single sentence gets a growth pass (SCENE_FLOOR=0 mutes it, SCENE_MIN_WORDS sets the floor).
-  - Validation pending: the same 12 cards at seed 1001, judged against the H78 renders.
+- [ ] H86b — writer drafts two scenes and a judge picks the more striking | Priority: P0 | Started: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, committed 30c4a92.
+  - Follows H86: seed variance is not the lever, so the variation has to come from the scene text.
+  - Shipped in that commit: the writer drafts a second, different scene for the same card and an 8B judge picks the more striking of the two blind — asked twice with the sides swapped, so only a consistent answer counts. SCENE_TAKES=1 mutes it.
+  - Validation chained behind H83, on the same 12 cards at seed 1001.
 
 ## In Review
+
+- [ ] H79 — scenes keep their setting | Priority: P0 | Started: 2026-09-07 | Review Started: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, committed 831a073.
+  - Shipped in that commit: a required Setting line (category words only, and it yields to a user steer); the user message's closing instruction now matches the scene grammar (it asked for "two short sentences" while the grammar asked for three of about sixty words); rewrites ask for full length instead of "the same length"; stub and restarted sentences are dropped; and a scene under 35 words or of a single sentence gets a growth pass (SCENE_FLOOR=0 mutes it, SCENE_MIN_WORDS sets the floor).
+  - Validated once, 2026-09-08, mixed: the Setting line and the word floor gave whole-figure and landscape cards a real environment (Krark, Kardur, Arid Mesa), but the blind judge still preferred the previous short render 7:1 with 4 undecided, because 4 of 12 prompts came out broken — the subject lost from the opening, and light-strip fragments. Those four are H83.
+  - Also absorbed H80: the Setting line covers "objects in a place", so no separate Object-line change was needed.
+  - Ship decision waits on the H83 re-validation.
 
 - [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Review Started: 2026-09-02 | Owner: drew-valentine
   - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — In Review, awaiting the owner's ship decision.
@@ -255,6 +258,25 @@
   - Note: the owner's own decks have not been re-distilled under the current pipeline (one has no style block at all); re-distilling them is the owner's call.
 
 ## Done
+
+- [x] H78 — long v1.49 prose vs current short prompt, fixed seed 1001, blind judge | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`. Both arms rendered on the current pipeline (Redux references, style block, render lead, guards) at the same seed, differing only in the scene prose — the archived v1.49.0 prompt against today's — over 12 cards across three decks, then judged blind on paired sheets with the arms swapped.
+  - Result: the old 90-word prose won the composition judge 5:3 with 4 undecided, but carried "subject missing" on 5 of 12 against 2 of 12 for the short prompt — an orc rendered as a blue yeti, a crowd instead of a talisman, a pirate instead of coins, plus lettering and onlookers.
+  - Verdict: the strips earned their keep on subjects. Restore the drama through setting, not by restoring long prose. H79 is the right aim; H81 stays parked.
+  - Also found: the old prompts pushed the assembled FLUX prompt past the T5 window, which opened H82.
+
+- [x] H82 — assembled FLUX prompts were overrunning the T5 window | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, committed 73f101d.
+  - Measured: 14 of 31 assembled prompts sat over the 256-token T5 window (mean 251), and on 6 of them the guard fell entirely outside it. mflux truncates silently, so the tail was being dropped with no warning.
+  - Fix: `_fit_flux_prompt` trims the style block's tail items first, then the scene's last sentences, down to FLUX_TOKEN_BUDGET=250. The lead, the subject sentence and the guard are never cut.
+
+- [x] H86 — seed variance is not the composition lever | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`.
+  - Measured: the same prompt at seeds 1001 and 2002 renders near-identical pictures under averaged Redux references, 12 of 12; pick_take was undecided on 7 of 12.
+  - Verdict: variation has to come from the scene text, not from rolling seeds. Follow-up H86b (two drafts, judge picks) is In Progress.
+
+- [x] H80 — objects in a place | Priority: P1 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Closed by folding into H79's Setting line — that line already puts an object in a place with its surroundings, so no separate Object-line change was written. No code of its own.
 
 - [x] Measured verdict vs v1.49.0 — style and subject better, composition regressed | Priority: P1 | Completed: 2026-09-07 | Owner: drew-valentine
   - Current art measured against v1.49.0 (the text-only style pipeline, tagged 2026-09-02 just before the Redux merge) on the same decks and cards.
