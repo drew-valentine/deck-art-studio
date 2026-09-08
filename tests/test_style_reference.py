@@ -469,3 +469,24 @@ def test_registry_save_dedupes_by_id(tmp_path, monkeypatch):
     ds._save_deck_registry({'decks': [{'id': 'a', 'name': 'A'}, {'id': 'b', 'name': 'B'}, {'id': 'a', 'name': 'A2'}]})
     saved = json.load(open(tmp_path / 'r' / 'decks.json'))['decks']
     assert [d['id'] for d in saved] == ['a', 'b'] and saved[0]['name'] == 'A2'
+
+
+def test_flux_prompt_fits_the_t5_window_and_keeps_the_guard(monkeypatch):
+    """H82: mflux truncates prompts past 256 T5 tokens silently; the guard and
+    the subject sentence must survive, the block's tail and the scene's last
+    sentence give way."""
+    import deck_studio as ds
+    monkeypatch.setattr(ds, '_t5_token_count', lambda text: int(1.3 * len(text.split())) if text else 0)
+    items = [f'style item {i}' for i in range(24)]
+    bits = ['in the style of a picture-book illustrator', ', '.join(items)]
+    scene = ('Sol Ring, a gold ring, rests on a stump. ' + ' '.join(['word'] * 60) + '. '
+             + ' '.join(['tail'] * 60) + '.')
+    out = ds._assemble_flux_prompt(bits, scene, '', 'artifact')
+    assert ds._t5_token_count(out) <= 250
+    assert out.startswith('in the style of a picture-book illustrator. Sol Ring, a gold ring, rests on a stump.')
+    assert out.endswith('No text, no words, no signature, no watermark, no card frame, no borders. No people, no characters, no hands.')
+    assert 'style item 0' in out and 'style item 23' not in out       # block tail dropped first
+    assert 'tail tail' not in out                                      # then the last scene sentence
+    short = ds._assemble_flux_prompt(bits, 'Sol Ring, a gold ring, rests on a stump. Grey mud around it.', '', 'artifact')
+    assert 'style item 23' in short and short.endswith('no hands.')
+    assert ds._t5_token_count('') == 0

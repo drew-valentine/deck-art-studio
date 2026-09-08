@@ -1960,6 +1960,68 @@ def _block_without_idiom(block: str, idiom) -> str:
     return ', '.join(kept)
 
 
+FLUX_TOKEN_BUDGET = 250        # schnell's T5 window is 256 tokens; mflux truncates silently
+_T5_TOKENIZER = [None]
+
+
+def _t5_token_count(text: str) -> int:
+    """Tokens the FLUX T5 encoder will see. The real tokenizer when its files are
+    cached (offline only — never a download on the render path); otherwise a fit
+    from 31 logged prompts (1.27 x words + 1.12 x punctuation + 19, max error 10)
+    with a margin."""
+    if not text:
+        return 0
+    if _T5_TOKENIZER[0] is None:
+        try:
+            from transformers import AutoTokenizer
+            _T5_TOKENIZER[0] = AutoTokenizer.from_pretrained('google/t5-v1_1-xxl', local_files_only=True)
+        except Exception:
+            _T5_TOKENIZER[0] = False
+    tok = _T5_TOKENIZER[0]
+    if tok:
+        try:
+            return len(tok(text).input_ids)
+        except Exception:
+            pass
+    import re as _re
+    return int(1.3 * len(text.split()) + 1.15 * len(_re.findall(r'[,.;:]', text)) + 22)
+
+
+def _fit_flux_prompt(head: str, first: str, block_items: list, rest: str, feedback: str, tail: str,
+                     budget: int = None) -> str:
+    """H82: 14 of 31 recent prompts overflowed the 256-token window and in 6
+    the guard ('no text, no signature, no people') fell entirely outside it.
+    Assemble head + subject sentence + block + rest of scene + feedback + guard,
+    then drop the block's TAIL items (the reference read's generic filler) down
+    to a floor, then the scene's last sentences, until it fits. The lead, the
+    subject sentence and the guard are never cut."""
+    import re as _re
+    budget = budget or int(os.environ.get('FLUX_TOKEN_BUDGET', FLUX_TOKEN_BUDGET) or FLUX_TOKEN_BUDGET)
+    items = list(block_items)
+    sents = [s for s in _re.split(r'(?<=[.!?])\s+', (rest or '').strip()) if s.strip()]
+    floor = max(8, len(items) * 2 // 3)
+    dropped_items = dropped_sents = 0
+
+    def compose():
+        pieces = [head, first, ', '.join(items), ' '.join(sents).rstrip(' .'), (feedback or '').rstrip(' .')]
+        return '. '.join(p for p in pieces if p) + '.' + tail
+    out = compose()
+    while _t5_token_count(out) > budget:
+        if len(items) > floor:
+            items.pop(); dropped_items += 1
+        elif sents:
+            sents.pop(); dropped_sents += 1
+        elif len(items) > 4:
+            items.pop(); dropped_items += 1
+        else:
+            break
+        out = compose()
+    if dropped_items or dropped_sents:
+        print(f"  [flux] prompt trimmed to the T5 window: -{dropped_items} block item(s), "
+              f"-{dropped_sents} scene sentence(s), ~{_t5_token_count(out)} tokens")
+    return out
+
+
 def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '', card_type: str = '') -> str:
     """Order: style lead, the scene's FIRST sentence (the subject), the rest of
     the style block, the rest of the scene, feedback. FLUX weights early
@@ -2012,15 +2074,22 @@ def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '', car
             else:
                 front.append(it)          # medium anchors / colour coverage
         pieces = [', '.join(x for x in [lead] + front if x), first, ', '.join(back), rest]
-    pieces.append((feedback_text or '').rstrip(' .'))
-    out = '. '.join(p for p in pieces if p) + '.'
     extra = os.environ.get('FLUX_GUARD_EXTRA', '').strip()      # experiment hook
     tail = ' No text, no words, no signature, no watermark, no card frame, no borders.'
     if card_type in ('artifact', 'land'):
         # H69: an object or a place has no cast; the image model adds onlookers
         # to a relic on a pedestal unless told not to
         tail += ' No people, no characters, no hands.'
-    return out + (f' {extra}.' if extra else '') + tail
+    tail = (f' {extra}.' if extra else '') + tail
+    if order in ('coverage-subject-block', 'default') or order not in ('style-first', 'subject-early'):
+        # pieces = [head, first, block, rest] — fit the whole thing to the
+        # T5 window with the guard kept (H82)
+        head, first_s, block_s, rest_s = pieces[0], pieces[1], pieces[2], pieces[3]
+        block_items = [x.strip() for x in block_s.split(',') if x.strip()]
+        return _fit_flux_prompt(head, first_s, block_items, rest_s, feedback_text, tail)
+    pieces.append((feedback_text or '').rstrip(' .'))
+    out = '. '.join(p for p in pieces if p) + '.'
+    return out + tail
 
 
 def _signature_bleed() -> float:
