@@ -561,7 +561,9 @@ def test_writer_system_prompt_carries_staging(monkeypatch):
                                 style_hint='an adult animated sci-fi cartoon series — cel animation',
                                 staging='Scenes are staged in cluttered garages. The register is deadpan absurd.')
     assert 'STAGING AND REGISTER' in seen['sys'] and 'deadpan absurd' in seen['sys']
-    assert 'calm, artful film still' not in seen['sys']
+    # the staging read replaced the old hard-coded phrase; the H92 film-still
+    # COMPOSITION override coexists with it rather than replacing it
+    assert 'COMPOSITION OVERRIDE' in seen['sys']
 
 
 def test_scene_writer_prompt_treats_zones_as_game_terms():

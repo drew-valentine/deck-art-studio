@@ -1096,3 +1096,26 @@ def test_card_back_is_a_design_and_single_limbs_are_plural():
     import deck_studio as ds
     out = ds._assemble_flux_prompt(['lead'], 'ornate symmetrical decorative pattern', '', 'card_back')
     assert out.endswith('No people, no characters, no hands.')
+
+
+def test_film_still_grammar_is_the_default_and_events_keep_their_force(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    seen = []
+    def chat(messages, **kw):
+        seen.append(messages[0]['content'])
+        return 'Blast Zone, a volcanic crater, erupts as lava tears the ground open. Ash fills the valley. Rock rains down.'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    monkeypatch.delenv('SCENE_MODE', raising=False)
+    pg.generate_subject_with_ai({'name': 'Blast Zone', 'type_line': 'Land', 'oracle_text': '', 'card_type': 'land'},
+                                None, backend='local', local_model='m')
+    assert 'COMPOSITION OVERRIDE' in seen[0] and 'calm, artful film still' in seen[0]
+    assert 'named for an event' in seen[0]
+    seen.clear()
+    pg.generate_subject_with_ai({'name': 'Arid Mesa', 'type_line': 'Land', 'oracle_text': '', 'card_type': 'land'},
+                                None, backend='local', local_model='m')
+    assert 'named for an event' not in seen[0]
+    monkeypatch.setenv('SCENE_MODE', 'moment'); seen.clear()
+    pg.generate_subject_with_ai({'name': 'Arid Mesa', 'type_line': 'Land', 'oracle_text': '', 'card_type': 'land'},
+                                None, backend='local', local_model='m')
+    assert 'COMPOSITION OVERRIDE' not in seen[0]
