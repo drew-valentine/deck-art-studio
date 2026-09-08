@@ -90,17 +90,10 @@
 
 ## In Progress
 
-- [ ] H83 — fix the four broken prompts H79's validation exposed | Priority: P0 | Started: 2026-09-08 | Owner: drew-valentine
-  - Branch: `feat/night-composition`, committed 1041bd5.
-  - Cause: 4 of 12 H79 prompts came out broken — the subject was lost from the opening, and the light strip left fragments behind.
-  - Shipped in that commit: the opening check counts only the literal object's head noun ("stone" had let "sits atop a pedestal of weathered stone" pass for Phyrexian Altar, which then rendered a goblet); `_ensure_subject_opening` now runs for every card type, not some; light cuts remove whole noun phrases and the leading descriptive tails that produced fragments like "the soft of afternoon".
-  - Validation: rendering now — the same 12 cards at seed 1001, judged against the H78 and H79 sheets.
-
-- [ ] H86b — writer drafts two scenes and a judge picks the more striking | Priority: P0 | Started: 2026-09-08 | Owner: drew-valentine
-  - Branch: `feat/night-composition`, committed 30c4a92.
-  - Follows H86: seed variance is not the lever, so the variation has to come from the scene text.
-  - Shipped in that commit: the writer drafts a second, different scene for the same card and an 8B judge picks the more striking of the two blind — asked twice with the sides swapped, so only a consistent answer counts. SCENE_TAKES=1 mutes it.
-  - Validation chained behind H83, on the same 12 cards at seed 1001.
+- [ ] V24 — fresh 21-card validation of the whole night stack vs each card's current art | Priority: P0 | Started: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`. 21 cards that were not used to tune H83, H86b, H87 or H88, rendered at seed 1001 and set against each card's current art.
+  - Method: paired sheet per card plus the vision judge. The chain is running.
+  - This is the ship gate for H79, taken together with H83, H87 and H88.
 
 ## In Review
 
@@ -109,7 +102,7 @@
   - Shipped in that commit: a required Setting line (category words only, and it yields to a user steer); the user message's closing instruction now matches the scene grammar (it asked for "two short sentences" while the grammar asked for three of about sixty words); rewrites ask for full length instead of "the same length"; stub and restarted sentences are dropped; and a scene under 35 words or of a single sentence gets a growth pass (SCENE_FLOOR=0 mutes it, SCENE_MIN_WORDS sets the floor).
   - Validated once, 2026-09-08, mixed: the Setting line and the word floor gave whole-figure and landscape cards a real environment (Krark, Kardur, Arid Mesa), but the blind judge still preferred the previous short render 7:1 with 4 undecided, because 4 of 12 prompts came out broken — the subject lost from the opening, and light-strip fragments. Those four are H83.
   - Also absorbed H80: the Setting line covers "objects in a place", so no separate Object-line change was needed.
-  - Ship decision waits on the H83 re-validation.
+  - Ship decision now rides on V24, taken together with H83, H87 and H88 — the four are one stack and stand or fall on the same 21-card sheet.
 
 - [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Review Started: 2026-09-02 | Owner: drew-valentine
   - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — In Review, awaiting the owner's ship decision.
@@ -258,6 +251,28 @@
   - Note: the owner's own decks have not been re-distilled under the current pipeline (one has no style block at all); re-distilling them is the owner's call.
 
 ## Done
+
+- [x] H83 — fix the four broken prompts H79's validation exposed | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits 1041bd5 and e6dee3f.
+  - Cause: 4 of 12 H79 prompts came out broken — the subject was lost from the opening, and the light strip left fragments behind.
+  - Shipped: the opening check counts only the literal object's head noun ("stone" had let "sits atop a pedestal of weathered stone" pass for Phyrexian Altar, which then rendered a goblet); `_ensure_subject_opening` runs for every card type, not some; light cuts take whole noun phrases and the leading tails that produced fragments like "the soft of afternoon"; abstraction similes and waiting idioms are cut; "anticipation" triggers the present-moment rewrite; the growth pass tries twice.
+  - Validated: the 12-card prompts came out coherent — no fragments, subjects present.
+
+- [x] H86b — writer drafts two scenes and the more striking one is picked | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits 30c4a92, ecc2b3f, 91a0843.
+  - Follows H86: seed variance is not the lever, so the variation has to come from the scene text.
+  - Correction to what H86b first shipped: the blind A-or-B ask picked the first draft 12 of 12 (the 8B answers "A" whichever order it is given), and an independent 1-10 score then rated every draft a 9, tying 12 of 12. The pick is now a deterministic score — action verbs and colours up, static verbs, abstractions and a buried subject down — at the cost of one extra chat per card.
+  - Lesson recorded in memory: score candidates alone, never A/B, and log the raw answers.
+
+- [x] H87 — staging reads describe composition, not props | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit 160af59.
+  - Shipped: the staging read is composition-only (camera, frame fill, horizon, density, weather, tone), forbids naming props, and merges up to four reference reads down to what they share. The three experiment decks were re-analyzed; the new staging texts carry no props.
+  - Validated on the 12 cards at seed 1001: by eye, the first variant to beat the baseline on most cards (demon, orc, erupting volcano, shield in a ruined courtyard, a massacre scene). Defects level, 3 against 2.
+  - The vision judge still preferred the earlier short renders 5:1 with 6 undecided. Its rubric asks for "one clear focal subject", which rewards close-ups over scenes, so the owner's eye decides this one.
+
+- [x] H88 — the Figure idiom line carries only figure terms | Priority: P1 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit ecc2b3f.
+  - Kardur renders as a demon again.
 
 - [x] H78 — long v1.49 prose vs current short prompt, fixed seed 1001, blind judge | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
   - Branch: `feat/night-composition`. Both arms rendered on the current pipeline (Redux references, style block, render lead, guards) at the same seed, differing only in the scene prose — the archived v1.49.0 prompt against today's — over 12 cards across three decks, then judged blind on paired sheets with the arms swapped.
