@@ -1007,30 +1007,34 @@ def _subject_words(card: dict) -> set:
     return words
 
 
-def _pick_scene(a: str, b: str, card: dict, local_model: str):
-    """Blind pick between two scene drafts: which makes the more striking
-    picture — a specific place, a decisive moment, concrete drawable detail —
-    while showing only the card's subject. Asked twice with the drafts
-    swapped; only a consistent answer counts, else the first draft stays."""
-    import mlx_llm
+def _scene_score(draft: str, card: dict, local_model: str):
+    """One draft, one number: how striking a picture it would make (specific
+    place, decisive moment, concrete drawable detail, one focal subject).
+    Scored alone so there is no A/B position bias — the swapped A/B ask chose
+    the first draft 12/12 because the 8B answers 'A' whatever the order."""
+    import mlx_llm, re as _re
     name = (card.get('name') or '').split(' // ')[0]
-    votes = []
-    for first, second, order in ((a, b, ('a', 'b')), (b, a, ('b', 'a'))):
-        reply = mlx_llm.chat(
-            messages=[
-                {'role': 'system', 'content':
-                    "You judge scene descriptions for a painter. Answer with exactly one letter."},
-                {'role': 'user', 'content':
-                    f"Two scene descriptions for a picture of '{name}'.\n\nA: {first}\n\nB: {second}\n\n"
-                    "Which would make the more striking picture — a specific place, a decisive "
-                    "moment, concrete details a painter can draw, one clear focal subject and "
-                    "nothing invented beside it? Answer A or B."},
-            ],
-            model=local_model, max_tokens=3, temperature=0.0)
-        word = (reply or '').strip().upper()
-        pick = order[0] if word.startswith('A') else order[1] if word.startswith('B') else None
-        votes.append(pick)
-    return votes[0] if votes[0] and votes[0] == votes[1] else 'a'
+    reply = mlx_llm.chat(
+        messages=[
+            {'role': 'system', 'content':
+                "You judge scene descriptions for a painter. Answer with a single integer from 1 to 10."},
+            {'role': 'user', 'content':
+                f"Scene description for a picture of '{name}':\n\n{draft}\n\n"
+                "Score 1-10 how striking the picture would be: a specific place, a decisive "
+                "moment at full force, concrete details a painter can draw, one clear focal "
+                "subject and nothing invented beside it. Vague, static or abstract scenes score "
+                "low. Answer with the number only."},
+        ],
+        model=local_model, max_tokens=4, temperature=0.0)
+    m = _re.search(r'\d+', reply or '')
+    return int(m.group(0)) if m else None
+
+
+def _pick_scene(a: str, b: str, card: dict, local_model: str):
+    """'b' when the second draft scores strictly higher, else 'a'."""
+    sa, sb = _scene_score(a, card, local_model), _scene_score(b, card, local_model)
+    print(f"  [prompt_gen] scene scores: first {sa}, second {sb}")
+    return 'b' if (sa is not None and sb is not None and sb > sa) else 'a'
 
 
 def _ensure_subject_opening(text: str, card: dict) -> str:
@@ -1301,9 +1305,10 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             and not (steer and steer.strip()):
         # a user direction owns the subject's appearance; the style's figure
         # idiom ("exaggerated features, chunky anatomy") would fight it
-        figure_line = (f"Figure idiom (REQUIRED in the first sentence): describe the creature's "
-                       f"eyes, face and body in this artist's terms — {figure_idiom.strip()} — "
-                       "keeping its identity and creature type exactly as given.\n")
+        fig_items = _figure_idiom_items(figure_idiom)
+        figure_line = ((f"Figure idiom (REQUIRED in the first sentence): describe the creature's "
+                        f"eyes, face and body in this artist's terms — {', '.join(fig_items)} — "
+                        "keeping its identity and creature type exactly as given.\n") if fig_items else '')
 
     if steer and steer.strip():
         # The steer OVERRIDES the rules and the reference anchor wherever they
@@ -2026,6 +2031,23 @@ def _event_in_name(name: str) -> str:
     """The event or force a card NAME is built on ('Blast Zone' -> 'blast'), else ''."""
     m = _EVENT_NOUN_RE.search((name or '').split(' // ')[0])
     return m.group(0).lower() if m else ''
+
+
+_FIGURE_WORD_RE = re.compile(
+    r"\b(?:face|faces|facial|feature|features|anatomy|anatomies|pose|poses|posture|expression|expressions|"
+    r"eye|eyes|limb|limbs|body|bodies|figure|figures|proportion|proportions|head|heads|hand|hands|"
+    r"silhouette|silhouettes|gesture|gestures|build|torso|snout|jaw|brow|nose|mouth|creature|creatures|"
+    r"character|characters|physique|stance|shoulders|neck|necks|legs|arms|wings|tail|tails|fur|skin|scales)\b",
+    re.IGNORECASE)
+
+
+def _figure_idiom_items(idiom: str) -> list:
+    """H88: the Figure idiom line describes the creature's eyes, face and body,
+    so only idiom items ABOUT figures belong on it. A rendering term there is
+    read as anatomy — 'flat shaded forms' became a demon with a 'flat head',
+    'delicate hatching' a hatched face. Word categories, no style tables."""
+    items = [x.strip() for x in (idiom or '').split(',') if x.strip()]
+    return [x for x in items if _FIGURE_WORD_RE.search(x)]
 
 
 def _setting_line(is_flat: bool, steer_present: bool = False) -> str:
