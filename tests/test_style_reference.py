@@ -490,3 +490,11 @@ def test_flux_prompt_fits_the_t5_window_and_keeps_the_guard(monkeypatch):
     short = ds._assemble_flux_prompt(bits, 'Sol Ring, a gold ring, rests on a stump. Grey mud around it.', '', 'artifact')
     assert 'style item 23' in short and short.endswith('no hands.')
     assert ds._t5_token_count('') == 0
+
+
+def test_documents_in_the_scene_get_a_blank_pages_guard():
+    import deck_studio as ds
+    out = ds._assemble_flux_prompt(['lead'], 'A judge holds a worn contract on a stone pedestal. Candles stand beside it.', '', 'enchantment')
+    assert out.endswith('Any pages, scrolls, signs or labels are blank, with no lettering.')
+    plain = ds._assemble_flux_prompt(['lead'], 'A red demon strides across the sand.', '', 'creature')
+    assert 'blank' not in plain

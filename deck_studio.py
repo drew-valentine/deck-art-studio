@@ -1960,6 +1960,9 @@ def _block_without_idiom(block: str, idiom) -> str:
     return ', '.join(kept)
 
 
+_DOCUMENT_RE = re.compile(r"\b(?:books?|tomes?|scrolls?|pages?|letters?|contracts?|documents?|maps?|signs?|"
+                          r"labels?|banners?|plaques?|tablets?|journals?|ledgers?|parchments?|notes?|posters?|"
+                          r"newspapers?|manuscripts?|inscriptions?)\b", re.IGNORECASE)
 FLUX_TOKEN_BUDGET = 250        # schnell's T5 window is 256 tokens; mflux truncates silently
 _T5_TOKENIZER = [None]
 
@@ -2080,6 +2083,10 @@ def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '', car
         # H69: an object or a place has no cast; the image model adds onlookers
         # to a relic on a pedestal unless told not to. A card back is a design.
         tail += ' No people, no characters, no hands.'
+    if _DOCUMENT_RE.search(subject or ''):
+        # a contract, book or scroll in the scene is drawn WITH writing on it
+        # ('text in art' on a judge's contract and a soldier's helmet label)
+        tail += ' Any pages, scrolls, signs or labels are blank, with no lettering.'
     tail = (f' {extra}.' if extra else '') + tail
     if order in ('coverage-subject-block', 'default') or order not in ('style-first', 'subject-early'):
         # pieces = [head, first, block, rest] — fit the whole thing to the
