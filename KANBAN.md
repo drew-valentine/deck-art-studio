@@ -90,12 +90,7 @@
 
 ## In Progress
 
-- [ ] H93 — hybrid grammar: film-still staging for every type, a decisive moment for creatures | Priority: P0 | Started: 2026-09-08 | Owner: drew-valentine
-  - Branch: `feat/night-composition`, commit c85ff7e, on by default.
-  - Follows H92: the film-still writer gave places and objects the environments they were missing but cost creatures their subject more often than the moment grammar did (8 of 21 against 5 of 21).
-  - Shipped: composition and setting sentences on every card type, with creatures and planeswalkers opening at a decisive moment instead of a still pose.
-  - Validation running now on the same 21 fresh cards at seed 1001, with the owner's go. Sheet: hybrid-cur-v4-film-hybrid.jpg.
-  - Acceptance: Given the 21 fresh cards, when rendered on the hybrid grammar, then places and objects keep the environments H92 won and creature subject-missing returns to the moment grammar's rate or better.
+- [ ] (empty — H93 closed to Done; the branch's ship decision sits with H79 In Review)
 
 ## In Review
 
@@ -108,7 +103,8 @@
   - V24 ran the stack over 21 fresh cards and the two failure classes it exposed are fixed (b5d16c0), with 5 of the 6 corrected on re-render (V6). Stays In Review: the ship decision is the owner's, on the V24b sheet.
   - V24b closed 2026-09-08: the stack is complete and measured — 6 inspector defects against 10 on the current art, and the first run where the vision judge tilts to the new stack (6 new, 4 current, 11 undecided). Nothing further is queued behind it; the branch awaits the owner's ship decision.
   - Night run closed 2026-09-08 05:25 — 15 commits on `feat/night-composition`, all pushed; every experimented card is back on its pre-night art; the owner decides the merge on the V24b sheet.
-  - Reopened for the day's composition work: the owner judged v1.49.0's compositions more cohesive than today's, so the branch now also carries H90, H91 and H92, with H93 in flight. The ship decision moves to the H93 sheet.
+  - Reopened for the day's composition work: the owner judged v1.49.0's compositions more cohesive than today's, so the branch now also carries H90, H91, H92 and H93.
+  - Ship decision: the branch (H79–H93, 30 commits) is complete and measured; the hybrid grammar is the default. Awaiting the owner's merge call on the hybrid sheet (hybrid-cur-v4-film-hybrid.jpg).
 
 - [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Review Started: 2026-09-02 | Owner: drew-valentine
   - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — In Review, awaiting the owner's ship decision.
@@ -257,6 +253,15 @@
   - Note: the owner's own decks have not been re-distilled under the current pipeline (one has no style block at all); re-distilling them is the owner's call.
 
 ## Done
+
+- [x] H93 — hybrid grammar: film-still staging for every type, a decisive moment for creatures | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits c85ff7e and b6146f0, on by default.
+  - Follows H92: the film-still writer gave places and objects the environments they were missing but cost creatures their subject more often than the moment grammar did (8 of 21 against 5 of 21).
+  - Shipped: composition and setting sentences on every card type, with creatures and planeswalkers opening at a decisive moment instead of a still pose.
+  - Validated on the 21 fresh cards at seed 1001 against each card's current art, same judge as the other runs. Three grammars on the same cards: moment (last night) — defects 6 against 10, subject missing 5 against 8, judge 6 / 4 / 11; film-still — defects 10 against 9, subject missing 8 against 8, judge 4 / 5 / 12; hybrid — defects 7 against 10, subject missing 6 against 8, text 1 against 6, judge hybrid 6 / current 5 / undecided 10.
+  - By eye, about 16 of 21 are both cohesive and correct: a serpent rising from a frozen lake, a soldier on a ship's bow, an angel over dunes, a cyclops among coins, a crater with red spined trees.
+  - Two misses — a tower drawn as a tree, a talisman as a box — came from the second-draft pick taking a drifted draft. Fixed in b6146f0: on place and object cards a second draft that no longer names the thing cannot replace one that does. Test-covered, not render-validated.
+  - Sheet: hybrid-cur-v4-film-hybrid.jpg.
 
 - [x] H92 — the film-still writer, restored from v1.49.0 | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
   - Branch: `feat/night-composition`, commit 6e026ec.
