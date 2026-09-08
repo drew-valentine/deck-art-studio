@@ -294,6 +294,12 @@ def _literal_object_from_name(name: str):
     for w in reversed(words):  # the head noun is usually last ("...'s Thumb")
         if w in _LITERAL_OBJECT_NOUNS:
             return _LITERAL_OBJECT_NOUNS[w]
+    # coined compounds: "Shadowspear" -> shadow + spear -> a spear (it rendered
+    # as a pair of daggers and a sword with no literal object to hold it)
+    for w in reversed(words):
+        parts = _split_compound(w)
+        if len(parts) == 2 and parts[1] in _LITERAL_OBJECT_NOUNS:
+            return _LITERAL_OBJECT_NOUNS[parts[1]]
     return None
 
 
@@ -1274,13 +1280,19 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         system_msg += (
             "\n\nCOMPOSITION OVERRIDE (replaces sentences 2 and 3 of the scene grammar): write "
             "the scene as a calm, artful film still. (1) The subject, opened as the OPENING RULE "
-            + ("says, caught at a MOMENT — mid-action, a decisive instant that shows what it is. "
+            + ("says, caught at a MOMENT — mid-action, a decisive instant that shows what it is, "
+               "LARGE in the frame (at least a third of it, face visible). "
                if card_type in ('creature', 'planeswalker') else
                "says, in a clear posture doing one plain thing. ")
-            + "(2) The composition — where the "
-            "subject sits in the frame, what stands behind it and beside it at what distance, "
-            "the colours of each, and, if the medium renders light at all, how the scene is lit. "
-            "(3) One concrete detail of the setting that ties subject and background together. "
+            + ("(2) The composition — a deliberate camera (a low angle or a high vantage) with one "
+               "vast or towering feature of the place dominating the frame, what stands behind it "
+               "and beside it at what distance, the colours of each, and, if the medium renders "
+               "light at all, how the scene is lit. "
+               if card_type in ('land', 'enchantment', 'instant', 'sorcery') else
+               "(2) The composition — where the subject sits in the frame, what stands behind it "
+               "and beside it at what distance, the colours of each, and, if the medium renders "
+               "light at all, how the scene is lit. ")
+            + "(3) One concrete detail of the setting that ties subject and background together. "
             "Calm, specific, concrete visual details — no dramatic fantasy language, no energy, "
             "no vortex."
             + (" EXCEPTION: this card is named for an event — show that event happening at full "

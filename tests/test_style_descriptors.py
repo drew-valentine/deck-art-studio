@@ -1133,3 +1133,22 @@ def test_second_draft_must_still_name_the_thing():
     a = 'Command Tower, a stone tower, rises from a lake.'
     b = 'Command Tower, a majestic squatting tree, lunges and bursts with red and gold leaves as wind hurls petals across a violet sky.'
     assert _pick_scene(a, b, tower) == 'a'
+
+
+def test_compound_names_yield_their_literal_object_and_humans_count_as_persons(monkeypatch):
+    import prompt_generator as pg, vision_analyzer as va
+    assert pg._literal_object_from_name('Shadowspear') == 'a spear'
+    assert pg._literal_object_from_name('Crawlspace') is None
+    assert 'soldier' in va._PERSON_NOUNS and 'woman' in va._PERSON_NOUNS
+    import sys, types
+    seen = []
+    def chat(messages, **kw):
+        seen.append(messages[0]['content']); return 'Arid Mesa, a red canyon, drops away under a high vantage. Cliffs. Dust.'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    pg.generate_subject_with_ai({'name': 'Arid Mesa', 'type_line': 'Land', 'oracle_text': '', 'card_type': 'land'},
+                                None, backend='local', local_model='m')
+    assert 'vast or towering feature' in seen[0]
+    seen.clear()
+    pg.generate_subject_with_ai({'name': 'Kardur', 'type_line': 'Creature — Demon', 'oracle_text': '', 'card_type': 'creature'},
+                                None, backend='local', local_model='m')
+    assert 'LARGE in the frame' in seen[0] and 'vast or towering feature' not in seen[0]

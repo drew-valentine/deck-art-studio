@@ -1907,7 +1907,13 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
             # yes/no said the subject is present; a dragon passed as a human
             # shaman that way. The open list + category second opinion that
             # already guards artifacts now guards creatures too.
-            if not _names_object(image_path, subject_hint, vision_model, alternates=_object_alternates(subject_hint)) \
+            alts = _object_alternates(subject_hint)
+            if 'human' in subject_hint.lower():
+                # a Human Soldier drawn as a soldier on a ship's bow was flagged
+                # missing because the list said "man, ship, sea": any person
+                # word names a human (category rule, no creature tables)
+                alts = alts + _PERSON_NOUNS
+            if not _names_object(image_path, subject_hint, vision_model, alternates=alts) \
                     and not _object_category_matches(image_path, subject_hint, vision_model):
                 defects.append('subject missing')
     # Text / signature: the whole-image yes/no fires on almost every card.
@@ -1957,6 +1963,12 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
         elif advisory is not None:
             advisory['composition'] = notes
     return defects
+
+
+_PERSON_NOUNS = ['man', 'woman', 'person', 'people', 'figure', 'human', 'soldier', 'knight', 'warrior',
+                 'cleric', 'priest', 'monk', 'wizard', 'mage', 'sorcerer', 'guard', 'sailor', 'rider',
+                 'archer', 'hunter', 'scholar', 'shaman', 'druid', 'merchant', 'lady', 'lord', 'king',
+                 'queen', 'child', 'boy', 'girl', 'elder', 'face', 'character']
 
 
 def _object_alternates(subject_hint: str) -> list:
