@@ -1142,7 +1142,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     # the deck theme (e.g. sci-fi → android faces) otherwise hijacks the subject.
     _no_character = card_type in ('artifact', 'enchantment', 'land', 'instant', 'sorcery')
     type_guidance = {
-        'artifact': 'Depict the artifact OBJECT itself, filling the frame. If the card NAME literally names a physical thing or body part (e.g. "Krark\'s Thumb" = a thumb, "Sol Ring" = a ring, "Sword of X" = a sword), depict THAT literal object as the relic — do NOT substitute a generic glowing disc, amulet, or runed orb. In the FIRST sentence say what physical object it is in plain everyday words the image model knows (a signet is "a signet ring", a phylactery is "a small ornate box", a bauble is "a glass trinket"), then describe it. If the object is a BODY PART, the image model will draw the whole limb unless told otherwise: say it is ONE single part, detached, cut cleanly at its base, with no hand, arm or body anywhere, and present it as a kept relic at rest. Any other object is shown large and whole, resting where it belongs or in use, with nothing hanging above or beside it. NOT a landscape, NOT a person.',
+        'artifact': 'Depict the artifact OBJECT itself, filling the frame. If the card NAME literally names a physical thing or body part (e.g. "Krark\'s Thumb" = a thumb, "Sol Ring" = a ring, "Sword of X" = a sword), depict THAT literal object as the relic — do NOT substitute a generic glowing disc, amulet, or runed orb. In the FIRST sentence say what physical object it is in plain everyday words the image model knows — the ordinary name of that kind of thing, not a rare term — then describe it. If the name is a word for a place, a space or an idea rather than a thing, depict the one physical object that name most plainly suggests and say what it is. If the object is a BODY PART, the image model will draw the whole limb unless told otherwise: say it is ONE single part, detached, cut cleanly at its base, with no hand, arm or body anywhere, and present it as a kept relic at rest. Any other object is shown large and whole, resting where it belongs or in use, with nothing hanging above or beside it. NOT a landscape, NOT a person.',
         'enchantment': 'The card name is an event, effect or blessing, never a character: do not write the name as a person who stands or acts. Depict the SCENE the enchantment represents — the people, creatures, place, ritual, or event drawn from its flavor and rules text (e.g. an army of warriors growing stronger under a hopeful dawn, a blessing settling over a battlefield). Do NOT default to abstract swirling energy, a glowing aura, or a magical vortex — give it concrete subject matter.',
         'instant': 'Depict the dramatic moment of the spell being cast — the action and energy itself.',
         'sorcery': 'Depict the spell being cast — the ritual, the gathering of power.',
@@ -1850,8 +1850,14 @@ def _body_line(card: dict, local_model: str = '', steer_present: bool = False) -
     kind = ' '.join(subtypes).lower()
     # with a user direction the user has described the appearance: no model
     # gloss (a gloss for a corrupted elf added horns and a tail over the steer)
-    gloss = '' if steer_present else _body_gloss(kind, local_model)
     head = "Body (yields to the USER DIRECTION above): " if steer_present else "Body: "
+    if kind.lower().startswith('human'):
+        # the type word says it: a human is drawn as a human — the 8B gave a
+        # Human Soldier claws and a Human Cleric a tail and pointed ears
+        return (f"{head}this creature is a {kind} — a human being with a human face and body, two arms, "
+                "two legs, no claws, fangs, tail, fur, scales or pointed ears"
+                + (" and NO wings" if not _card_flies(card) else "") + ". Say so in the first sentence.\n")
+    gloss = '' if steer_present else _body_gloss(kind, local_model)
     # wings follow the RULES: a fox with no flying grew "retractable yellow wings"
     wings = ("It has wings and is in the air." if _card_flies(card)
              else "It has NO wings and stays on the ground; never give it wings or let it fly.")

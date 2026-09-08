@@ -1047,3 +1047,22 @@ def test_staging_read_is_composition_only_and_merged_across_references(monkeypat
     assert out == 'Scenes are staged with dense detail and still, hazy air. The tone is calm.'
     assert all('Do NOT name any object, prop' in p for p in seen_prompts) and len(seen_prompts) == 2
     assert va.style_staging_seen('a.png', 'vm').startswith('Scenes are staged close')
+
+
+def test_human_subtypes_are_drawn_as_humans_and_artifact_guidance_has_no_example_nouns():
+    """V24: a Human Soldier got claws, a Human Cleric a tail; two artifacts with no
+    literal object became 'signet rings' parroted from the guidance's examples."""
+    import prompt_generator as pg
+    line = pg._body_line({'name': 'Esper Sentinel', 'type_line': 'Artifact Creature — Human Soldier',
+                          'card_type': 'creature', 'oracle_text': ''}, '')
+    assert 'a human being with a human face and body' in line and 'no claws' in line and 'NO wings' in line
+    flier = pg._body_line({'name': 'Aven', 'type_line': 'Creature — Human Wizard', 'card_type': 'creature',
+                           'oracle_text': 'Flying'}, '')
+    assert 'NO wings' not in flier
+    assert pg._body_line({'name': 'Glissa', 'type_line': 'Creature — Human', 'card_type': 'creature',
+                          'oracle_text': ''}, '', steer_present=True) == ''
+    src = open(pg.__file__).read()
+    guidance = src[src.index("'artifact': 'Depict the artifact OBJECT"):]
+    guidance = guidance[:guidance.index("',\n")]
+    for noun in ('signet ring', 'glass trinket', 'ornate box', 'phylactery', 'bauble'):
+        assert noun not in guidance
