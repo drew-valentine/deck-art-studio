@@ -71,9 +71,30 @@ def _pool_token_grid(emb, k):
     g = int(round(n ** 0.5))
     if not k or k >= g or g * g != n:
         return emb
-    step = g // k
-    grid = emb.reshape(b, g, g, d)[:, : step * k, : step * k, :]
-    grid = grid.reshape(b, k, step, k, step, d).mean(axis=(2, 4))
+    grid4 = emb.reshape(b, g, g, d)
+    if g % k == 0:
+        step = g // k
+        grid = grid4.reshape(b, k, step, k, step, d).mean(axis=(2, 4))
+    else:
+        # k does not divide g (27 -> 16 for Medium): average variable-size
+        # bins over the WHOLE grid. The old step = g // k = 1 path sliced a
+        # top-left 16x16 crop covering ~35% of the reference instead of pooling.
+        edges = [(i * g) // k for i in range(k + 1)]
+        rows = []
+        for i in range(k):
+            r0, r1 = edges[i], max(edges[i + 1], edges[i] + 1)
+            cols = []
+            for j in range(k):
+                c0, c1 = edges[j], max(edges[j + 1], edges[j] + 1)
+                cols.append(grid4[:, r0:r1, c0:c1, :].mean(axis=(1, 2)))
+            rows.append(cols)
+        import numpy as _np
+        if isinstance(grid4, _np.ndarray):
+            stack = _np.stack
+        else:
+            import mlx.core as _mx
+            stack = _mx.stack
+        grid = stack([stack(cols, axis=1) for cols in rows], axis=1)     # (B, k, k, D)
     return grid.reshape(b, k * k, d)
 
 

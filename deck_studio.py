@@ -1010,7 +1010,14 @@ def _reconcile_registry_with_disk(registry: dict) -> tuple:
 
 
 def _save_deck_registry(registry: dict):
-    """Save the deck registry to disk."""
+    """Save the deck registry to disk. Entries are de-duplicated by id (last
+    wins): create_deck writes deck.json before loading the registry, whose
+    disk reconcile already re-adds the new deck, so a plain append doubled it."""
+    seen = {}
+    for d in registry.get('decks', []) or []:
+        if isinstance(d, dict) and d.get('id'):
+            seen[d['id']] = d
+    registry['decks'] = list(seen.values())
     DECK_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(DECK_REGISTRY_PATH, 'w') as f:
         json.dump(registry, f, indent=2)
@@ -4486,7 +4493,8 @@ def _pick_cleaner_take(name, card, raw_path, defects, ctx, vmodel, inspect_rende
     prev_raw = vdir / f'v{latest}_raw.png'
     if not prev_raw.exists():
         return defects
-    prev_defects = inspect_render(prev_raw, name, card.get('card_type', ''), vmodel)
+    prev_defects = inspect_render(prev_raw, name, card.get('card_type', ''), vmodel,
+                                  subject_hint=_inspect_subject_hint(card), flies=_card_flies_for_inspect(card))
     if prev_defects is None:
         return defects
     if len(prev_defects) > len(defects or []):
@@ -4632,7 +4640,10 @@ def _execute_inspect_job(job, ctx):
             elif bad and final:
                 # H38: an edge signature / stray mark on an otherwise sound
                 # render is hidden by cropping the art window, not by another roll
-                if all(set(d) <= {'signature', 'text'} for _, d in bad):
+                if all(set(d) <= {'signature', 'text'} for _, d in bad) \
+                        and any(face == 'front' for face, _ in bad):
+                    # the art zoom is a FRONT-face override; a mark only on the
+                    # back face is recorded, not zoomed away on the wrong face
                     _hide_edge_marks(name, card, ctx)
     finally:
         _ollama_work_done()

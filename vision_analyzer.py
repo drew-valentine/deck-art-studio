@@ -2358,7 +2358,10 @@ def pixel_coverage_phrase(stats) -> str:
     if not stats:
         return ''
     paper, sat = stats.get('paper', 0.0), stats.get('saturation', 0.0)
-    if sat < 0.12:
+    # the mean saturation is over ALL pixels; on 75% white paper a coloured
+    # drawing averages below the monochrome line. Judge the ink, not the paper.
+    sat_ink = sat / (1.0 - paper) if paper < 0.95 else sat
+    if sat_ink < 0.12:
         return 'monochrome, uncoloured ink on white paper'
     if paper >= 0.35:
         return 'coloured figures and objects on open white paper'

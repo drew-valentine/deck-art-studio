@@ -441,3 +441,31 @@ def test_recognized_source_without_kind_is_treated_as_franchise():
     assert ds._effective_source_kind({'style_source': 'Moebius', 'style_source_kind': 'artist'}) == 'artist'
     assert ds._effective_source_kind({'style_source': 'Moebius', 'style_source_kind': ''}) == ''
     assert ds._effective_source_kind({'style_source': '', 'style_source_kind': 'movement'}) == 'movement'
+
+
+def test_pool_token_grid_pools_the_whole_grid_when_k_does_not_divide_g():
+    import numpy as np, importlib.util
+    spec = importlib.util.spec_from_file_location('flux_worker', 'flux_worker.py')
+    fw = importlib.util.module_from_spec(spec)
+    import sys; sys.modules['flux_worker'] = fw; spec.loader.exec_module(fw)
+    g = 27; emb = np.zeros((1, g * g, 1)); grid = emb.reshape(1, g, g, 1)
+    grid[:, :, 14:, :] = 1.0          # right half bright
+    out = fw._pool_token_grid(grid.reshape(1, g * g, 1), 16)
+    assert out.shape == (1, 256, 1)
+    row = out.reshape(16, 16)[0]
+    assert row[0] == 0.0 and row[-1] == 1.0     # a crop would never reach the right half
+
+
+def test_coverage_phrase_judges_ink_not_paper():
+    from vision_analyzer import pixel_coverage_phrase
+    assert pixel_coverage_phrase({'paper': 0.75, 'saturation': 0.10}) == 'coloured figures and objects on open white paper'
+    assert pixel_coverage_phrase({'paper': 0.75, 'saturation': 0.02}) == 'monochrome, uncoloured ink on white paper'
+
+
+def test_registry_save_dedupes_by_id(tmp_path, monkeypatch):
+    import json
+    import deck_studio as ds
+    monkeypatch.setattr(ds, 'DECK_REGISTRY_PATH', tmp_path / 'r' / 'decks.json')
+    ds._save_deck_registry({'decks': [{'id': 'a', 'name': 'A'}, {'id': 'b', 'name': 'B'}, {'id': 'a', 'name': 'A2'}]})
+    saved = json.load(open(tmp_path / 'r' / 'decks.json'))['decks']
+    assert [d['id'] for d in saved] == ['a', 'b'] and saved[0]['name'] == 'A2'
