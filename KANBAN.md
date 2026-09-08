@@ -80,7 +80,31 @@
 
 ## Ready
 
+- [ ] H80 — objects in a place (Object line adds scale + surroundings) | Priority: P1 | Created: 2026-09-07 | Owner: unassigned
+  - Object cards still read as a product shot on a bare ground. The Object line says what the thing is but never how big it is or what it sits in.
+  - Scope: extend the Object line with the object's scale and its immediate surroundings, built from the deck's own world (per the standing deck-agnostic rule — derived from the style, never a table of props).
+  - Acceptance: Given an artifact card, when its scene is written, then the prompt names the object's scale and what it rests on or in, and the render still passes the inspector's literal-object check.
+  - Sequencing only: run after the H78 verdict, since that decides how much of the gap is prompt length.
+
+- [ ] H81 — revisit the flat-media light ban on ink/comic decks (only if H78 points there) | Priority: P2 | Created: 2026-09-07 | Owner: unassigned
+  - The flat-media path strips light vocabulary, and the strip-then-rewrite passes are the largest single source of prompt shortening. Ink and comic decks lose drama words the render could have used.
+  - Gate: run only if H78 shows the loss is in the strips rather than in raw prompt length. Otherwise stays parked.
+  - Method if run: like-for-like fixed-seed A/B on one ink deck and one comic deck, with the ban relaxed from "no light words" to "no rendered light gradients".
+  - Acceptance: Given a flat-media deck, when the relaxed ban is used, then scenes keep the flat register (no drift to smooth digital paint) and the blind judge does not prefer the fully-banned version.
+
 ## In Progress
+
+- [ ] H78 — long v1.49 prose vs current short prompt, fixed seed 1001, current pipeline (12 cards across three decks) + blind judge | Priority: P0 | Started: 2026-09-07 | Owner: drew-valentine
+  - Branch: `feat/night-composition`
+  - Purpose: separate "prompts got shorter" from "the strips earned their keep". Both arms render on the current pipeline (Redux references, style block, render lead, guards) and differ only in the scene prose — the archived v1.49.0 prompt against today's.
+  - Method: 12 cards across three decks, seed 1001 on both arms via POST `/api/generate`, then a blind vision judge on paired sheets with the arms swapped.
+  - Renders go through the API, and every card is reverted to its pre-experiment version afterwards, so the owner's decks are left as they were found.
+  - Read-out: long arm wins → the fix is prompt length, and H79 is already aimed there. Arms tie → the strips are not the cause and H81 stays parked.
+
+- [ ] H79 — scenes keep their setting | Priority: P0 | Started: 2026-09-07 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, committed 831a073.
+  - Shipped in that commit: a required Setting line (category words only, and it yields to a user steer); the user message's closing instruction now matches the scene grammar (it asked for "two short sentences" while the grammar asked for three of about sixty words); rewrites ask for full length instead of "the same length"; stub and restarted sentences are dropped; and a scene under 35 words or of a single sentence gets a growth pass (SCENE_FLOOR=0 mutes it, SCENE_MIN_WORDS sets the floor).
+  - Validation pending: the same 12 cards at seed 1001, judged against the H78 renders.
 
 ## In Review
 
@@ -231,6 +255,12 @@
   - Note: the owner's own decks have not been re-distilled under the current pipeline (one has no style block at all); re-distilling them is the owner's call.
 
 ## Done
+
+- [x] Measured verdict vs v1.49.0 — style and subject better, composition regressed | Priority: P1 | Completed: 2026-09-07 | Owner: drew-valentine
+  - Current art measured against v1.49.0 (the text-only style pipeline, tagged 2026-09-02 just before the Redux merge) on the same decks and cards.
+  - Better now: palette distance to the references fell on both measured decks (Glissa 0.73 → 0.53, Heads-I-Win 0.86 → 0.72); artifact subject-missing went from 4 of 11 to 1 of 11; text and signature flags went from 35% to 15% after the signature bleed.
+  - Worse now: scene prompts halved, about 90 words down to about 45, with 10 of 149 under 25 words. A blind vision judge asked which render was the more striking and better composed picked the older one 30 to 3, with 27 undecided.
+  - Verdict: the image channel and the defect guards hold up; the writer's output shrank under the strip-and-rewrite backstops. Composition is the open front — H78 and H79 follow, H80 and H81 queued behind them.
 
 - [x] README gallery refresh — replace the sample images with the best recent renders | Priority: P2 | Completed: 2026-09-07 | Owner: drew-valentine
   - Branch: `docs/readme-gallery-refresh`
