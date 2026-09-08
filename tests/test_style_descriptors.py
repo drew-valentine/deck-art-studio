@@ -1152,3 +1152,15 @@ def test_compound_names_yield_their_literal_object_and_humans_count_as_persons(m
     pg.generate_subject_with_ai({'name': 'Kardur', 'type_line': 'Creature — Demon', 'oracle_text': '', 'card_type': 'creature'},
                                 None, backend='local', local_model='m')
     assert 'LARGE in the frame' in seen[0] and 'vast or towering feature' not in seen[0]
+
+
+def test_creature_check_accepts_any_living_thing_and_objects_stay_large(monkeypatch):
+    import vision_analyzer as va, prompt_generator as pg, sys, types
+    assert 'cyclops' in va._CREATURE_NOUNS and 'angel' in va._CREATURE_NOUNS
+    seen = []
+    def chat(messages, **kw):
+        seen.append(messages[0]['content']); return 'Sol Ring, a gold ring, rests on a stump. Grey mud around it. Dust drifts.'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    pg.generate_subject_with_ai({'name': 'Sol Ring', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'},
+                                None, backend='local', local_model='m')
+    assert 'shown whole and LARGE in the frame' in seen[0]

@@ -1907,12 +1907,18 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
             # yes/no said the subject is present; a dragon passed as a human
             # shaman that way. The open list + category second opinion that
             # already guards artifacts now guards creatures too.
-            alts = _object_alternates(subject_hint)
-            if 'human' in subject_hint.lower():
-                # a Human Soldier drawn as a soldier on a ship's bow was flagged
-                # missing because the list said "man, ship, sea": any person
-                # word names a human (category rule, no creature tables)
-                alts = alts + _PERSON_NOUNS
+            # The open list is weak on fantasy nouns: a red cyclops, a dark-winged
+            # angel and a homunculus were all flagged missing while yes/no said
+            # present, and a batch then re-rolled good renders into worse ones.
+            # A creature is MISSING when nothing living is named at all (ruins
+            # for a soldier, a landscape for a dragon); a naming gap is not a
+            # defect. Category words, no creature tables.
+            alts = _object_alternates(subject_hint) + _PERSON_NOUNS
+            if 'human' not in subject_hint.lower():
+                # a Human stays strict (a dragon drawn for a Human Shaman is
+                # the defect the owner reported); other kinds accept any
+                # living thing, since the list rarely says 'homunculus'
+                alts = alts + _CREATURE_NOUNS
             if not _names_object(image_path, subject_hint, vision_model, alternates=alts) \
                     and not _object_category_matches(image_path, subject_hint, vision_model):
                 defects.append('subject missing')
@@ -1969,6 +1975,14 @@ _PERSON_NOUNS = ['man', 'woman', 'person', 'people', 'figure', 'human', 'soldier
                  'cleric', 'priest', 'monk', 'wizard', 'mage', 'sorcerer', 'guard', 'sailor', 'rider',
                  'archer', 'hunter', 'scholar', 'shaman', 'druid', 'merchant', 'lady', 'lord', 'king',
                  'queen', 'child', 'boy', 'girl', 'elder', 'face', 'character']
+
+
+_CREATURE_NOUNS = ['creature', 'monster', 'beast', 'animal', 'dragon', 'demon', 'angel', 'bird', 'snake',
+                   'serpent', 'fish', 'insect', 'spider', 'wolf', 'cat', 'dog', 'horse', 'bear', 'lizard',
+                   'frog', 'goblin', 'elf', 'dwarf', 'orc', 'giant', 'troll', 'ogre', 'ghost', 'spirit',
+                   'skeleton', 'zombie', 'robot', 'golem', 'alien', 'fairy', 'faerie', 'imp', 'cyclops',
+                   'minotaur', 'centaur', 'griffin', 'phoenix', 'wyrm', 'hydra', 'kraken', 'bat', 'rat',
+                   'ape', 'gorilla', 'boar', 'deer', 'stag', 'elephant', 'crab', 'octopus', 'squid', 'worm']
 
 
 def _object_alternates(subject_hint: str) -> list:

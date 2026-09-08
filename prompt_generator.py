@@ -1283,6 +1283,8 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             + ("says, caught at a MOMENT — mid-action, a decisive instant that shows what it is, "
                "LARGE in the frame (at least a third of it, face visible). "
                if card_type in ('creature', 'planeswalker') else
+               "says, shown whole and LARGE in the frame (at least a third of it), resting where it belongs. "
+               if card_type == 'artifact' else
                "says, in a clear posture doing one plain thing. ")
             + ("(2) The composition — a deliberate camera (a low angle or a high vantage) with one "
                "vast or towering feature of the place dominating the frame, what stands behind it "
