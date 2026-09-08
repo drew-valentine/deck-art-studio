@@ -625,7 +625,17 @@ _UNPAINTABLE_RE = re.compile(
     r'(?:,\s*(?:its|his|her|their) [^,.;]*?)?(?:,\s*)?\b(?:an? (?:[a-z-]+ ){0,2}?(?:testament|reminder|symbol|beacon|echo|metaphor|nod|homage|tribute) (?:to|of|for)[^,.;]*'
     r'|as if [^,.;]*|seem(?:s|ing)? to [^,.;]*|symboli[sz]ing [^,.;]*'
     r'|an? [a-z]+ that (?:belies|speaks|hints|suggests|betrays|hides|recalls|promises)[^,.;]*'
-    r'|(?:hinting|speaking|whispering) (?:at|of) [^,.;]*)', re.IGNORECASE)
+    r'|(?:hinting|speaking|whispering) (?:at|of) [^,.;]*'
+    # H83b: similes to abstractions and idioms of waiting/meaning that the
+    # writer keeps producing ("unfold like a tapestry", "secrets wait to be
+    # unlocked", "a canvas of chance", "fills the air with anticipation")
+    r'|(?:like|as) a (?:tapestry|canvas|dream|memory|whisper|promise|symphony|melody|prayer|sigh)\b[^,.;]*'
+    r'|(?:secrets?|mysteries|stories|memories|echoes) (?:wait|waiting|linger|hide|whisper|await)[^,.;]*'
+    r'|wait(?:s|ing)? to be [a-z]+[^,.;]*'
+    r'|a canvas of [a-z]+'
+    r'|(?:fill(?:s|ing)?|charg(?:es|ing)) the air with [^,.;]*'
+    r'|creating a (?:[a-z-]+ ){0,2}(?:melody|atmosphere|mood|backdrop|symphony|harmony)[^,.;]*'
+    r'|in a (?:[a-z-]+,? ){0,2}(?:dance|ballet|symphony) of [a-z]+[^,.;]*)', re.IGNORECASE)
 
 
 _DANGLING_RE = re.compile(r'\s*\b(that|which|and|as|while|with|of|the|a|an|but|or|to|whose|where|for|in|on|at|by|'
@@ -643,6 +653,8 @@ def _fix_dangling_tail(text: str) -> str:
         if not m:
             break
         out = out[:m.start()].rstrip(' ,;') + m.group(2)
+    # a copula left hanging by a clause strip: "The table is, with five coins"
+    out = re.sub(r'\s+\b(?:is|are|was|were|becomes?|remains?|seems?)\s*(?=[,;.!?])', '', out)
     return out
 
 
@@ -1597,32 +1609,35 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             # one line renders as the subject on nothing. One growth pass asks
             # for the missing setting and atmosphere, then the same cleanup.
             try:
-                grown = mlx_llm.chat(
-                    messages=[
-                        {'role': 'system', 'content': system_msg},
-                        {'role': 'user', 'content': user_msg},
-                        {'role': 'assistant', 'content': out},
-                        {'role': 'user', 'content':
-                            "That scene is too thin. Rewrite it in three full sentences of about "
-                            "sixty words: keep the first sentence's subject and moment exactly, add "
-                            "a second sentence that places it — the ground under it, what surrounds "
-                            "it at scale, the weather or air — and a third with one atmospheric "
-                            "detail. Nothing new in the foreground"
-                            + (", and no words about light or shine." if is_flat else ".")},
-                    ],
-                    model=local_model, max_tokens=220, temperature=0.5)
-                grown = _limit_scene_sentences(_strip_chat_preamble(grown), 3)
-                if _opens_with_subject(grown, card) and len(grown.split()) > len(out.split()):
-                    grown = _final_pass(grown)
-                    if len(grown.split()) > len(out.split()):
-                        print(f"  [prompt_gen] thin-scene growth for {name}: "
-                              f"{len(out.split())} -> {len(grown.split())} words")
-                        out = grown
+                for _temp in (0.5, 0.8):            # a second try at a higher temperature
+                    grown = mlx_llm.chat(
+                        messages=[
+                            {'role': 'system', 'content': system_msg},
+                            {'role': 'user', 'content': user_msg},
+                            {'role': 'assistant', 'content': out},
+                            {'role': 'user', 'content':
+                                "That scene is too thin. Rewrite it in three full sentences of about "
+                                "sixty words: keep the first sentence's subject and moment exactly, add "
+                                "a second sentence that places it — the ground under it, what surrounds "
+                                "it at scale, the weather or air — and a third with one atmospheric "
+                                "detail. Nothing new in the foreground"
+                                + (", and no words about light or shine." if is_flat else ".")},
+                        ],
+                        model=local_model, max_tokens=220, temperature=_temp)
+                    grown = _limit_scene_sentences(_strip_chat_preamble(grown), 3)
+                    raw_len = len(grown.split())
+                    if _opens_with_subject(grown, card) and raw_len > len(out.split()):
+                        grown = _final_pass(grown)
+                        if len(grown.split()) > len(out.split()):
+                            print(f"  [prompt_gen] thin-scene growth for {name}: "
+                                  f"{len(out.split())} -> {len(grown.split())} words")
+                            out = grown
+                            break
+                        print(f"  [prompt_gen] thin-scene growth for {name} rejected after cleanup "
+                              f"({raw_len} -> {len(grown.split())} words)")
                     else:
-                        print(f"  [prompt_gen] thin-scene growth for {name} rejected after cleanup")
-                else:
-                    print(f"  [prompt_gen] thin-scene growth for {name} rejected: "
-                          f"{'no subject opening' if not _opens_with_subject(grown, card) else 'not longer'}")
+                        print(f"  [prompt_gen] thin-scene growth for {name} rejected: "
+                              f"{'no subject opening' if not _opens_with_subject(grown, card) else 'not longer'}")
             except Exception as e:
                 print(f"  [prompt_gen] thin-scene growth failed: {e}")
         if len(out.split()) < 5:
@@ -1926,7 +1941,8 @@ _ACTION_VERB_RE = re.compile(
 
 _ANTICIPATION_RE = re.compile(
     r"\b(?:threaten(?:s|ing|ed)? to|about to|on the (?:verge|brink|edge) of|poised to|ready to|"
-    r"waiting to|prepar(?:es|ing) to|set to|soon to|will (?:soon )?\w+|is going to|the calm before)\b",
+    r"waiting to|prepar(?:es|ing) to|set to|soon to|will (?:soon )?\w+|is going to|the calm before|"
+    r"(?:ominous|tense|quiet|breathless|eager|silent) anticipation|anticipation of)\b",
     re.IGNORECASE)
 _PAST_OPENING_RE = re.compile(
     r"^(?:[^.!?]{0,80}?\b(?:stood|rose|loomed|towered|sat|lay|rested|hung|stretched|sprawled|glowed|"

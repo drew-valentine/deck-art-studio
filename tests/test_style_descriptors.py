@@ -1011,3 +1011,19 @@ def test_second_scene_draft_is_picked_blind(monkeypatch):
         return first
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat2))
     assert 'stump' in pg.generate_subject_with_ai(card, None, backend='local', local_model='m')
+
+
+def test_abstraction_similes_and_waiting_idioms_are_cut():
+    from prompt_generator import _strip_unpaintable, _is_anticipation_or_past
+    out = _strip_unpaintable('The slopes unfold like a tapestry against the sky. Amidst the peace, secrets wait to be '
+                             'unlocked, hidden beneath the leaves. The table is a canvas of chance, with five coins spinning.')
+    assert 'tapestry' not in out and 'secrets' not in out and 'canvas of' not in out and 'five coins spinning' in out
+    assert 'anticipation' not in _strip_unpaintable("The rack's swaying fills the air with an ominous anticipation, while a figure smiles.")
+    assert _is_anticipation_or_past("The rack's swaying fills the air with an ominous anticipation.")
+
+
+def test_dangling_copula_after_a_strip_is_removed():
+    from prompt_generator import _fix_dangling_tail, _strip_unpaintable
+    assert _fix_dangling_tail(_strip_unpaintable('The table is a canvas of chance, with five coins spinning.')) == \
+        'The table, with five coins spinning.'
+    assert _fix_dangling_tail('The ring is red.') == 'The ring is red.'
