@@ -2092,6 +2092,11 @@ def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '', car
         # pieces = [head, first, block, rest] — fit the whole thing to the
         # T5 window with the guard kept (H82)
         head, first_s, block_s, rest_s = pieces[0], pieces[1], pieces[2], pieces[3]
+        if card_type in ('artifact', 'land', 'card_back'):
+            # H94: the tail guard alone still let onlookers into a tavern
+            # around a relic and a figure onto a peak; FLUX weights early
+            # tokens most, so the no-people clause also rides in the head
+            head = (head + ', ' if head else '') + 'no people, no characters, no figures'
         block_items = [x.strip() for x in block_s.split(',') if x.strip()]
         return _fit_flux_prompt(head, first_s, block_items, rest_s, feedback_text, tail)
     pieces.append((feedback_text or '').rstrip(' .'))

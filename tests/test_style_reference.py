@@ -483,7 +483,7 @@ def test_flux_prompt_fits_the_t5_window_and_keeps_the_guard(monkeypatch):
              + ' '.join(['tail'] * 60) + '.')
     out = ds._assemble_flux_prompt(bits, scene, '', 'artifact')
     assert ds._t5_token_count(out) <= 250
-    assert out.startswith('in the style of a picture-book illustrator. Sol Ring, a gold ring, rests on a stump.')
+    assert out.startswith('in the style of a picture-book illustrator, no people, no characters, no figures. Sol Ring, a gold ring, rests on a stump.')
     assert out.endswith('No text, no words, no signature, no watermark, no card frame, no borders. No people, no characters, no hands.')
     assert 'style item 0' in out and 'style item 23' not in out       # block tail dropped first
     assert 'tail tail' not in out                                      # then the last scene sentence
@@ -498,3 +498,10 @@ def test_documents_in_the_scene_get_a_blank_pages_guard():
     assert out.endswith('Any pages, scrolls, signs or labels are blank, with no lettering.')
     plain = ds._assemble_flux_prompt(['lead'], 'A red demon strides across the sand.', '', 'creature')
     assert 'blank' not in plain
+
+
+def test_no_people_clause_rides_in_the_head_for_objects_and_places():
+    import deck_studio as ds
+    out = ds._assemble_flux_prompt(['in the style of X'], 'Sol Ring, a gold ring, rests on a stump. Grey mud around it.', '', 'artifact')
+    assert out.startswith('in the style of X, no people, no characters, no figures. Sol Ring')
+    assert 'no people' not in ds._assemble_flux_prompt(['in the style of X'], 'Kardur strides.', '', 'creature').split('.')[0]
