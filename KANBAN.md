@@ -90,10 +90,10 @@
 
 ## In Progress
 
-- [ ] V24 — fresh 21-card validation of the whole night stack vs each card's current art | Priority: P0 | Started: 2026-09-08 | Owner: drew-valentine
-  - Branch: `feat/night-composition`. 21 cards that were not used to tune H83, H86b, H87 or H88, rendered at seed 1001 and set against each card's current art.
-  - Method: paired sheet per card plus the vision judge. The chain is running.
-  - This is the ship gate for H79, taken together with H83, H87 and H88.
+- [ ] V24b — final 21-card run on the finished branch, sheet + judge, for the morning ship decision | Priority: P0 | Started: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, on the branch as it stands after b5d16c0 — the same 21 fresh cards at seed 1001, re-rendered end to end.
+  - Method: paired sheet per card plus the vision judge, as in V24. Running.
+  - Purpose: one clean sheet of the whole stack for the owner's ship decision on H79 in the morning. V24 measured the stack before the two fixes; V6 measured only the six cards that failed.
 
 ## In Review
 
@@ -103,6 +103,7 @@
   - Validated once, 2026-09-08, mixed: the Setting line and the word floor gave whole-figure and landscape cards a real environment (Krark, Kardur, Arid Mesa), but the blind judge still preferred the previous short render 7:1 with 4 undecided, because 4 of 12 prompts came out broken — the subject lost from the opening, and light-strip fragments. Those four are H83.
   - Also absorbed H80: the Setting line covers "objects in a place", so no separate Object-line change was needed.
   - Ship decision now rides on V24, taken together with H83, H87 and H88 — the four are one stack and stand or fall on the same 21-card sheet.
+  - V24 ran the stack over 21 fresh cards and the two failure classes it exposed are fixed (b5d16c0), with 5 of the 6 corrected on re-render (V6). Stays In Review: the ship decision is the owner's, on the V24b sheet.
 
 - [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Review Started: 2026-09-02 | Owner: drew-valentine
   - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — In Review, awaiting the owner's ship decision.
@@ -251,6 +252,19 @@
   - Note: the owner's own decks have not been re-distilled under the current pipeline (one has no style block at all); re-distilling them is the owner's call.
 
 ## Done
+
+- [x] V24 — fresh 21-card validation of the whole night stack vs each card's current art | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`. 21 cards that were not used to tune H83, H86b, H87 or H88, rendered at seed 1001 and set against each card's current art.
+  - Defects, inspector: 7 on the new renders against 9 on the current art — subject missing 7 against 8, text 1 against 2.
+  - Vision judge on composition: current art 6, new 3, undecided 12. About even, and its rubric rewards close-ups, so the owner's eye decides.
+  - By the owner's-eye proxy the new renders won about 11 and lost 6. The losses: a junk-diving bird in a junkyard, a cobra lunging, a stone on a boulder in a forest, a thumb on a post, a lava rift, an angel with a body instead of a floating head, a charging cyclops.
+  - The six losses were two failure classes. Artifacts with no literal object were rendered as "signet rings" parroted from the artifact guidance's own examples (Shadowspear, Crawlspace) — the example-noun lesson again. Human creatures were drawn with claws, tails and pointed ears (Esper Sentinel, Grand Abolisher, Plaguecrafter).
+  - Both fixed in commit b5d16c0: no example nouns in the artifact guidance, and a Human first subtype gets a "human being with a human face and body, no animal features" Body line.
+
+- [x] V6 — the six V24 failures re-rendered on the fixed writer | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, on b5d16c0.
+  - Result: a spear for Shadowspear, an access panel for Crawlspace, and humans for Esper Sentinel, Grand Abolisher and Plaguecrafter. 5 of 6 corrected.
+  - Talisman of Hierarchy is the exception — its current art remains the better one.
 
 - [x] H83 — fix the four broken prompts H79's validation exposed | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
   - Branch: `feat/night-composition`, commits 1041bd5 and e6dee3f.
