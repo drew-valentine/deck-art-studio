@@ -90,10 +90,7 @@
 
 ## In Progress
 
-- [ ] V24b — final 21-card run on the finished branch, sheet + judge, for the morning ship decision | Priority: P0 | Started: 2026-09-08 | Owner: drew-valentine
-  - Branch: `feat/night-composition`, on the branch as it stands after b5d16c0 — the same 21 fresh cards at seed 1001, re-rendered end to end.
-  - Method: paired sheet per card plus the vision judge, as in V24. Running.
-  - Purpose: one clean sheet of the whole stack for the owner's ship decision on H79 in the morning. V24 measured the stack before the two fixes; V6 measured only the six cards that failed.
+- [ ] (empty — V24b finished; the night stack sits In Review awaiting the owner's ship decision on H79)
 
 ## In Review
 
@@ -104,6 +101,7 @@
   - Also absorbed H80: the Setting line covers "objects in a place", so no separate Object-line change was needed.
   - Ship decision now rides on V24, taken together with H83, H87 and H88 — the four are one stack and stand or fall on the same 21-card sheet.
   - V24 ran the stack over 21 fresh cards and the two failure classes it exposed are fixed (b5d16c0), with 5 of the 6 corrected on re-render (V6). Stays In Review: the ship decision is the owner's, on the V24b sheet.
+  - V24b closed 2026-09-08: the stack is complete and measured — 6 inspector defects against 10 on the current art, and the first run where the vision judge tilts to the new stack (6 new, 4 current, 11 undecided). Nothing further is queued behind it; the branch awaits the owner's ship decision.
 
 - [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Review Started: 2026-09-02 | Owner: drew-valentine
   - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — In Review, awaiting the owner's ship decision.
@@ -252,6 +250,19 @@
   - Note: the owner's own decks have not been re-distilled under the current pipeline (one has no style block at all); re-distilling them is the owner's call.
 
 ## Done
+
+- [x] V24b — final 21-card run on the finished branch, sheet + judge, for the ship decision | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, the branch as it stands after b5d16c0 — 21 fresh cards at seed 1001, rendered end to end and set against each card's current art.
+  - Defects, inspector: 6 on the new renders against 10 on the current art — subject missing 5 against 8, text 1 against 6.
+  - Vision judge on composition: new 6, current 4, undecided 11. The first run where the judge tilts to the new stack.
+  - By the owner's-eye proxy: about 11 better, 5 worse, 5 ties.
+  - Remaining misses: writer drift on two cards (a crater written as a tree, a cyclops as a furry beast) and the "object on a cushion" default for stones.
+  - Sheet: scratchpad v24b-cur-vs-v4.jpg.
+
+- [x] Restore the 33 cards left one take behind by the experiment reverts | Priority: P1 | Completed: 2026-09-08 | Owner: drew-valentine
+  - The overnight experiment reverts left 33 cards one take behind the owner's art — the current render is not written to `art_versions/` until it is replaced, so rolling back an experiment rolled past the art the owner had.
+  - All 33 restored by checksum to their pre-night art, 21 of 21 spot-checked and verified.
+  - Lesson saved to memory: snapshot the current render before an experiment revert, not only on replacement.
 
 - [x] V24 — fresh 21-card validation of the whole night stack vs each card's current art | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
   - Branch: `feat/night-composition`. 21 cards that were not used to tune H83, H86b, H87 or H88, rendered at seed 1001 and set against each card's current art.
