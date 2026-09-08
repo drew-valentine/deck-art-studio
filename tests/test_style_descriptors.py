@@ -1172,3 +1172,18 @@ def test_script_and_handwriting_clauses_are_cut():
     assert 'script' not in out and 'Dictate of Erebos' in out and 'pews' in out
     assert _tidy_prompt('A talisman rests on a stone, its surface etched with fine lines. Dust drifts.') == \
         'A talisman rests on a stone, its surface etched with fine lines. Dust drifts.'
+
+
+def test_place_draft_that_lost_its_thing_is_retried(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    calls = []
+    def chat(messages, **kw):
+        last = messages[-1]['content']; calls.append(last)
+        if 'not about the thing itself' in last:
+            return 'Command Tower, a tall stone tower, rises from a hill of red mushrooms. Ferns below. Grey sky.'
+        return 'Command Tower, a majestic squatting tree with gnarled branches, stands on a hill. Ferns below. Grey sky.'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    out = pg.generate_subject_with_ai({'name': 'Command Tower', 'type_line': 'Land', 'oracle_text': '', 'card_type': 'land'},
+                                      None, backend='local', local_model='m')
+    assert 'stone tower' in out and any('not about the thing itself' in c for c in calls)

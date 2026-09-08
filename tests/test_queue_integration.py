@@ -691,3 +691,23 @@ def test_second_take_is_a_fresh_scene(client, populated_state, monkeypatch):
     assert kinds[0][0] == ds.ART
     assert kinds[1][0] == ds.PROMPT and 'fresh scene 2/2' in kinds[1][2]
     assert kinds[2][0] == ds.ART and 'take 2/2' in kinds[2][2]
+
+
+def test_tied_takes_fall_back_to_the_scene_score(monkeypatch, tmp_path):
+    """The VLM style pick is undecided on almost every pair; two takes are two
+    SCENES now, so the deterministic scene score of their prompts breaks the tie."""
+    import json
+    import deck_studio as ds
+    import vision_analyzer as va
+    from generation_queue import Job, INSPECT
+    raw, comp, ctx = _two_take_ctx(tmp_path, monkeypatch)
+    vdir = tmp_path / 'art_versions' / 'keiga_the_tide_star'
+    json.dump({'card_prompt': 'Keiga, the Tide Star, a Dragon Spirit, rests on the sea. Grey water.'},
+              open(raw / 'keiga_the_tide_star.meta.json', 'w'))
+    json.dump({'card_prompt': 'Keiga, the Tide Star, a Dragon Spirit, rears out of a green wave and hurls white spray. Red sky.'},
+              open(vdir / 'v1_meta.json', 'w'))
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='', flies=None: [])
+    monkeypatch.setattr(va, 'pick_take', lambda *a: None)
+    job = Job(id='j', type=INSPECT, deck_id='d', card_name='', params={'final': True, 'takes': 2, 'card_names': ['Keiga, the Tide Star']})
+    ds._execute_inspect_job(job, ctx)
+    assert (raw / 'keiga_the_tide_star.png').read_bytes() == b'take1'      # the livelier scene won

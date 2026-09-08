@@ -4585,11 +4585,25 @@ def _pick_cleaner_take(name, card, raw_path, defects, ctx, vmodel, inspect_rende
             return defects
         import vision_analyzer as _va
         choice = _va.pick_take(refs, raw_path, prev_raw, name, vmodel)
+        if choice is None:
+            # the style pick is undecided on almost every pair (6/6 in the
+            # two-scene batch test); the two takes are two SCENES now, so the
+            # deterministic scene score of their prompts breaks the tie
+            try:
+                from prompt_generator import _scene_score
+                cur_p = (json.load(open(raw_path.with_suffix('.meta.json'))).get('card_prompt') or '')
+                prev_p = (json.load(open(vdir / f'v{latest}_meta.json')).get('card_prompt') or '') \
+                    if (vdir / f'v{latest}_meta.json').exists() else ''
+                sc, sp = _scene_score(cur_p, card), _scene_score(prev_p, card)
+                print(f"  [inspect] {name}: takes tied on defects, scene scores current {sc} vs earlier {sp}")
+                choice = 'b' if (prev_p and sp > sc) else 'a'
+            except Exception as e:
+                print(f"  [inspect] {name}: scene-score tie-break failed: {e}")
         if choice != 'b':
             print(f"  [inspect] {name}: takes tied on defects, kept the current take"
                   f" ({'style pick' if choice == 'a' else 'no clear style pick'})")
             return defects
-        print(f"  [inspect] {name}: takes tied on defects, style pick chose the earlier take")
+        print(f"  [inspect] {name}: takes tied on defects, the earlier take won the tie-break")
     # the archived take is cleaner: archive the current, restore the archived
     _archive_art(name, ctx['raw_art_dir'], ctx['composite_dir'], ctx['versions_dir'])
     shutil.copy2(prev_raw, raw_path)

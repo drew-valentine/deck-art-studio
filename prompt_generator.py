@@ -1539,11 +1539,37 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                 alt = _strip_chat_preamble(alt)
                 if _opens_with_subject(alt, card) and len(alt.split()) >= 20:
                     picked = _pick_scene(out, alt, card, local_model)
-                    if picked == 'b':
-                        out = alt
-                    print(f"  [prompt_gen] scene pick for {name}: {'second' if picked == 'b' else 'first'} draft")
+                    if picked == 'b' or (not _names_the_thing(out, card) and _names_the_thing(alt, card)):
+                        out = alt          # a first draft that lost the thing yields to one that has it
+                    print(f"  [prompt_gen] scene pick for {name}: {'second' if out is alt else 'first'} draft")
             except Exception as e:
                 print(f"  [prompt_gen] second draft failed: {e}")
+        if not _names_the_thing(out, card):
+            # a place or object card whose opening lost its literal thing
+            # ("Command Tower, a majestic squatting tree"): one retry that
+            # opens on the thing itself, kept only if it does
+            try:
+                head = re.findall(r"[A-Za-z]{3,}", name.split(',')[0])
+                thing = _literal_object_from_name(name) if card_type == 'artifact' else (head[-1].lower() if head else '')
+                fixed = mlx_llm.chat(
+                    messages=[
+                        {'role': 'system', 'content': system_msg},
+                        {'role': 'user', 'content': user_msg},
+                        {'role': 'assistant', 'content': out},
+                        {'role': 'user', 'content':
+                            f"That draft is not about the thing itself. Rewrite it so the FIRST sentence "
+                            f"shows '{name}' as {thing if card_type == 'artifact' else 'a ' + thing} — the "
+                            "literal thing the name says — large and unmistakable, then the same setting."},
+                    ],
+                    model=local_model, max_tokens=220, temperature=0.4)
+                fixed = _strip_chat_preamble(fixed)
+                if _opens_with_subject(fixed, card) and _names_the_thing(fixed, card):
+                    out = fixed
+                    print(f"  [prompt_gen] literal-thing retry for {name}: kept")
+                else:
+                    print(f"  [prompt_gen] literal-thing retry for {name}: draft kept")
+            except Exception as e:
+                print(f"  [prompt_gen] literal-thing retry failed: {e}")
         out = _strip_franchise_sentences(out, franchise_name)   # output backstop
         out = _strip_example_leak(out, card)
         out = _strip_unpaintable(out)
