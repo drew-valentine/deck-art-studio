@@ -165,6 +165,20 @@ decks/<deck-slug>/
   guidance carries NO example nouns (Shadowspear and Crawlspace rendered as the guidance's 'signet ring').
   H89: the artifact Setting line places the object where such a thing is found or used and forbids presentation
   for display (the writer's default was a stone on a cushion); 9/9 artifacts rendered in a place.
+  Cohesion work (2026-09-08, Drew: '1.49.0 compositions were more cohesive'): measured — the LAYOUT follows
+  the prompt text, not the reference strength (Off/Medium/Strong identical) and not the prompt order. The
+  writer's default is now the FILM-STILL grammar (`SCENE_MODE=filmstill`; `moment` restores the old one):
+  a COMPOSITION OVERRIDE in the system prompt — creatures/planeswalkers open at a decisive moment, LARGE in
+  the frame; artifacts shown whole and large where they belong; lands/enchantments/spells get a deliberate
+  camera with one vast or towering feature; then composition (what stands behind/beside at what distance,
+  colours, how lit) and one setting detail; event-named cards keep the event at full force. Second-draft pick
+  (`_pick_scene`) is a deterministic `_scene_score`; on place/object cards `_names_the_thing` (head noun or
+  literal object in the first sentence) gates the pick and triggers one literal-thing retry. Inspector: a
+  creature is 'subject missing' only when nothing living is named (`_PERSON_NOUNS`/`_CREATURE_NOUNS`;
+  Human subtypes still require a person word). Render guard adds 'pages/labels are blank' when the scene
+  names a document (`_DOCUMENT_RE`). Batch `takes>1`: each later take is preceded by a PROMPT job (a fresh
+  scene — two seeds of one prompt render the same picture); tied takes fall back to the scene score of the
+  two prompts (`_pick_cleaner_take`). Card backs: `card_back_scene`, no-people guard, never a written scene.
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
   unpaintable-abstraction strip → (flat media: rewrite without light words naming the offending
