@@ -2290,8 +2290,10 @@ def _ensure_creature_type_in_prompt(text: str, card: dict) -> str:
     appositive = f", {article} {subtypes},"
     if name and name in text:
         # "Okaun, Eye of Chaos sits..." -> "Okaun, Eye of Chaos, a Cyclops
-        # Berserker, sits..."
-        return text.replace(name, f"{name}{appositive}", 1)
+        # Berserker, sits..." — and never ",," when the draft already has an
+        # appositive right after the name ("Ohran Frostfang, a Snake,, a Snow…")
+        out = text.replace(name, f"{name}{appositive}", 1)
+        return re.sub(r',\s*,', ',', out)
     if name:
         return f"{name}, {article} {subtypes} — {text}"
     return text

@@ -1187,3 +1187,10 @@ def test_place_draft_that_lost_its_thing_is_retried(monkeypatch):
     out = pg.generate_subject_with_ai({'name': 'Command Tower', 'type_line': 'Land', 'oracle_text': '', 'card_type': 'land'},
                                       None, backend='local', local_model='m')
     assert 'stone tower' in out and any('not about the thing itself' in c for c in calls)
+
+
+def test_creature_type_appositive_never_doubles_a_comma():
+    from prompt_generator import _ensure_creature_type_in_prompt
+    out = _ensure_creature_type_in_prompt('Ohran Frostfang, a Snake, stretches across the floor.',
+                                          {'name': 'Ohran Frostfang', 'type_line': 'Snow Creature — Snake', 'card_type': 'creature'})
+    assert ',,' not in out and out.startswith('Ohran Frostfang, a Snake,')
