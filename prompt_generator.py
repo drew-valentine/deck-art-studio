@@ -1238,6 +1238,20 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         "settings, objects, action), even for spells and enchantments. "
         "Do NOT include any style directions — just describe the subject matter."
     )
+    if os.environ.get('SCENE_MODE', 'moment') == 'filmstill':
+        # H92: v1.49.0's composition recipe — a calm, artful film still built
+        # from posture, composition, objects and light — which the owner judged
+        # more cohesive than the moment grammar. Experiment hook, default off.
+        system_msg += (
+            "\n\nCOMPOSITION OVERRIDE (replaces the MOMENT rule of the scene grammar): write "
+            "the scene as a calm, artful film still. (1) The subject, opened as the OPENING RULE "
+            "says, in a clear posture doing one plain thing. (2) The composition — where the "
+            "subject sits in the frame, what stands behind it and beside it at what distance, "
+            "the colours of each, and, if the medium renders light at all, how the scene is lit. "
+            "(3) One concrete detail of the setting that ties subject and background together. "
+            "Calm, specific, concrete visual details — no dramatic fantasy language, no energy, "
+            "no vortex."
+        )
     if _no_character:
         system_msg += (
             "\n\nThis card depicts an OBJECT or PLACE, not a character. Do NOT make a "
@@ -1537,7 +1551,8 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             except Exception as e:
                 print(f"  [prompt_gen] present-moment rewrite failed: {e}")
         if card_type in ('creature', 'planeswalker') and _is_static_opening(out) \
-                and os.environ.get('MOMENT_REWRITE', '1') != '0' and not (steer and steer.strip()):
+                and os.environ.get('MOMENT_REWRITE', '1') != '0' and os.environ.get('SCENE_MODE', 'moment') != 'filmstill' \
+                and not (steer and steer.strip()):
             # H61: "stands tall / rests serenely" openings are the writer's
             # default and read as plain; the grammar asks for a MOMENT. One
             # rewrite asks for a decisive action in the first sentence.
