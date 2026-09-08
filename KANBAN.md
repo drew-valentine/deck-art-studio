@@ -104,7 +104,7 @@
   - V24b closed 2026-09-08: the stack is complete and measured — 6 inspector defects against 10 on the current art, and the first run where the vision judge tilts to the new stack (6 new, 4 current, 11 undecided). Nothing further is queued behind it; the branch awaits the owner's ship decision.
   - Night run closed 2026-09-08 05:25 — 15 commits on `feat/night-composition`, all pushed; every experimented card is back on its pre-night art; the owner decides the merge on the V24b sheet.
   - Reopened for the day's composition work: the owner judged v1.49.0's compositions more cohesive than today's, so the branch now also carries H90, H91, H92 and H93.
-  - Ship decision: the branch (H79–H93, 30 commits) is complete and measured; the hybrid grammar is the default. Awaiting the owner's merge call on the hybrid sheet (hybrid-cur-v4-film-hybrid.jpg).
+  - Not shipping yet by the owner's instruction: defects first, wow second. Rounds 3–5 on `feat/night-composition`; the remaining misses are per-roll variance, addressed by the two-scene take + inspection pick and a literal-thing retry for place/object drafts.
 
 - [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Review Started: 2026-09-02 | Owner: drew-valentine
   - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — In Review, awaiting the owner's ship decision.
@@ -253,6 +253,30 @@
   - Note: the owner's own decks have not been re-distilled under the current pipeline (one has no style block at all); re-distilling them is the owner's call.
 
 ## Done
+
+- [x] Two takes are two scenes | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit d7cc230, plus a tie-break still in progress.
+  - Shipped: with `takes>1` each later take is preceded by a fresh prompt job, so the two takes are two different scenes rather than the same scene at a second seed; inspection then keeps the cleaner one.
+  - Validated in the app, real batch on 6 cards: 18 jobs, all six finals at 0 defects, cards restored afterwards.
+  - The VLM style pick was undecided on all 6 of the 6 defect ties, so a deterministic scene-score tie-break was added on top of it.
+
+- [x] Round 5 — script and handwriting clauses cut, blank-pages guard for document scenes | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits ea0a315, a96ce17 and 4a528c5.
+  - Shipped: script, handwriting and fine-print clauses are stripped from prompts (a contract's "fine script" was drawing a written page), no double full stop is left behind by the strip, and scenes containing documents get a blank-pages render guard.
+  - On the 21 fresh cards against each card's current art: defects 8 against 10, subject missing 4 against 5, text 4 against 6, judge 8 new / 4 current / 9 undecided — the first run where the composition judge clearly favours the new renders.
+  - The defect swing from 3 in round 4 to 8 here is per-run noise on 21 cards: the two runs differ by one strip and by fresh prompts.
+
+- [x] Round 4 — a creature is missing only when nothing living is named, objects large in frame | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit c07efb5.
+  - Shipped: the inspector calls a creature missing only when nothing living is named at all (humans stay strict), and objects are held large in the frame.
+  - On the 21 fresh cards: defects 3 against 10, subject missing 1 against 5, text 2 against 6, judge 5 new / 5 current / 11 undecided.
+  - Remaining flags: a written contract, a text mark, an angel drawn as a bird.
+
+- [x] Round 3 — compound literal objects, humans as persons in the inspector, creatures large in frame, dramatic camera for places | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit d151686.
+  - Shipped: compound literal objects are named as one thing, humans count as persons in the inspector, creatures are held large in the frame, and place cards get a dramatic camera.
+  - On the 21 fresh cards: defects 6 against 11, subject missing 6 against 8, judge 4 new / 4 current / 13 undecided.
+  - Fixed by the round: Command Tower renders a tower, Talisman a talisman, Shadowspear a spear, and Okaun is large in the frame.
 
 - [x] H93 — hybrid grammar: film-still staging for every type, a decisive moment for creatures | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
   - Branch: `feat/night-composition`, commits c85ff7e and b6146f0, on by default.
