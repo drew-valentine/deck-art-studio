@@ -160,6 +160,9 @@ decks/<deck-slug>/
   tone), forbids naming props, and merges up to 4 reference reads to what they share — a single read pasted one
   picture's props (a garden, a raven on a book) into every card's scene. H88: `_figure_idiom_items` keeps only
   idiom items about faces/anatomy/poses on the Figure idiom line ('flat shaded forms' had become a 'flat head').
+  V24 (2026-09-08): `_body_line` for a Human first subtype says 'a human being with a human face and body … no
+  claws, fangs, tail, fur, scales or pointed ears' (a Human Soldier got claws, a Human Cleric a tail); the artifact
+  guidance carries NO example nouns (Shadowspear and Crawlspace rendered as the guidance's 'signet ring').
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
   unpaintable-abstraction strip → (flat media: rewrite without light words naming the offending
