@@ -1007,30 +1007,33 @@ def _subject_words(card: dict) -> set:
     return words
 
 
-def _scene_score(draft: str, card: dict, local_model: str):
-    """One draft, one number: how striking a picture it would make (specific
-    place, decisive moment, concrete drawable detail, one focal subject).
-    Scored alone so there is no A/B position bias — the swapped A/B ask chose
-    the first draft 12/12 because the 8B answers 'A' whatever the order."""
-    import mlx_llm, re as _re
-    name = (card.get('name') or '').split(' // ')[0]
-    reply = mlx_llm.chat(
-        messages=[
-            {'role': 'system', 'content':
-                "You judge scene descriptions for a painter. Answer with a single integer from 1 to 10."},
-            {'role': 'user', 'content':
-                f"Scene description for a picture of '{name}':\n\n{draft}\n\n"
-                "Score 1-10 how striking the picture would be: a specific place, a decisive "
-                "moment at full force, concrete details a painter can draw, one clear focal "
-                "subject and nothing invented beside it. Vague, static or abstract scenes score "
-                "low. Answer with the number only."},
-        ],
-        model=local_model, max_tokens=4, temperature=0.0)
-    m = _re.search(r'\d+', reply or '')
-    return int(m.group(0)) if m else None
+def _scene_score(draft: str, card: dict, local_model: str = ''):
+    """Deterministic 'how striking' score for a scene draft. The 8B scored
+    every draft 9/10 (H87 run: 12/12 ties), so the judge is arithmetic on
+    what the grammar asks for: action verbs and colour words up, static
+    verbs, abstractions and a buried subject down. No model call."""
+    if not draft:
+        return -99
+    action = len(_ACTION_VERB_RE.findall(draft))
+    static = len(_STATIC_VERB_RE.findall(draft))
+    colours = len(_re_colour_words(draft))
+    abstractions = len(_UNPAINTABLE_RE.findall(draft))
+    words = len(draft.split())
+    score = 2 * action + colours + min(words, 60) / 20.0 - 2 * static - 3 * abstractions
+    if not _opens_with_subject(draft, card):
+        score -= 5
+    return round(score, 2)
 
 
-def _pick_scene(a: str, b: str, card: dict, local_model: str):
+def _re_colour_words(text: str) -> list:
+    try:
+        from vision_analyzer import _COLOR_WORDS
+    except Exception:
+        return []
+    return [w for w in re.findall(r"[a-z]+", (text or '').lower()) if w.rstrip('s') in _COLOR_WORDS]
+
+
+def _pick_scene(a: str, b: str, card: dict, local_model: str = ''):
     """'b' when the second draft scores strictly higher, else 'a'."""
     sa, sb = _scene_score(a, card, local_model), _scene_score(b, card, local_model)
     print(f"  [prompt_gen] scene scores: first {sa}, second {sb}")

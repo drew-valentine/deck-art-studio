@@ -983,33 +983,26 @@ def test_light_cut_takes_the_noun_phrase_and_a_leading_tail():
     assert _cut_light_phrases('The ring rests on a stump.') == 'The ring rests on a stump.'
 
 
-def test_second_scene_draft_is_picked_by_score(monkeypatch):
-    """H86b: a second, different draft; each draft is scored alone (an A/B ask
-    picked the first draft 12/12 from position bias); the second wins only on
-    a strictly higher score."""
+def test_second_scene_draft_is_picked_by_a_deterministic_score(monkeypatch):
+    """H86b: a second, different draft; drafts are scored arithmetically
+    (action verbs and colours up, static verbs and abstractions down) —
+    the 8B scored every draft 9/10 and an A/B ask picked 'A' regardless."""
     import sys, types
     import prompt_generator as pg
     calls = []
     first = 'Sol Ring, a gold ring, rests on a stump. Grey mud lies around it under a white sky. Dust drifts.'
-    second = 'Sol Ring, a gold ring, hangs from a chain over a canyon. Red cliffs drop away on both sides. Wind pulls at the chain.'
+    second = 'Sol Ring, a gold ring, hangs from a chain over a red canyon. Wind hurls orange dust past it as the chain swings.'
     def chat(messages, **kw):
         last = messages[-1]['content']; calls.append(last)
-        if 'DIFFERENT scene' in last: return second
-        if 'Score 1-10' in last: return '8' if 'canyon' in last else '4'
-        return first
+        return second if 'DIFFERENT scene' in last else first
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
     monkeypatch.setenv('SCENE_TAKES', '2')
     card = {'name': 'Sol Ring', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'}
+    assert pg._scene_score(second, card) > pg._scene_score(first, card)
     out = pg.generate_subject_with_ai(card, None, backend='local', local_model='m')
-    assert 'canyon' in out and sum('Score 1-10' in c for c in calls) == 2
-    # a tie keeps the first draft
-    def chat2(messages, **kw):
-        last = messages[-1]['content']
-        if 'DIFFERENT scene' in last: return second
-        if 'Score 1-10' in last: return '6'
-        return first
-    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat2))
-    assert 'stump' in pg.generate_subject_with_ai(card, None, backend='local', local_model='m')
+    assert 'canyon' in out and sum('DIFFERENT scene' in c for c in calls) == 1
+    assert pg._pick_scene(first, first, card) == 'a'                   # a tie keeps the first
+    assert pg._scene_score('A stump sits in the mud.', card) < pg._scene_score(first, card)   # buried subject
 
 
 def test_figure_idiom_keeps_only_figure_terms():
