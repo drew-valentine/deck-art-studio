@@ -1247,9 +1247,12 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         # Default since then; SCENE_MODE=moment restores the moment grammar.
         # Event-named cards keep the event at full force (H74).
         system_msg += (
-            "\n\nCOMPOSITION OVERRIDE (replaces the MOMENT rule of the scene grammar): write "
+            "\n\nCOMPOSITION OVERRIDE (replaces sentences 2 and 3 of the scene grammar): write "
             "the scene as a calm, artful film still. (1) The subject, opened as the OPENING RULE "
-            "says, in a clear posture doing one plain thing. (2) The composition — where the "
+            + ("says, caught at a MOMENT — mid-action, a decisive instant that shows what it is. "
+               if card_type in ('creature', 'planeswalker') else
+               "says, in a clear posture doing one plain thing. ")
+            + "(2) The composition — where the "
             "subject sits in the frame, what stands behind it and beside it at what distance, "
             "the colours of each, and, if the medium renders light at all, how the scene is lit. "
             "(3) One concrete detail of the setting that ties subject and background together. "
@@ -1558,7 +1561,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             except Exception as e:
                 print(f"  [prompt_gen] present-moment rewrite failed: {e}")
         if card_type in ('creature', 'planeswalker') and _is_static_opening(out) \
-                and os.environ.get('MOMENT_REWRITE', '1') != '0' and os.environ.get('SCENE_MODE', 'filmstill') != 'filmstill' \
+                and os.environ.get('MOMENT_REWRITE', '1') != '0' \
                 and not (steer and steer.strip()):
             # H61: "stands tall / rests serenely" openings are the writer's
             # default and read as plain; the grammar asks for a MOMENT. One
