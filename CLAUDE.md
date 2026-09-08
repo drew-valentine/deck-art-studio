@@ -150,6 +150,16 @@ decks/<deck-slug>/
   `_t5_token_count` uses the cached T5 tokenizer offline, else a calibrated estimate): block tail items go
   first, then the scene's last sentences; lead, subject sentence and guard never. Before this 14/31 prompts
   overflowed 256 tokens and mflux truncated the guard silently.
+  H83: `_opens_with_subject` counts only the literal object's HEAD noun; `_ensure_subject_opening` prepends the
+  name (and literal object) for every type when a strip removed the opening; `_cut_light_phrases` removes whole
+  'the <adj> <light> of <noun> [through …]' phrases and leading descriptive tails; `_UNPAINTABLE_RE` also cuts
+  similes to abstractions and waiting/meaning idioms. H86b/c: `SCENE_TAKES=2` (default) drafts a second, different
+  scene and `_pick_scene` keeps the higher `_scene_score` (deterministic: action verbs + colours − static verbs −
+  abstractions − buried subject; the 8B scored every draft 9/10 and an A/B ask picked 'A' regardless of order).
+  H87: `vision_analyzer.style_staging_seen` reads COMPOSITION only (camera, frame fill, horizon, density, weather,
+  tone), forbids naming props, and merges up to 4 reference reads to what they share — a single read pasted one
+  picture's props (a garden, a raven on a book) into every card's scene. H88: `_figure_idiom_items` keeps only
+  idiom items about faces/anatomy/poses on the Figure idiom line ('flat shaded forms' had become a 'flat head').
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
   unpaintable-abstraction strip → (flat media: rewrite without light words naming the offending
