@@ -1074,3 +1074,11 @@ def test_artifact_setting_line_puts_the_object_where_it_is_found():
     assert 'where such a thing is found or used' in art and 'never presented for display' in art
     assert 'cushion' not in art and 'pedestal' not in art          # no example nouns
     assert 'where such a thing' not in _setting_line(False, False, 'creature')
+
+
+def test_scene_score_rewards_the_name_head_noun_in_the_first_sentence():
+    from prompt_generator import _scene_score
+    land = {'name': 'Footfall Crater', 'card_type': 'land'}
+    on = 'Footfall Crater, a gargantuan crater, splits the dry earth as boulders tumble into it.'
+    off = 'Footfall Crater — a towering twisted tree, its canopy a deep green, sways as boulders tumble.'
+    assert _scene_score(on, land) > _scene_score(off, land)

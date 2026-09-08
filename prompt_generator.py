@@ -1022,6 +1022,14 @@ def _scene_score(draft: str, card: dict, local_model: str = ''):
     score = 2 * action + colours + min(words, 60) / 20.0 - 2 * static - 3 * abstractions
     if not _opens_with_subject(draft, card):
         score -= 5
+    # the name's head noun in the first sentence: a "Footfall Crater" draft
+    # about a tree and an "Okaun, Eye of Chaos" draft about a furry beast
+    # both opened with the name and then drifted
+    name = (card.get('name') or '').split(' // ')[0]
+    head = re.findall(r"[A-Za-z]{3,}", name.split(',')[0])
+    first = re.split(r'(?<=[.!?])\s+', draft.strip())[0].lower().replace(name.lower(), '', 1)
+    if head and head[-1].lower() in first and card.get('card_type') in ('land', 'artifact', 'enchantment'):
+        score += 3
     return round(score, 2)
 
 
