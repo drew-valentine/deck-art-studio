@@ -1065,10 +1065,35 @@ def _re_colour_words(text: str) -> list:
     return [w for w in re.findall(r"[a-z]+", (text or '').lower()) if w.rstrip('s') in _COLOR_WORDS]
 
 
+def _names_the_thing(draft: str, card: dict) -> bool:
+    """For a place or object card, the first sentence must carry the name's
+    head noun (tower, crater) or the literal object (a talisman) beyond the
+    name itself — a second draft that scored higher on colour and action had
+    turned Command Tower into a tree and a talisman into a box."""
+    if card.get('card_type') not in ('land', 'artifact', 'enchantment'):
+        return True
+    name = (card.get('name') or '').split(' // ')[0]
+    first = re.split(r'(?<=[.!?])\s+', (draft or '').strip())[0].lower().replace(name.lower(), '', 1)
+    heads = [w.lower() for w in re.findall(r"[A-Za-z]{3,}", name.split(',')[0])]
+    wanted = {heads[-1]} if heads else set()
+    lit = _literal_object_from_name(name) if card.get('card_type') == 'artifact' else ''
+    if lit:
+        lw = [w.lower() for w in re.findall(r"[A-Za-z]{3,}", lit)]
+        if lw:
+            wanted.add(lw[-1])
+    if not wanted:
+        return True
+    return any(re.search(r"\b" + re.escape(w.rstrip('s')) + r"s?\b", first) for w in wanted)
+
+
 def _pick_scene(a: str, b: str, card: dict, local_model: str = ''):
-    """'b' when the second draft scores strictly higher, else 'a'."""
+    """'b' when the second draft scores strictly higher AND still names the
+    thing (places and objects), else 'a'."""
     sa, sb = _scene_score(a, card, local_model), _scene_score(b, card, local_model)
     print(f"  [prompt_gen] scene scores: first {sa}, second {sb}")
+    if sb is not None and sa is not None and sb > sa and not _names_the_thing(b, card) and _names_the_thing(a, card):
+        print("  [prompt_gen] second draft dropped: it no longer names the thing")
+        return 'a'
     return 'b' if (sa is not None and sb is not None and sb > sa) else 'a'
 
 

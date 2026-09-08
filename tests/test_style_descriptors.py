@@ -1119,3 +1119,17 @@ def test_film_still_grammar_is_the_default_and_events_keep_their_force(monkeypat
     pg.generate_subject_with_ai({'name': 'Arid Mesa', 'type_line': 'Land', 'oracle_text': '', 'card_type': 'land'},
                                 None, backend='local', local_model='m')
     assert 'COMPOSITION OVERRIDE' not in seen[0]
+
+
+def test_second_draft_must_still_name_the_thing():
+    from prompt_generator import _names_the_thing, _pick_scene
+    tower = {'name': 'Command Tower', 'card_type': 'land'}
+    assert _names_the_thing('Command Tower, a stone tower, rises from a lake of lilies.', tower)
+    assert not _names_the_thing('Command Tower, a majestic squatting tree with gnarled branches, stands on a hill.', tower)
+    tal = {'name': 'Talisman of Resilience', 'card_type': 'artifact'}
+    assert not _names_the_thing('Talisman of Resilience, a small ornate box adorned with leaves, lies on its side.', tal)
+    assert _names_the_thing('Talisman of Resilience, a bronze talisman, lies among ivy.', tal)
+    assert _names_the_thing('Anything at all.', {'name': 'Kardur', 'card_type': 'creature'})
+    a = 'Command Tower, a stone tower, rises from a lake.'
+    b = 'Command Tower, a majestic squatting tree, lunges and bursts with red and gold leaves as wind hurls petals across a violet sky.'
+    assert _pick_scene(a, b, tower) == 'a'
