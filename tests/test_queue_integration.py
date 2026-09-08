@@ -676,3 +676,18 @@ def test_wings_on_a_flightless_creature_and_a_dragon_for_a_human(monkeypatch):
     ])
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: next(answers)))
     assert va.inspect_render('x.png', 'Ophiomancer', 'creature', 'v', subject_hint='a human shaman', flies=False) == []
+
+
+def test_second_take_is_a_fresh_scene(client, populated_state, monkeypatch):
+    """Two seeds of one prompt render the same picture; a second take must be a
+    new scene: a PROMPT job precedes the second ART job for each card."""
+    import deck_studio as ds
+    monkeypatch.setenv('RENDER_INSPECT', '0')
+    seen = []
+    monkeypatch.setattr(ds.gen_queue, 'enqueue', lambda job: (seen.append(job), job)[1])
+    r = client.post('/api/generate-batch', json={'card_names': ['Sol Ring'], 'skip_existing': False, 'takes': 2})
+    assert r.status_code == 200
+    kinds = [(j.type, j.card_name, j.label) for j in seen]
+    assert kinds[0][0] == ds.ART
+    assert kinds[1][0] == ds.PROMPT and 'fresh scene 2/2' in kinds[1][2]
+    assert kinds[2][0] == ds.ART and 'take 2/2' in kinds[2][2]

@@ -5706,6 +5706,17 @@ def generate_batch():
     job_ids = []
     for take in range(takes):
         for n in card_names:
+            if take > 0:
+                # Two seeds of the same prompt render near-identical pictures
+                # under the averaged references (12/12 measured), so a second
+                # take is a FRESH SCENE: a prompt job first, then the render.
+                # Every take is archived with its prompt and the end-of-batch
+                # inspection keeps the cleaner one.
+                pj = Job(type=PROMPT, deck_id=active_deck_id, deck_name=dname, card_name=n,
+                         use_ai=True, feedback=(feedback or None),
+                         label=f'{n} (fresh scene {take + 1}/{takes})')
+                gen_queue.enqueue(pj)
+                job_ids.append(pj.id)
             job = _enqueue_art(active_deck_id, n, face=face_map.get(n, 'all'),
                                feedback=(feedback or None), deck_name=dname,
                                label=(f'{n} (take {take + 1}/{takes})' if takes > 1 else None))
@@ -11497,7 +11508,7 @@ async function generateArt() {
       { type: 'textarea', name: 'feedback', label: 'Art Direction (optional)',
         placeholder: 'e.g. darker tones, more dramatic lighting', rows: 3 },
       { type: 'checkbox', name: 'twoTakes',
-        label: 'Two takes per card — each take is kept as a version, pick the best afterwards (doubles render time)',
+        label: 'Two takes per card — the second take is a fresh scene; both are kept as versions and the inspection keeps the cleaner one (doubles render time)',
         checked: false },
     ],
     cost: costStr,
