@@ -26,12 +26,30 @@ COLOR_VIBES = {
 # ---------------------------------------------------------------------------
 # Rule-based prompt generation
 # ---------------------------------------------------------------------------
+def _is_card_back(card: dict) -> bool:
+    name = (card.get('name') or '').strip().lower()
+    return name.startswith('card back') or (card.get('type_line') or '').strip().lower() == 'card back'
+
+
+def card_back_scene(card: dict) -> str:
+    """The card back is a DESIGN, not a subject: the scene writer read 'Card
+    Back' as a creature ('Card Back, a Back, strides across the dunes') and
+    rendered two figures on a pattern. Deterministic, style-agnostic — the
+    style's own motifs fill an ornamental frame."""
+    return ("An ornamental card-back design: a symmetrical framed pattern built from this style's own "
+            "motifs and colours, filling the frame edge to edge, a central emblem in the middle, "
+            "flat and decorative like the back of a playing card. No figures, no characters, no "
+            "creatures, no faces, no scene, no text.")
+
+
 def generate_subject_description(card: dict) -> str:
     """Generate a vivid subject description from card data (rule-based).
 
     Uses the card's name, type, oracle text, and color identity to
     craft a descriptive scene for the art generator.
     """
+    if _is_card_back(card):
+        return card_back_scene(card)
     name = card.get('name', 'Unknown')
     card_type = card.get('card_type', 'other')
     type_line = card.get('type_line', '')
@@ -662,12 +680,18 @@ _SINGLE_EYE_RE = re.compile(r'\b(?:a |her |his |its )?(?:single|one|lone|solitar
 _SINGLE_STARE_RE = re.compile(r'\b(?:single|one|lone|solitary|sole),?\s+(?=(?:[a-z-]+,?\s+){0,3}(?:stare|gaze|orb)\b)', re.IGNORECASE)
 
 
+_SINGLE_LIMB_RE = re.compile(r"\b((?:a |his |her |its |their )?)(?:single|one|lone|solitary|sole) ((?:arm|leg|hand|foot|wing|horn|claw|ear)s?\b)", re.IGNORECASE)
+
+
 def _fix_invented_cyclops(text: str, anchor: str) -> str:
     """The anatomy-preservation rule ("a cyclops has ONE eye") gets over-applied:
     a faerie gained "a single, piercing emerald eye". Unless the reference
     anchor itself speaks of one eye, restore the plural."""
     if not text:
         return text
+    # the one-eye rule bleeds into limbs whatever the anchor says: "his
+    # single arm raised" drew a one-armed cyclops with a hand merged into a leg
+    text = _SINGLE_LIMB_RE.sub(lambda m: m.group(1) + m.group(2), text)
     a = (anchor or '').lower()
     if any(w in a for w in ('one eye', 'single eye', 'cyclops', 'one-eyed', 'lone eye')):
         return text
@@ -1136,6 +1160,8 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     Supports both OpenAI (cloud) and Ollama (local) backends.
     Falls back to rule-based if AI fails.
     """
+    if _is_card_back(card):
+        return card_back_scene(card)          # a design, never a written scene
     name = card.get('name', 'Unknown')
     type_line = card.get('type_line', '')
     oracle = card.get('oracle_text', '')

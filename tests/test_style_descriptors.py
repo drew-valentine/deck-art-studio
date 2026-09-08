@@ -1082,3 +1082,17 @@ def test_scene_score_rewards_the_name_head_noun_in_the_first_sentence():
     on = 'Footfall Crater, a gargantuan crater, splits the dry earth as boulders tumble into it.'
     off = 'Footfall Crater — a towering twisted tree, its canopy a deep green, sways as boulders tumble.'
     assert _scene_score(on, land) > _scene_score(off, land)
+
+
+def test_card_back_is_a_design_and_single_limbs_are_plural():
+    import prompt_generator as pg
+    back = {'name': 'Card Back', 'type_line': 'Card Back', 'card_type': 'other'}
+    assert pg._is_card_back(back)
+    desc = pg.generate_subject_description(back)
+    assert desc.startswith('An ornamental card-back design') and 'No figures' in desc
+    assert pg.generate_subject_with_ai(back, None, backend='local', local_model='m') == desc   # no writer call
+    assert pg._fix_invented_cyclops('Okaun lunges, his single arm raised and his one large eye blazing.', 'cyclops one eye') == \
+        'Okaun lunges, his arm raised and his one large eye blazing.'
+    import deck_studio as ds
+    out = ds._assemble_flux_prompt(['lead'], 'ornate symmetrical decorative pattern', '', 'card_back')
+    assert out.endswith('No people, no characters, no hands.')

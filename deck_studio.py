@@ -2076,9 +2076,9 @@ def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '', car
         pieces = [', '.join(x for x in [lead] + front if x), first, ', '.join(back), rest]
     extra = os.environ.get('FLUX_GUARD_EXTRA', '').strip()      # experiment hook
     tail = ' No text, no words, no signature, no watermark, no card frame, no borders.'
-    if card_type in ('artifact', 'land'):
+    if card_type in ('artifact', 'land', 'card_back'):
         # H69: an object or a place has no cast; the image model adds onlookers
-        # to a relic on a pedestal unless told not to
+        # to a relic on a pedestal unless told not to. A card back is a design.
         tail += ' No people, no characters, no hands.'
     tail = (f' {extra}.' if extra else '') + tail
     if order in ('coverage-subject-block', 'default') or order not in ('style-first', 'subject-early'):
@@ -2186,6 +2186,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     if card_name.lower().startswith('card back'):
         subject = ('ornate symmetrical decorative pattern, central medallion, '
                    'intricate border filigree, repeating geometric motifs')
+        card_type = 'card_back'          # a design: the render guard adds "no people, no characters"
 
     # --- Rendering style for FLUX (rich, uncapped) ---
     # FLUX's T5 encoder accepts 256 tokens (~190 words) — far more than SDXL's
