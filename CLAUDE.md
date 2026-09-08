@@ -163,6 +163,8 @@ decks/<deck-slug>/
   V24 (2026-09-08): `_body_line` for a Human first subtype says 'a human being with a human face and body … no
   claws, fangs, tail, fur, scales or pointed ears' (a Human Soldier got claws, a Human Cleric a tail); the artifact
   guidance carries NO example nouns (Shadowspear and Crawlspace rendered as the guidance's 'signet ring').
+  H89: the artifact Setting line places the object where such a thing is found or used and forbids presentation
+  for display (the writer's default was a stone on a cushion); 9/9 artifacts rendered in a place.
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
   unpaintable-abstraction strip → (flat media: rewrite without light words naming the offending
