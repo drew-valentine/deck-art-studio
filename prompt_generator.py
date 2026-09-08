@@ -713,6 +713,13 @@ def _strip_light_words(text: str, protect=()) -> str:
     return ' '.join(_cut_light_phrases(x) for x in sentences if _cut_light_phrases(x))
 
 
+_LIGHT_NP_RE = re.compile(
+    r"\b(?:the|a|an|its|his|her|their)\s+(?:[a-z-]+\s+){0,2}?" + _LIGHT_WORD_RE.pattern +
+    r"\s+of\s+(?:(?:the|a|an)\s+)?[a-z-]+(?:\s+" + _LIGHT_WORD_RE.pattern + r")?"
+    r"(?:\s+(?:through|over|across|on|from)\s+(?:the\s+)?[a-z-]+(?:\s+[a-z-]+)?)?",
+    re.IGNORECASE)
+
+
 def _cut_light_phrases(sentence: str) -> str:
     """Remove the light from one sentence: a comma clause that carries a light
     word is dropped whole (", its gemstone polished to a warm sheen"), except
@@ -723,15 +730,24 @@ def _cut_light_phrases(sentence: str) -> str:
     tail = re.compile(r'^(?:its|his|her|their|with|as|while|where|casting|bathed|lit|glowing|'
                       r'illuminated|shimmering|gleaming)\b', re.IGNORECASE)
     for i, c in enumerate(clauses):
-        if i > 0 and _LIGHT_WORD_RE.search(c) and (tail.match(c.strip()) or _LIGHT_WORD_RE.match(c.strip())):
-            parts.append('')                    # a descriptive tail: drop it and its comma
+        if _LIGHT_WORD_RE.search(c) and (tail.match(c.strip()) or _LIGHT_WORD_RE.match(c.strip())):
+            # a descriptive tail: drop it and its comma (a LEADING tail too —
+            # "Its gemstone polished to a warm sheen, the ring rests" — the
+            # subject is in the next clause)
+            parts.append('')
         else:
             parts.append(c)
     out = ''.join(parts)
     out = re.sub(r'(,\s*)+(?=,|$)', '', out).strip()
+    # a light word inside a noun phrase takes the phrase with it: "the soft
+    # glow of afternoon sunlight through the beams" — cutting just the words
+    # left "the soft of afternoon through the beams"
+    out = _LIGHT_NP_RE.sub('', out)
+    out = re.sub(r'\s+(?:and|or|as|while|amidst|amid)\s*(?=[,.;]|$)', '', out)
     out = _LIGHT_WORD_RE.sub('', out) + end
     out = re.sub(r'\b(?:in|under|by|with|of|from|against|into)\s+(?:the |a |an |its |his |her )?(?=[,.;]|$)', '', out)
     out = re.sub(r'\s*,\s*,', ',', out)
+    out = re.sub(r'^(?:\s*,\s*)+', '', out)
     out = re.sub(r',\s*(?=[.!?])', '', out)
     out = re.sub(r'\s+([.!?,;])', r'\1', out)
     out = re.sub(r'\s{2,}', ' ', out).strip()
@@ -970,8 +986,29 @@ def _subject_words(card: dict) -> set:
     words = {w.lower() for w in _re.findall(r"[A-Za-z]{3,}", name)} - {'the', 'and', 'from'}
     lit = _literal_object_from_name(name) if card.get('card_type') == 'artifact' else None
     if lit:
-        words |= {w.lower() for w in _re.findall(r"[A-Za-z]{3,}", lit)} - {'the', 'and'}
+        # the HEAD noun only ("altar" of "a stone altar"): counting "stone"
+        # let "sits atop a pedestal of dark, weathered stone" pass as an
+        # opening for Phyrexian Altar, and the render was a goblet
+        heads = [w.lower() for w in _re.findall(r"[A-Za-z]{3,}", lit)]
+        if heads:
+            words.add(heads[-1])
     return words
+
+
+def _ensure_subject_opening(text: str, card: dict) -> str:
+    """H83: after every strip, the scene must still OPEN with the card's
+    subject for every type — an artifact whose first clause was cut lost its
+    name and rendered as a different object. Prepend the name (and, for an
+    artifact, its literal object) when the opening no longer carries it."""
+    if not text or _opens_with_subject(text, card):
+        return text
+    name = (card.get('name') or '').split(' // ')[0].strip()
+    if not name:
+        return text
+    lit = _literal_object_from_name(name) if card.get('card_type') == 'artifact' else ''
+    head = f"{name}, {lit} —" if lit else f"{name} —"
+    body = text.strip()
+    return f"{head} {body[0].lower() + body[1:] if body[:1].isupper() and not body.split()[0].istitle() else body}"
 
 
 def _opens_with_subject(text: str, card: dict) -> bool:
@@ -1530,6 +1567,11 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                         print(f"  [prompt_gen] thin-scene growth for {name}: "
                               f"{len(out.split())} -> {len(grown.split())} words")
                         out = grown
+                    else:
+                        print(f"  [prompt_gen] thin-scene growth for {name} rejected after cleanup")
+                else:
+                    print(f"  [prompt_gen] thin-scene growth for {name} rejected: "
+                          f"{'no subject opening' if not _opens_with_subject(grown, card) else 'not longer'}")
             except Exception as e:
                 print(f"  [prompt_gen] thin-scene growth failed: {e}")
         if len(out.split()) < 5:
@@ -1537,7 +1579,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             # sentence, a fragment); never persist an empty prompt
             print(f"  [prompt_gen] AI draft for {name} emptied by backstops, using rule-based")
             return generate_subject_description(card)
-        return _ensure_creature_type_in_prompt(out, card)
+        return _ensure_creature_type_in_prompt(_ensure_subject_opening(out, card), card)
     except Exception as e:
         print(f"  [prompt_gen] AI failed for {name}: {e}, using rule-based")
         return generate_subject_description(card)

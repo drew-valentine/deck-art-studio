@@ -957,3 +957,27 @@ def test_thin_scene_grows_and_keeps_the_steer(monkeypatch):
     out2 = pg.generate_subject_with_ai(card, None, backend='local', local_model='m',
                                        steer='Glissa is a beautiful zombie elf')
     assert not any('too thin' in c for c in calls) and 'beautiful zombie elf' in out2
+
+
+def test_scene_opens_with_the_subject_for_every_type():
+    """H83: an artifact whose opening clause was cut rendered as a goblet."""
+    from prompt_generator import _opens_with_subject, _ensure_subject_opening
+    altar = {'name': 'Phyrexian Altar', 'type_line': 'Artifact', 'card_type': 'artifact'}
+    t = 'sits atop a pedestal of dark, weathered stone, its flat surface worn smooth. A leaf lies on cracked earth.'
+    assert not _opens_with_subject(t, altar)          # "stone" is not the subject
+    out = _ensure_subject_opening(t, altar)
+    assert out.startswith('Phyrexian Altar, a stone altar — sits atop')
+    assert _ensure_subject_opening(out, altar) == out
+    land = {'name': 'Arid Mesa', 'card_type': 'land'}
+    assert _ensure_subject_opening('A twisting ravine bursts with life.', land).startswith('Arid Mesa — ')
+    assert _ensure_subject_opening('Arid Mesa rises from the sand.', land) == 'Arid Mesa rises from the sand.'
+
+
+def test_light_cut_takes_the_noun_phrase_and_a_leading_tail():
+    from prompt_generator import _cut_light_phrases
+    assert _cut_light_phrases('In a garden, the hands of a scale lie bare, amidst the rustle of plants and the soft '
+                              'glow of afternoon sunlight through the wooden beams.') == \
+        'In a garden, the hands of a scale lie bare, amidst the rustle of plants.'
+    assert _cut_light_phrases('Its gemstone polished to a warm sheen, the ring rests on a stump under a pale light of dawn.') == \
+        'the ring rests on a stump.'
+    assert _cut_light_phrases('The ring rests on a stump.') == 'The ring rests on a stump.'
