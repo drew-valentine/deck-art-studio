@@ -995,6 +995,32 @@ def _subject_words(card: dict) -> set:
     return words
 
 
+def _pick_scene(a: str, b: str, card: dict, local_model: str):
+    """Blind pick between two scene drafts: which makes the more striking
+    picture — a specific place, a decisive moment, concrete drawable detail —
+    while showing only the card's subject. Asked twice with the drafts
+    swapped; only a consistent answer counts, else the first draft stays."""
+    import mlx_llm
+    name = (card.get('name') or '').split(' // ')[0]
+    votes = []
+    for first, second, order in ((a, b, ('a', 'b')), (b, a, ('b', 'a'))):
+        reply = mlx_llm.chat(
+            messages=[
+                {'role': 'system', 'content':
+                    "You judge scene descriptions for a painter. Answer with exactly one letter."},
+                {'role': 'user', 'content':
+                    f"Two scene descriptions for a picture of '{name}'.\n\nA: {first}\n\nB: {second}\n\n"
+                    "Which would make the more striking picture — a specific place, a decisive "
+                    "moment, concrete details a painter can draw, one clear focal subject and "
+                    "nothing invented beside it? Answer A or B."},
+            ],
+            model=local_model, max_tokens=3, temperature=0.0)
+        word = (reply or '').strip().upper()
+        pick = order[0] if word.startswith('A') else order[1] if word.startswith('B') else None
+        votes.append(pick)
+    return votes[0] if votes[0] and votes[0] == votes[1] else 'a'
+
+
 def _ensure_subject_opening(text: str, card: dict) -> str:
     """H83: after every strip, the scene must still OPEN with the card's
     subject for every type — an artifact whose first clause was cut lost its
@@ -1371,6 +1397,31 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             if _opens_with_subject(retry, card):
                 out = retry
             print(f"  [prompt_gen] opening rule retry for {name}: {'kept' if out is retry else 'draft kept'}")
+        if os.environ.get('SCENE_TAKES', '2') == '2':
+            # H86b: two seeds of the SAME prompt render near-identical pictures
+            # under Redux (12/12 measured), so variety has to come from the
+            # scene text. A second, deliberately different draft and a blind
+            # pick (asked twice, sides swapped) of the more striking scene.
+            try:
+                alt = mlx_llm.chat(
+                    messages=[
+                        {'role': 'system', 'content': system_msg},
+                        {'role': 'user', 'content': user_msg},
+                        {'role': 'assistant', 'content': out},
+                        {'role': 'user', 'content':
+                            "Now write a DIFFERENT scene for the same card: another specific kind of "
+                            "place, another decisive moment, another camera distance — same single "
+                            "subject, same rules, three sentences of about sixty words."},
+                    ],
+                    model=local_model, max_tokens=220, temperature=0.9)
+                alt = _strip_chat_preamble(alt)
+                if _opens_with_subject(alt, card) and len(alt.split()) >= 20:
+                    picked = _pick_scene(out, alt, card, local_model)
+                    if picked == 'b':
+                        out = alt
+                    print(f"  [prompt_gen] scene pick for {name}: {'second' if picked == 'b' else 'first'} draft")
+            except Exception as e:
+                print(f"  [prompt_gen] second draft failed: {e}")
         out = _strip_franchise_sentences(out, franchise_name)   # output backstop
         out = _strip_example_leak(out, card)
         out = _strip_unpaintable(out)

@@ -981,3 +981,33 @@ def test_light_cut_takes_the_noun_phrase_and_a_leading_tail():
     assert _cut_light_phrases('Its gemstone polished to a warm sheen, the ring rests on a stump under a pale light of dawn.') == \
         'the ring rests on a stump.'
     assert _cut_light_phrases('The ring rests on a stump.') == 'The ring rests on a stump.'
+
+
+def test_second_scene_draft_is_picked_blind(monkeypatch):
+    """H86b: a second, different draft and a swapped double pick; the second
+    draft wins only on a consistent answer."""
+    import sys, types
+    import prompt_generator as pg
+    calls = []
+    first = 'Sol Ring, a gold ring, rests on a stump. Grey mud lies around it under a white sky. Dust drifts.'
+    second = 'Sol Ring, a gold ring, hangs from a chain over a canyon. Red cliffs drop away on both sides. Wind pulls at the chain.'
+    def chat(messages, **kw):
+        last = messages[-1]['content']; calls.append(last)
+        if 'DIFFERENT scene' in last: return second
+        if 'Answer A or B' in last:
+            # the canyon draft wins whichever side it is on
+            return 'B' if last.index(second) > last.index(first) else 'A'
+        return first
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    monkeypatch.setenv('SCENE_TAKES', '2')
+    card = {'name': 'Sol Ring', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'}
+    out = pg.generate_subject_with_ai(card, None, backend='local', local_model='m')
+    assert 'canyon' in out and sum('Answer A or B' in c for c in calls) == 2
+    # an inconsistent judge keeps the first draft
+    def chat2(messages, **kw):
+        last = messages[-1]['content']
+        if 'DIFFERENT scene' in last: return second
+        if 'Answer A or B' in last: return 'A'
+        return first
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat2))
+    assert 'stump' in pg.generate_subject_with_ai(card, None, backend='local', local_model='m')
