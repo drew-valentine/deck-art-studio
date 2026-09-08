@@ -102,6 +102,7 @@
   - Ship decision now rides on V24, taken together with H83, H87 and H88 — the four are one stack and stand or fall on the same 21-card sheet.
   - V24 ran the stack over 21 fresh cards and the two failure classes it exposed are fixed (b5d16c0), with 5 of the 6 corrected on re-render (V6). Stays In Review: the ship decision is the owner's, on the V24b sheet.
   - V24b closed 2026-09-08: the stack is complete and measured — 6 inspector defects against 10 on the current art, and the first run where the vision judge tilts to the new stack (6 new, 4 current, 11 undecided). Nothing further is queued behind it; the branch awaits the owner's ship decision.
+  - Night run closed 2026-09-08 05:25 — 15 commits on `feat/night-composition`, all pushed; every experimented card is back on its pre-night art; the owner decides the merge on the V24b sheet.
 
 - [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Review Started: 2026-09-02 | Owner: drew-valentine
   - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — In Review, awaiting the owner's ship decision.
@@ -250,6 +251,12 @@
   - Note: the owner's own decks have not been re-distilled under the current pipeline (one has no style block at all); re-distilling them is the owner's call.
 
 ## Done
+
+- [x] H89 — an artifact's setting is where the thing is found or used, never a display stand | Priority: P1 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit a347cbb.
+  - Cause: the writer's default for any object was a soft stand on a pedestal — a stone on a cushion, a talisman on velvet. The last remaining miss from V24b.
+  - Shipped: the artifact Setting line asks for the place such a thing is found or used and forbids presentation for display, category words only.
+  - Validated on 9 artifact cards across the three decks at seed 1001: 9 of 9 left the cushion and sit in a place — a spear leaning on a cracked wall, a talisman half-buried in leaf litter, plate armour on a castle wall, a thumb hung on a doorpost. One render grew a stray onlooker. Cards restored afterwards.
 
 - [x] V24b — final 21-card run on the finished branch, sheet + judge, for the ship decision | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
   - Branch: `feat/night-composition`, the branch as it stands after b5d16c0 — 21 fresh cards at seed 1001, rendered end to end and set against each card's current art.
