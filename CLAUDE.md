@@ -140,6 +140,16 @@ decks/<deck-slug>/
   re-rolls, `INSPECT_CENTRE_TEXT=0` mutes) — the rest recorded as
   `inspection.advisory` by default (`INSPECT_COMPOSITION=advisory|enforce|off`) until the
   false-positive rate is known.
+  H79 (2026-09-07): every backstop only REMOVES words — measured against v1.49.0 the scene prompts had
+  halved (90 → 45 words) and the shortest rendered as a subject on nothing. The user message now carries a
+  `Setting (REQUIRED)` line (category words only, yields to a steer), the closing instruction matches the
+  grammar (three sentences, ~60 words — it used to say 'two short sentences'), rewrites ask for full length,
+  `_limit_scene_sentences` drops stub (<4 words) and restarted sentences, and `_is_thin_scene` (< SCENE_MIN_WORDS=35
+  or one sentence) triggers one growth pass through the same `_final_pass` (SCENE_FLOOR=0 mutes).
+  H82: `_assemble_flux_prompt` fits the prompt to the T5 window via `_fit_flux_prompt` (FLUX_TOKEN_BUDGET=250;
+  `_t5_token_count` uses the cached T5 tokenizer offline, else a calibrated estimate): block tail items go
+  first, then the scene's last sentences; lead, subject sentence and guard never. Before this 14/31 prompts
+  overflowed 256 tokens and mflux truncated the guard silently.
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
   unpaintable-abstraction strip → (flat media: rewrite without light words naming the offending
