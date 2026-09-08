@@ -895,3 +895,65 @@ def test_person_words_skip_hyphenated_compounds():
     assert _person_problems("A hand-forged blade rests on an anvil.", {'name': 'Sunforger', 'card_type': 'artifact'}) == ''
     assert 'hand' in _person_problems("A hand grips the blade.", {'name': 'Sunforger', 'card_type': 'artifact'})
     assert _person_problems("A smith works the anvil.", {'name': 'Sunforger', 'card_type': 'artifact'}).startswith('a person in an artifact scene')
+
+
+def test_setting_line_and_three_sentence_close_in_user_message(monkeypatch):
+    """H79: every strip removes words; the Setting line and a consistent
+    'three sentences' close put the setting back."""
+    import sys, types
+    import prompt_generator as pg
+    seen = []
+    def chat(messages, **kw):
+        seen.append(messages)
+        return ('Arcane Signet, a gold signet ring, rests on cracked stone. Around it a wide '
+                'courtyard of pale flagstones stretches to low walls under a grey sky. Dust drifts '
+                'across the stones in the still air.')
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    card = {'name': 'Arcane Signet', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'}
+    pg.generate_subject_with_ai(card, None, backend='local', local_model='m')
+    user = seen[0][1]['content']
+    assert 'Setting (REQUIRED): the second sentence places the subject' in user
+    assert 'three sentences, about sixty words' in user
+    assert 'two short sentences' not in user
+    assert 'Setting (REQUIRED)' in pg._setting_line(False, False)
+    assert 'yields to the USER DIRECTION' in pg._setting_line(False, True)
+    assert 'never light' in pg._setting_line(True, False)
+
+
+def test_stub_and_restarted_sentences_are_dropped():
+    from prompt_generator import _limit_scene_sentences, _is_thin_scene
+    t = ("A stone altar, plain and unmistakable. A stone altar, its weathered limestone surface a warm "
+         "beige, stands alone. The altar's presence. A faint layer of dust coats the altar.")
+    out = _limit_scene_sentences(t)
+    assert out == ("A stone altar, its weathered limestone surface a warm beige, stands alone. "
+                   "A faint layer of dust coats the altar.")
+    assert _limit_scene_sentences('Only one.') == 'Only one.'
+    assert _is_thin_scene('A ring on a cushion.')
+    assert _is_thin_scene(' '.join(['word'] * 50) + '.')          # one sentence, no setting
+    assert not _is_thin_scene(' '.join(['word'] * 30) + '. ' + ' '.join(['more'] * 10) + '.')
+
+
+def test_thin_scene_grows_and_keeps_the_steer(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    calls = []
+    def chat(messages, **kw):
+        calls.append(messages[-1]['content'])
+        if 'too thin' in messages[-1]['content']:
+            return ('Glissa, the Traitor, a beautiful zombie elf, steps through the wood. Around her '
+                    'the black trunks of a dead forest rise from grey mud under a low white sky. '
+                    'Pale leaves drift down through the still air.')
+        return 'Glissa, the Traitor, a beautiful zombie elf, steps through the wood.'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    card = {'name': 'Glissa, the Traitor', 'type_line': 'Legendary Creature — Phyrexian Zombie Elf',
+            'oracle_text': '', 'card_type': 'creature'}
+    monkeypatch.setenv('SCENE_FLOOR', '1')
+    out = pg.generate_subject_with_ai(card, None, backend='local', local_model='m',
+                                      steer='Glissa is a beautiful zombie elf')
+    assert any('too thin' in c for c in calls)
+    assert 'beautiful zombie elf' in out and 'dead forest' in out
+    monkeypatch.setenv('SCENE_FLOOR', '0')
+    calls.clear()
+    out2 = pg.generate_subject_with_ai(card, None, backend='local', local_model='m',
+                                       steer='Glissa is a beautiful zombie elf')
+    assert not any('too thin' in c for c in calls) and 'beautiful zombie elf' in out2

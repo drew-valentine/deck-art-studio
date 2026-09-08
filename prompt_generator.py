@@ -808,6 +808,20 @@ def _strip_unpaintable(text: str) -> str:
     return out
 
 
+SCENE_MIN_WORDS = int(os.environ.get('SCENE_MIN_WORDS', '35') or 35)
+
+
+def _is_thin_scene(text: str) -> bool:
+    """H79: a scene under the word floor, or a single sentence, has lost its
+    setting to the strips (measured: new prompts averaged 42-48 words against
+    90 before, and the shortest rendered as a subject on a blank ground)."""
+    if not text or not text.strip():
+        return True
+    import re as _re
+    sents = [s for s in _re.split(r'(?<=[.!?])\s+', text.strip()) if s.strip()]
+    return len(text.split()) < SCENE_MIN_WORDS or len(sents) < 2
+
+
 def _limit_scene_sentences(text: str, max_sentences: int = 3, max_words: int = 64) -> str:
     """Composition backstop: keep the first ``max_sentences`` sentences. The
     scene writer is asked for two; a third almost always introduces a second
@@ -820,6 +834,21 @@ def _limit_scene_sentences(text: str, max_sentences: int = 3, max_words: int = 6
     if len(parts) > 1 and (not parts[-1].rstrip().endswith(('.', '!', '?'))
                            or len(parts[-1].split()) < 4):
         parts = parts[:-1]
+    if len(parts) > 1:
+        # H79: stubs anywhere ("The altar's presence.") and a sentence that
+        # restarts the previous one ("A stone altar, plain. A stone altar, its
+        # …") came from rewrite passes and rendered as nothing
+        kept = []
+        for i, s in enumerate(parts):
+            ws = s.split()
+            if len(ws) < 4:
+                continue
+            nxt = parts[i + 1].split() if i + 1 < len(parts) else []
+            if len(nxt) >= 3 and [w.lower().strip(',') for w in ws[:3]] == [w.lower().strip(',') for w in nxt[:3]] \
+                    and len(nxt) >= len(ws):
+                continue        # the next sentence is the fuller restart of this one
+            kept.append(s)
+        parts = kept or parts[:1]
     out = ' '.join(parts[:max_sentences]).strip()
     # word cap: the writer front-loads the focal subject, so trailing clauses
     # are where the second turtle / cat pile / soldier crowd arrives — cut at
@@ -1252,6 +1281,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         + _body_line(card, local_model, steer_present=has_steer)
         + _object_line(card, local_model)
         + _camera_line(card_type, name)
+        + _setting_line(is_flat, has_steer)
         + (f"World: this {card_type} exists in the style's own world — {staging.strip()} "
            "Let that world colour the plants, sky, rock and light of the card's OWN subject; use at "
            "most one of its signature features, and only where the card's name allows it — a forest "
@@ -1267,7 +1297,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
            f"conflict): {steer.strip()}\n" if steer and steer.strip() else "")
         + f"Reference description: {base_desc}\n"
         f"Ground the scene in this card's name and flavor — concrete subjects, not "
-        f"abstract energy. Rewrite into a scene description (two short sentences):"
+        f"abstract energy. Rewrite into a scene description (three sentences, about sixty words):"
     )
 
     try:
@@ -1323,8 +1353,8 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                             {'role': 'user', 'content':
                                 "This medium is flat and has no rendered light. Rewrite the same scene "
                                 "keeping every subject, pose, colour and setting, but remove every word "
-                                "about light, glow, beams, shadows or shine. Same length, same number of "
-                                f"sentences. These words must not appear: {', '.join(bad)}."},
+                                "about light, glow, beams, shadows or shine. Three full sentences, about sixty "
+                                f"words. These words must not appear: {', '.join(bad)}."},
                         ],
                         model=local_model, max_tokens=220, temperature=0.4)
                     relit = _limit_scene_sentences(_strip_chat_preamble(relit), 3)
@@ -1353,7 +1383,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                         {'role': 'user', 'content':
                             "A picture shows ONE instant. Rewrite the same scene in the PRESENT tense "
                             "with the event happening right now at full force — not threatening, "
-                            "about to, or afterwards. Same subject, colours and setting, same length."},
+                            "about to, or afterwards. Same subject, colours and setting; three full sentences, about sixty words."},
                     ],
                     model=local_model, max_tokens=220, temperature=0.5)
                 now = _limit_scene_sentences(_strip_chat_preamble(now), 3)
@@ -1376,7 +1406,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                         {'role': 'user', 'content': user_msg},
                         {'role': 'assistant', 'content': out},
                         {'role': 'user', 'content':
-                            "The subject just stands there. Rewrite the same scene, same length, "
+                            "The subject just stands there. Rewrite the same scene in three full sentences of about sixty words, "
                             "same colours and setting, but catch the subject mid-action at a "
                             "decisive moment — a verb of motion, force or intent in the first "
                             "sentence (lunges, rears, hurls, tears, wheels, crouches to spring). "
@@ -1405,7 +1435,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                         {'role': 'user', 'content': user_msg},
                         {'role': 'assistant', 'content': out},
                         {'role': 'user', 'content':
-                            "Rewrite the same scene, same length, naming the flat colour of the "
+                            "Rewrite the same scene in three full sentences of about sixty words, naming the flat colour of the "
                             "subject ITSELF in the first sentence (its skin, fur, clothing or "
                             "material) and of each main object in plain colour words. No light words."},
                     ],
@@ -1424,7 +1454,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                                 {'role': 'user', 'content': user_msg},
                                 {'role': 'assistant', 'content': out},
                                 {'role': 'user', 'content':
-                                    "Rewrite the same scene, same length and colours, with these words "
+                                    "Rewrite the same scene in three full sentences of about sixty words, same colours, with these words "
                                     f"removed and nothing about light or shine: {', '.join(bad)}."},
                             ],
                             model=local_model, max_tokens=220, temperature=0.4)
@@ -1464,14 +1494,44 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                     out = redo
         # final cleanup: every rewrite path above (flat, colour, scene-check
         # redo) can reintroduce what an earlier strip removed
-        out = _strip_unpaintable(out)
-        out = _strip_wings(out, card)
-        out = _strip_invented_names(out, card, safe_flavor)
-        out = _fix_invented_cyclops(out, base_desc)
-        if is_flat:
-            out = _strip_light_words(out, protect=_name_words_for_protect(card))
-        out = _tidy_prompt(_fix_dangling_tail(out))
-        out = _ensure_steer_in_prompt(out, steer, card)
+        def _final_pass(txt: str) -> str:
+            txt = _strip_unpaintable(txt)
+            txt = _strip_wings(txt, card)
+            txt = _strip_invented_names(txt, card, safe_flavor)
+            txt = _fix_invented_cyclops(txt, base_desc)
+            if is_flat:
+                txt = _strip_light_words(txt, protect=_name_words_for_protect(card))
+            txt = _tidy_prompt(_fix_dangling_tail(txt))
+            return _ensure_steer_in_prompt(txt, steer, card)
+        out = _final_pass(out)
+        if _is_thin_scene(out) and os.environ.get('SCENE_FLOOR', '1') != '0':
+            # H79: the strips only ever remove words; a scene that ends up as
+            # one line renders as the subject on nothing. One growth pass asks
+            # for the missing setting and atmosphere, then the same cleanup.
+            try:
+                grown = mlx_llm.chat(
+                    messages=[
+                        {'role': 'system', 'content': system_msg},
+                        {'role': 'user', 'content': user_msg},
+                        {'role': 'assistant', 'content': out},
+                        {'role': 'user', 'content':
+                            "That scene is too thin. Rewrite it in three full sentences of about "
+                            "sixty words: keep the first sentence's subject and moment exactly, add "
+                            "a second sentence that places it — the ground under it, what surrounds "
+                            "it at scale, the weather or air — and a third with one atmospheric "
+                            "detail. Nothing new in the foreground"
+                            + (", and no words about light or shine." if is_flat else ".")},
+                    ],
+                    model=local_model, max_tokens=220, temperature=0.5)
+                grown = _limit_scene_sentences(_strip_chat_preamble(grown), 3)
+                if _opens_with_subject(grown, card) and len(grown.split()) > len(out.split()):
+                    grown = _final_pass(grown)
+                    if len(grown.split()) > len(out.split()):
+                        print(f"  [prompt_gen] thin-scene growth for {name}: "
+                              f"{len(out.split())} -> {len(grown.split())} words")
+                        out = grown
+            except Exception as e:
+                print(f"  [prompt_gen] thin-scene growth failed: {e}")
         if len(out.split()) < 5:
             # the backstops can strip a draft down to nothing (a franchise
             # sentence, a fragment); never persist an empty prompt
@@ -1857,6 +1917,19 @@ def _event_in_name(name: str) -> str:
     """The event or force a card NAME is built on ('Blast Zone' -> 'blast'), else ''."""
     m = _EVENT_NOUN_RE.search((name or '').split(' // ')[0])
     return m.group(0).lower() if m else ''
+
+
+def _setting_line(is_flat: bool, steer_present: bool = False) -> str:
+    """H79: the second sentence must PLACE the subject. Every strip in the
+    backstop chain removes words and nothing put the setting back, so scenes
+    shrank to a subject on nothing (an altar as a blank slab, a ring on a
+    cushion). Category words only — an example noun would be parroted."""
+    head = ("Setting (REQUIRED, yields to the USER DIRECTION above): "
+            if steer_present else "Setting (REQUIRED): ")
+    tail = (" — in flat colour and pattern, never light." if is_flat else ".")
+    return (head + "the second sentence places the subject somewhere specific — the ground "
+            "under it, what surrounds it at scale, and the weather or air around it, in plain "
+            "visual words" + tail + "\n")
 
 
 def _camera_line(card_type: str, name: str = '') -> str:

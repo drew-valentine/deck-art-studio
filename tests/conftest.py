@@ -208,3 +208,5 @@ def _scene_check_off_by_default(monkeypatch):
     single chat reply opt in explicitly with SCENE_CHECK=1."""
     monkeypatch.setenv('SCENE_CHECK', '0')
     monkeypatch.setenv('OBJECT_GLOSS', '0')
+    # H79's thin-scene growth pass is another chat call; tests opt in with SCENE_FLOOR=1
+    monkeypatch.setenv('SCENE_FLOOR', '0')
