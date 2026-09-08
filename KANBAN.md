@@ -232,6 +232,13 @@
 
 ## Done
 
+- [x] README gallery refresh — replace the sample images with the best recent renders | Priority: P2 | Completed: 2026-09-07 | Owner: drew-valentine
+  - Branch: `docs/readme-gallery-refresh`
+  - Hero is now `docs/images/hero-gallery.jpg`, an eight-card montage with two cards from each of four decks.
+  - Four style strips replaced, five cards each: `samples-fineline.jpg`, `samples-picturebook.jpg`, `samples-dragons.jpg`, `samples-comic.jpg`. Removed `app-hero.jpg`, `samples-cartoon.jpg`, `samples-synthwave.jpg`, `samples-inkwash.jpg`.
+  - Every featured card was checked at full size for anatomy defects and visible signatures.
+  - Public-materials check: no reference-artist names appear in any image or caption. The app screenshot was rejected as the hero because the style panel shows those names on screen.
+
 - [x] Style authority: the user's declared style source outranks the model's interpretation | Priority: P1 | Completed: 2026-09-02 | Owner: drew-valentine
   - Shipped as v1.49.0 (minor, released 2026-09-02) — four squash-merged PRs: #41 (commit 321ca79), #42 (ca9dcbc), #43 + #45 (merged as #45, commit 146953c), and #44 (f888827).
   - Principle: when a user declares a style source, that declaration wins over whatever the vision model inferred, in every model-facing prompt.

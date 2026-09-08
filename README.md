@@ -6,24 +6,21 @@ A self-hosted web app for generating custom AI art for Magic: The Gathering prox
 
 > **Apple Silicon only.** Image generation, prompt writing, and style analysis all run locally via Apple's **MLX** framework. Deck Art Studio used to support an OpenAI cloud backend and a PyTorch/Ollama local backend; both have been replaced by a single MLX-native pipeline (FLUX.1-schnell + Llama + Qwen2.5-VL). It needs an M-series Mac with **18 GB+ unified memory** (16 GB may work; see [Requirements](#requirements)).
 
-<img alt="Deck Art Studio — full deck rendered in a fine-line illustration style" src="docs/images/app-hero.jpg" />
+<p align="center"><img alt="Eight generated cards across four art styles — fine-line ink, picture-book, cartoon dragons, and comic-book" src="docs/images/hero-gallery.jpg" /></p>
 
-**One decklist in, a fully illustrated deck out.** Five real decks, five styles — every card below was generated locally by the same app, from nothing but a decklist and a handful of inspiration images:
+**One decklist in, a fully illustrated deck out.** Four real decks, four styles — every card below was generated locally by the same app, from nothing but a decklist and a handful of inspiration images:
 
-<p align="center"><img alt="Fine-line ink illustration style — four generated cards" src="docs/images/samples-fineline.jpg" /></p>
-<p align="center"><em>Fine-line ink illustration — parchment, blood red, and gold</em></p>
+<p align="center"><img alt="Fine-line ink illustration style — five generated cards" src="docs/images/samples-fineline.jpg" /></p>
+<p align="center"><em>Fine-line ink illustration — parchment, coral, and gold, with a beholder, a demon, and a sun titan</em></p>
 
-<p align="center"><img alt="Adult-cartoon style — four generated cards" src="docs/images/samples-cartoon.jpg" /></p>
-<p align="center"><em>Adult-cartoon ink — bold outlines, teal atmospheres, fire-orange accents</em></p>
+<p align="center"><img alt="Picture-book ink style — five generated cards" src="docs/images/samples-picturebook.jpg" /></p>
+<p align="center"><em>Picture-book pen and ink — scratchy linework, flat fills, and a fox that found some yarn</em></p>
 
-<p align="center"><img alt="Psychedelic cartoon dragon style — four generated cards" src="docs/images/samples-dragons.jpg" /></p>
-<p align="center"><em>Psychedelic Saturday-morning dragons — candy palettes and groovy skies</em></p>
+<p align="center"><img alt="Cartoon dragon style — five generated cards" src="docs/images/samples-dragons.jpg" /></p>
+<p align="center"><em>Saturday-morning dragons — candy skies, big eyes, and a gem mid-explosion</em></p>
 
-<p align="center"><img alt="Neon synthwave poster style — four generated cards" src="docs/images/samples-synthwave.jpg" /></p>
-<p align="center"><em>Neon synthwave poster art — sun halos and radiant rim light</em></p>
-
-<p align="center"><img alt="Ink and watercolor style — four generated cards" src="docs/images/samples-inkwash.jpg" /></p>
-<p align="center"><em>Hand-inked watercolor — storybook linework and luminous washes</em></p>
+<p align="center"><img alt="Comic-book ink style — five generated cards" src="docs/images/samples-comic.jpg" /></p>
+<p align="center"><em>Comic-book ink — heavy blacks, teal-and-coral smoke, and a goblin who wants your coin</em></p>
 
 Upload a few reference images and the style carries across your entire deck — creatures, lands, artifacts, sagas, battles, and double-faced cards alike.
 
