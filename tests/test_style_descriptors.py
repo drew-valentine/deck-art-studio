@@ -912,7 +912,7 @@ def test_setting_line_and_three_sentence_close_in_user_message(monkeypatch):
     card = {'name': 'Arcane Signet', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'}
     pg.generate_subject_with_ai(card, None, backend='local', local_model='m')
     user = seen[0][1]['content']
-    assert 'Setting (REQUIRED): the second sentence places the subject' in user
+    assert 'Setting (REQUIRED): the second sentence places the object where such a thing is found' in user
     assert 'three sentences, about sixty words' in user
     assert 'two short sentences' not in user
     assert 'Setting (REQUIRED)' in pg._setting_line(False, False)
@@ -1066,3 +1066,11 @@ def test_human_subtypes_are_drawn_as_humans_and_artifact_guidance_has_no_example
     guidance = guidance[:guidance.index("',\n")]
     for noun in ('signet ring', 'glass trinket', 'ornate box', 'phylactery', 'bauble'):
         assert noun not in guidance
+
+
+def test_artifact_setting_line_puts_the_object_where_it_is_found():
+    from prompt_generator import _setting_line
+    art = _setting_line(False, False, 'artifact')
+    assert 'where such a thing is found or used' in art and 'never presented for display' in art
+    assert 'cushion' not in art and 'pedestal' not in art          # no example nouns
+    assert 'where such a thing' not in _setting_line(False, False, 'creature')

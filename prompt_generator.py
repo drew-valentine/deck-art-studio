@@ -1364,7 +1364,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         + _body_line(card, local_model, steer_present=has_steer)
         + _object_line(card, local_model)
         + _camera_line(card_type, name)
-        + _setting_line(is_flat, has_steer)
+        + _setting_line(is_flat, has_steer, card_type)
         + (f"World: this {card_type} exists in the style's own world — {staging.strip()} "
            "Let that world colour the plants, sky, rock and light of the card's OWN subject; use at "
            "most one of its signature features, and only where the card's name allows it — a forest "
@@ -2059,7 +2059,7 @@ def _figure_idiom_items(idiom: str) -> list:
     return [x for x in items if _FIGURE_WORD_RE.search(x)]
 
 
-def _setting_line(is_flat: bool, steer_present: bool = False) -> str:
+def _setting_line(is_flat: bool, steer_present: bool = False, card_type: str = '') -> str:
     """H79: the second sentence must PLACE the subject. Every strip in the
     backstop chain removes words and nothing put the setting back, so scenes
     shrank to a subject on nothing (an altar as a blank slab, a ring on a
@@ -2067,6 +2067,13 @@ def _setting_line(is_flat: bool, steer_present: bool = False) -> str:
     head = ("Setting (REQUIRED, yields to the USER DIRECTION above): "
             if steer_present else "Setting (REQUIRED): ")
     tail = (" — in flat colour and pattern, never light." if is_flat else ".")
+    if card_type == 'artifact':
+        # H89: left to itself the writer presents every object for display on a
+        # soft stand; a thing belongs where it is found or used
+        return (head + "the second sentence places the object where such a thing is found or "
+                "used — a real place with the ground, what surrounds it at scale and the weather or "
+                "air, in plain visual words; never presented for display on a stand or a soft "
+                "surface" + tail + "\n")
     return (head + "the second sentence places the subject somewhere specific — the ground "
             "under it, what surrounds it at scale, and the weather or air around it, in plain "
             "visual words" + tail + "\n")
