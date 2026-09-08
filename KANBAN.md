@@ -90,7 +90,12 @@
 
 ## In Progress
 
-- [ ] (empty — V24b finished; the night stack sits In Review awaiting the owner's ship decision on H79)
+- [ ] H93 — hybrid grammar: film-still staging for every type, a decisive moment for creatures | Priority: P0 | Started: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit c85ff7e, on by default.
+  - Follows H92: the film-still writer gave places and objects the environments they were missing but cost creatures their subject more often than the moment grammar did (8 of 21 against 5 of 21).
+  - Shipped: composition and setting sentences on every card type, with creatures and planeswalkers opening at a decisive moment instead of a still pose.
+  - Validation running now on the same 21 fresh cards at seed 1001, with the owner's go. Sheet: hybrid-cur-v4-film-hybrid.jpg.
+  - Acceptance: Given the 21 fresh cards, when rendered on the hybrid grammar, then places and objects keep the environments H92 won and creature subject-missing returns to the moment grammar's rate or better.
 
 ## In Review
 
@@ -103,6 +108,7 @@
   - V24 ran the stack over 21 fresh cards and the two failure classes it exposed are fixed (b5d16c0), with 5 of the 6 corrected on re-render (V6). Stays In Review: the ship decision is the owner's, on the V24b sheet.
   - V24b closed 2026-09-08: the stack is complete and measured — 6 inspector defects against 10 on the current art, and the first run where the vision judge tilts to the new stack (6 new, 4 current, 11 undecided). Nothing further is queued behind it; the branch awaits the owner's ship decision.
   - Night run closed 2026-09-08 05:25 — 15 commits on `feat/night-composition`, all pushed; every experimented card is back on its pre-night art; the owner decides the merge on the V24b sheet.
+  - Reopened for the day's composition work: the owner judged v1.49.0's compositions more cohesive than today's, so the branch now also carries H90, H91 and H92, with H93 in flight. The ship decision moves to the H93 sheet.
 
 - [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Review Started: 2026-09-02 | Owner: drew-valentine
   - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — In Review, awaiting the owner's ship decision.
@@ -251,6 +257,31 @@
   - Note: the owner's own decks have not been re-distilled under the current pipeline (one has no style block at all); re-distilling them is the owner's call.
 
 ## Done
+
+- [x] H92 — the film-still writer, restored from v1.49.0 | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit 6e026ec.
+  - v1.49.0's writer asked for "a calm, artful film still" built from composition, posture, objects and lighting. Restored behind SCENE_MODE, then made the default, with cards named for an event keeping the event at full force.
+  - On the 12 tuning cards at seed 1001: 9 of 12 put the subject back inside a place with depth.
+  - On the 21 fresh cards against each card's current art: inspector defects 10 against 9, subject missing 8 against 8, vision judge 4 new / 5 current / 12 undecided.
+  - Verdict: places and objects gained cohesive environments; creatures lost their subject more often than under the moment grammar, which carried 5 of 21. Split the difference — H93.
+
+- [x] H91 — prompt order is not the composition lever | Priority: P1 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`.
+  - v1.49.0 assembled the style block and then the whole scene contiguously; the current assembly splits the scene around the block.
+  - Rendered contiguously at Strong and at Medium on the 12 tuning cards at seed 1001: no visible difference either way.
+  - Verdict: order is not the lever. Assembly left as it is.
+
+- [x] H90 — reference strength is not the composition lever | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`. The owner judged v1.49.0's compositions more cohesive than today's even though style transfer is better now, so the first question was whether the image channel is what changed the layouts.
+  - Method: the archived v1.49.0 prompts and the current prompts, each rendered at reference Off / Medium (256) / Strong (729) on the 12 tuning cards at seed 1001.
+  - Measured: the layout is identical across all three strengths. The image channel moves palette and finish, and Strong sometimes distorts the figure — the old executioner prompt is an orc at Off and Medium and a white yeti at Strong.
+  - Also measured: Medium keeps nearly all of Strong's palette with less figure distortion. Noted only; the default is unchanged.
+  - Verdict: composition lives in the scene text, which sent the investigation to H91 and H92.
+
+- [x] Card back / single-reference leak | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit 3df5273.
+  - Cause: a deck conditioned on one reference at Strong leaked that image's two figures into every render, the card back included — averaging has nothing to cancel against when there is only one reference.
+  - Shipped: the deck's reference count raised to 4 and averaged; the card back gets the no-people render guard and a deterministic ornamental description instead of a written scene; "single arm" no longer renders a one-armed figure.
 
 - [x] H89 — an artifact's setting is where the thing is found or used, never a display stand | Priority: P1 | Completed: 2026-09-08 | Owner: drew-valentine
   - Branch: `feat/night-composition`, commit a347cbb.
