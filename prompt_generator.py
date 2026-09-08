@@ -796,10 +796,13 @@ def _cut_light_phrases(sentence: str) -> str:
     return out if len(out.split()) >= 2 else ''
 
 
+_SCRIPT_CLAUSE_RE = re.compile(
+    r"(?:,\s*)?\b(?:the |a |an |its |his |her )?[a-z' ]{0,30}?\b(?:fine |tiny |dense |flowing |elegant |cramped )?"
+    r"(?:scripts?|handwriting|calligraphy|fine print|lettering|writing|inscriptions?)\b[^,.;]*", re.IGNORECASE)
 _LETTERING_RE = re.compile(
     r"(?:,\s*)?\b(?:with|bearing|showing|displaying|marked with|engraved with|stamped with|etched with)\s+"
     r"(?:a |an |the )?[^.;]{0,60}?(?:\b(?:letters?|initials?|monogram|inscriptions?|lettering|numerals?|runes?|glyphs?|sigils?|symbols?|"
-    r"words?|glyphs? of text)\b|the (?:letter|word) '?[A-Za-z]'?|['\u2018\u2019][A-Za-z]['\u2018\u2019])"
+    r"words?|glyphs? of text|scripts?|writing|handwriting|calligraphy|fine print|text)\b|the (?:letter|word) '?[A-Za-z]'?|['\u2018\u2019][A-Za-z]['\u2018\u2019])"
     r"(?:\s+(?!(?:rests?|sits?|lies?|stands?|hangs?|floats?|rises?|glows?)\b)"
     r"[A-Za-z'\u2018\u2019-]+){0,8}", re.IGNORECASE)
 
@@ -844,6 +847,7 @@ def _tidy_prompt(text: str) -> str:
     # a trailing fragment after a comma ("Caught in a moment of repose, the ring.")
     out = re.sub(r',\s*(?:the|a|an|its|his|her)\s+[A-Za-z-]+\s*(?=[.!?]\s*$)', '', out)
     out = re.sub(r'\s{2,}', ' ', out).strip()
+    out = _SCRIPT_CLAUSE_RE.sub('', out)          # "the contract's fine script etched into" drew a written page
     out = _LETTERING_RE.sub('', out)                 # "a small silver 'A' on its face"
     out = re.sub(r',\s*(?:its|his|her|their)\s+[a-z]+\s*,', ',', out)   # ", its surface," left behind
     out = re.sub(r'["\u201c\u201d]+', '', out)

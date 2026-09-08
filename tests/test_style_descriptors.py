@@ -1164,3 +1164,11 @@ def test_creature_check_accepts_any_living_thing_and_objects_stay_large(monkeypa
     pg.generate_subject_with_ai({'name': 'Sol Ring', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'},
                                 None, backend='local', local_model='m')
     assert 'shown whole and LARGE in the frame' in seen[0]
+
+
+def test_script_and_handwriting_clauses_are_cut():
+    from prompt_generator import _tidy_prompt
+    out = _tidy_prompt("Dictate of Erebos, the contract's fine script etched into the cracked stone pedestal, appears carved into a king. The pews are warm.")
+    assert 'script' not in out and 'Dictate of Erebos' in out and 'pews' in out
+    assert _tidy_prompt('A talisman rests on a stone, its surface etched with fine lines. Dust drifts.') == \
+        'A talisman rests on a stone, its surface etched with fine lines. Dust drifts.'
