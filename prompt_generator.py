@@ -848,6 +848,7 @@ def _tidy_prompt(text: str) -> str:
     out = re.sub(r',\s*(?:the|a|an|its|his|her)\s+[A-Za-z-]+\s*(?=[.!?]\s*$)', '', out)
     out = re.sub(r'\s{2,}', ' ', out).strip()
     out = _SCRIPT_CLAUSE_RE.sub('', out)          # "the contract's fine script etched into" drew a written page
+    out = re.sub(r'\.\s*\.', '.', out)              # a whole clause removed leaves '..'
     out = _LETTERING_RE.sub('', out)                 # "a small silver 'A' on its face"
     out = re.sub(r',\s*(?:its|his|her|their)\s+[a-z]+\s*,', ',', out)   # ", its surface," left behind
     out = re.sub(r'["\u201c\u201d]+', '', out)
