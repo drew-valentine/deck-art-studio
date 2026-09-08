@@ -2155,26 +2155,22 @@ def _edge_marks_present(image_path, vision_model: str) -> bool:
         return True          # keep the whole-image flag when the check cannot run
 
 
-def style_staging_seen(image_path, vision_model: str) -> str:
-    """Staging + register READ from the reference itself: how THIS picture
-    stages its scene (setting, props, lighting, camera) and its tone. The
-    grounded fallback when the language model does not know the named
-    source (an unknown name would otherwise be answered with a confident
-    guess — 'grim gothic ruins' for a serene line artist)."""
-    if image_path is None or not vision_model:
-        return ''
+_STAGING_READ_PROMPT = (
+    "Write exactly two sentences about how this picture STAGES its scene, stated as "
+    "fact (no 'appears to be', no 'possibly'). Sentence 1 begins 'Scenes are staged' "
+    "and gives ONLY composition: the camera distance, how much of the frame the main "
+    "subject fills, where the horizon or ground line sits, how dense the detail is, "
+    "and the weather or air. Sentence 2 begins 'The tone is' and names the mood in two "
+    "or three plain words. Do NOT name any object, prop, plant, animal, furniture, "
+    "building or place shown in the picture, and never describe or name the people "
+    "or creatures in it.")
+
+
+def _staging_read_one(image_path, vision_model: str) -> str:
     try:
         import mlx_llm
-        reply = mlx_llm.vision(
-            str(image_path),
-            "Write exactly two sentences about how this picture STAGES its scene, "
-            "stated as fact (no 'appears to be', no 'possibly'). Sentence 1 begins "
-            "'Scenes are staged in' and gives the kind of setting, the props, the "
-            "lighting and the camera distance. Sentence 2 begins 'The tone is' and "
-            "names the mood of THIS picture in two or three plain words. Describe "
-            "setting and props generically; do NOT describe "
-            "the people or creatures in it, and never name anyone.",
-            model=vision_model, max_tokens=120, temperature=0.0)
+        reply = mlx_llm.vision(str(image_path), _STAGING_READ_PROMPT,
+                               model=vision_model, max_tokens=120, temperature=0.0)
     except Exception as e:
         print(f"  [style] staging read failed: {e}")
         return ''
@@ -2182,14 +2178,60 @@ def style_staging_seen(image_path, vision_model: str) -> str:
     text = re.sub(r'\b(appears?|seems?) to be\b', 'is', text)
     text = re.sub(r'\b(possibly|perhaps|likely|probably)\s+', '', text)
     sents = [x.strip() for x in re.split(r'(?<=[.!?])\s+', text) if x.strip()]
-    out = ' '.join(sents[:2])
+    return ' '.join(sents[:2])
+
+
+def style_staging_seen(image_path, vision_model: str, reference_paths=(), text_model: str = '') -> str:
+    """Staging + register READ from the references: how the pictures stage
+    their scenes (camera, fill, horizon, density, weather) and their tone.
+    H87: the read is COMPOSITION only and, with several references, merged
+    down to what they share — a single read of one picture described that
+    picture's contents ('a rustic indoor garden with hanging plants', 'a
+    table with a raven and a book') and the scene writer pasted those props
+    into every unrelated card. Content differs per reference and cancels;
+    the staging stays — the same averaging idea as the image channel."""
+    paths = []
+    for p in [image_path] + list(reference_paths or []):
+        if p is not None and str(p) not in {str(x) for x in paths}:
+            paths.append(p)
+    paths = paths[:4]
+    if not paths or not vision_model:
+        return ''
+    reads = [r for r in (_staging_read_one(p, vision_model) for p in paths) if r]
+    if not reads:
+        return ''
+    out = reads[0]
+    if len(reads) > 1 and text_model:
+        try:
+            import mlx_llm
+            joined = '\n'.join(f"- {r}" for r in reads)
+            reply = mlx_llm.chat(
+                messages=[
+                    {'role': 'system', 'content':
+                        "You summarise how an artist stages scenes. Answer with exactly two sentences."},
+                    {'role': 'user', 'content':
+                        f"These describe {len(reads)} different pictures by the same artist:\n{joined}\n\n"
+                        "Write exactly two sentences about how this artist stages scenes IN GENERAL, "
+                        "keeping only what the descriptions share. Sentence 1 begins 'Scenes are "
+                        "staged' and covers camera distance, how much of the frame the subject "
+                        "fills, horizon, density of detail and weather or air. Sentence 2 begins "
+                        "'The tone is'. Never mention a specific object, prop, plant, animal, "
+                        "building, place or figure from any one picture."},
+                ],
+                model=_preferred_idiom_model(text_model), max_tokens=120, temperature=0.0)
+            merged = ' '.join((reply or '').split())
+            sents = [x.strip() for x in re.split(r'(?<=[.!?])\s+', merged) if x.strip()]
+            if sents and sents[0].lower().startswith('scenes are staged'):
+                out = ' '.join(sents[:2])
+        except Exception as e:
+            print(f"  [style] staging merge failed: {e}")
     if out:
-        print(f"  [style] staging seen in reference: {out}")
+        print(f"  [style] staging seen in {len(reads)} reference(s): {out}")
     return out
 
 
 def style_staging_recall(style_source: str, text_model: str,
-                         image_path=None, vision_model: str = '') -> str:
+                         image_path=None, vision_model: str = '', reference_paths=()) -> str:
     """How a NAMED style STAGES a scene and its tonal register — for the
     scene writer, not the image model. The drawing idiom says how lines and
     faces look; this says what the artist would put in the frame around the
@@ -2201,7 +2243,7 @@ def style_staging_recall(style_source: str, text_model: str,
     # for what they show. A name recall guesses ("grim gothic ruins" for a
     # serene line artist paired with an obscure name), so it is the fallback
     # when no reference can be read.
-    seen = style_staging_seen(image_path, vision_model)
+    seen = style_staging_seen(image_path, vision_model, reference_paths=reference_paths, text_model=text_model)
     if seen or not src:
         return seen
     try:

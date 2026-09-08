@@ -1034,3 +1034,23 @@ def test_dangling_copula_after_a_strip_is_removed():
     assert _fix_dangling_tail(_strip_unpaintable('The table is a canvas of chance, with five coins spinning.')) == \
         'The table, with five coins spinning.'
     assert _fix_dangling_tail('The ring is red.') == 'The ring is red.'
+
+
+def test_staging_read_is_composition_only_and_merged_across_references(monkeypatch):
+    """H87: one picture's props (a garden, a raven on a book) were pasted into
+    every card; the read names no props and several reads merge to what they share."""
+    import sys, types
+    import vision_analyzer as va
+    seen_prompts = []
+    def vision(path, prompt, **kw):
+        seen_prompts.append(prompt)
+        return {'a.png': 'Scenes are staged close, the subject filling the frame, dense detail, still air. The tone is calm.',
+                'b.png': 'Scenes are staged from afar, the subject small under a high horizon, sparse detail, hazy air. The tone is calm.'}[path]
+    def chat(messages, **kw):
+        assert 'IN GENERAL' in messages[-1]['content']
+        return 'Scenes are staged with dense detail and still, hazy air. The tone is calm.'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=vision, chat=chat))
+    out = va.style_staging_seen('a.png', 'vm', reference_paths=['a.png', 'b.png'], text_model='tm')
+    assert out == 'Scenes are staged with dense detail and still, hazy air. The tone is calm.'
+    assert all('Do NOT name any object, prop' in p for p in seen_prompts) and len(seen_prompts) == 2
+    assert va.style_staging_seen('a.png', 'vm').startswith('Scenes are staged close')
