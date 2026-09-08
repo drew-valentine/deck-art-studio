@@ -353,7 +353,7 @@ class _Engine:
         self._ensure_model(model_key, want_redux=bool(ref_images))
         if self._kind == "redux":
             tokens = int(redux.get("tokens") or 729)
-            strength = float(redux.get("strength") or 1.0)
+            strength = float(1.0 if redux.get("strength") is None else redux.get("strength"))
             _REDUX_STATE["average"] = bool(redux.get("average", True))
             _REDUX_STATE["edge_crop"] = int(redux.get("edge_crop") or 0)
             blocks = redux.get("blocks") or {}

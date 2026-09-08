@@ -1808,7 +1808,7 @@ def _style_reference_settings(meta) -> dict:
     stored = (meta or {}).get('style_reference') or {}
     if not stored.get('user_set') and cfg['enabled'] and cfg['tokens'] > STYLE_REFERENCE_MEDIUM_TOKENS:
         imgs = (meta or {}).get('inspiration_images') or []
-        if any(im.get('prominent_character') is True for im in imgs):
+        if any(isinstance(im, dict) and im.get('prominent_character') is True for im in imgs):
             cfg['tokens'] = STYLE_REFERENCE_MEDIUM_TOKENS
             cfg['auto_medium'] = True
     return cfg
@@ -5659,7 +5659,7 @@ def stop_batch():
     snap = gen_queue.snapshot()
     n = 0
     for job in snap['queued'] + snap['running']:
-        if job['deck_id'] == active_deck_id and job['type'] == ART:
+        if job['deck_id'] == active_deck_id and job['type'] in (ART, INSPECT):
             if gen_queue.cancel(job['id'], running_cancel_hook=_running_cancel_hook):
                 n += 1
     return jsonify({'success': True, 'message': f'Stopped {n} art jobs'})

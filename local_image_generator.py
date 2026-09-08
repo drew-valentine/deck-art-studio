@@ -430,7 +430,7 @@ class LocalImageGenerator:
             refs = [str(p) for p in (reference_images or []) if p]
             if refs:
                 req["redux"] = {"images": refs, "tokens": int(reference_tokens or 729),
-                                "strength": float(reference_strength or 1.0),
+                                "strength": float(1.0 if reference_strength is None else reference_strength),
                                 "average": bool(reference_average)}
                 if reference_blocks:
                     req["redux"]["blocks"] = reference_blocks   # {double: [...], single: [...]}

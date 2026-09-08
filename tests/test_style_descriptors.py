@@ -876,3 +876,22 @@ def test_flightless_creatures_lose_their_wings():
     assert 'NO wings' in _body_line(fox)
     bird = {'card_type': 'creature', 'type_line': 'Creature — Bird', 'oracle_text': 'Flying'}
     assert _strip_wings("A bird spreads its wings.", bird) == "A bird spreads its wings."
+
+
+def test_light_strip_keeps_card_name_words_and_name_strip_keeps_the_subject():
+    from prompt_generator import _strip_light_words, _strip_invented_names, _dictionary
+    out = _strip_light_words("Radiant Dawn, an Angel, spreads her wings over the halo of the city, the glow fading.", protect=('Radiant', 'Dawn'))
+    assert out.startswith('Radiant Dawn, an Angel')
+    if _dictionary():
+        card = {'name': 'Krark, the Thumbless', 'type_line': 'Legendary Creature — Goblin Wizard'}
+        t = "Snarling Krark, the Thumbless, lunges from the shadows, as Benzir's voice echoes. He grins."
+        out = _strip_invented_names(t, card)
+        assert out.startswith('Snarling Krark, the Thumbless, lunges') and 'Benzir' not in out
+        assert _strip_invented_names("Glittering coins tumble across the table.", {'name': 'Chance Encounter', 'type_line': 'Enchantment'}) == "Glittering coins tumble across the table."
+
+
+def test_person_words_skip_hyphenated_compounds():
+    from prompt_generator import _person_problems
+    assert _person_problems("A hand-forged blade rests on an anvil.", {'name': 'Sunforger', 'card_type': 'artifact'}) == ''
+    assert 'hand' in _person_problems("A hand grips the blade.", {'name': 'Sunforger', 'card_type': 'artifact'})
+    assert _person_problems("A smith works the anvil.", {'name': 'Sunforger', 'card_type': 'artifact'}).startswith('a person in an artifact scene')

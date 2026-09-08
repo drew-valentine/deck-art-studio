@@ -676,12 +676,30 @@ _LIGHT_WORD_RE = re.compile(
     r'brightly lit|(?:afternoon|morning|evening|midday) sun)\b', re.IGNORECASE)
 
 
-def _strip_light_words(text: str) -> str:
+def _protect_light(text: str, protect) -> str:
+    """Mask card-name words (Radiant, Dawn, Halo...) so the light strip cannot
+    remove them; unmasked afterwards."""
+    for w in protect or ():
+        # letters on both sides so the light regex's word boundaries cannot land inside
+        text = re.sub(r'\b' + re.escape(w) + r'\b', lambda m: 'zqk' + m.group(0) + 'kqz', text, flags=re.IGNORECASE)
+    return text
+
+
+def _name_words_for_protect(card) -> tuple:
+    """Words of the card's name long enough to matter (Radiant, Dawn, Halo)."""
+    return tuple(w for w in re.findall(r"[A-Za-z]{3,}", ((card or {}).get('name') or '').split(' // ')[0])
+                 if w.lower() not in ('the', 'and', 'from', 'with'))
+
+
+def _strip_light_words(text: str, protect=()) -> str:
     """Last resort for flat media: drop whole sentences that still carry light
     words (the rewrite request below handles the normal case). Never leaves
     fragments behind."""
     if not text:
         return text
+    if protect:
+        masked = _protect_light(text, protect)
+        return _strip_light_words(masked).replace('zqk', '').replace('kqz', '')
     sentences = [x.strip() for x in re.split(r'(?<=[.!?])\s+', text.strip()) if x.strip()]
     kept = [x for x in sentences if not _LIGHT_WORD_RE.search(x)]
     total = sum(len(x.split()) for x in sentences)
@@ -830,10 +848,10 @@ def _limit_scene_sentences(text: str, max_sentences: int = 3, max_words: int = 6
 
 
 _PERSON_WORD_RE = re.compile(
-    r"\b(?:he|she|her|his|him|man|woman|men|women|king|queen|lord|lady|figures?|person|people|"
+    r"(?<![\w-])(?:he|she|her|his|him|man|woman|men|women|king|queen|lord|lady|figures?|person|people|"
     r"soldiers?|warriors?|priests?|priestess|scribes?|hands?|onlookers?|crowd|leaders?|child|children|"
     r"servants?|guards?|travell?ers?|villagers?|monks?|scholars?|wizards?|mages?|sages?|elders?|"
-    r"knights?|merchants?|farmers?|hunters?|sailors?|pilgrims?|worshippers?)\b", re.IGNORECASE)
+    r"knights?|merchants?|farmers?|hunters?|sailors?|pilgrims?|worshippers?|smiths?|blacksmiths?|artisans?)(?![\w-])", re.IGNORECASE)
 
 
 def _person_problems(draft: str, card: dict) -> str:
@@ -845,7 +863,8 @@ def _person_problems(draft: str, card: dict) -> str:
         return ''
     name_words = {w.lower() for w in re.findall(r"[A-Za-z]+", card.get('name') or '')}
     hits = sorted({m.group(0).lower() for m in _PERSON_WORD_RE.finditer(draft)} - name_words)
-    return f"a person in an {card['card_type']} scene ({', '.join(hits)})" if hits else ''
+    article = 'an' if card['card_type'][:1] in 'aeiou' else 'a'
+    return f"a person in {article} {card['card_type']} scene ({', '.join(hits)})" if hits else ''
 
 
 _FLAT_WORDS = ('ink', 'line', 'drawn', 'pen', 'woodblock', 'etching', 'cel', 'animation',
@@ -1318,7 +1337,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                 print(f"  [prompt_gen] flat-media rewrite failed: {e}")
             out = _strip_unpaintable(out)       # the rewrite reintroduces "a testament to"
             before = out
-            out = _strip_light_words(out)
+            out = _strip_light_words(out, protect=_name_words_for_protect(card))
             if out != before:
                 print(f"  [prompt_gen] flat-media strip for {name}: "
                       f"{len(before.split())} -> {len(out.split())} words")
@@ -1341,7 +1360,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                 if len(now.split()) >= 12 and _opens_with_subject(now, card) and not _is_anticipation_or_past(now):
                     out = _strip_unpaintable(now)
                     if is_flat:
-                        out = _strip_light_words(out)
+                        out = _strip_light_words(out, protect=_name_words_for_protect(card))
                     print(f"  [prompt_gen] present-moment rewrite for {name}")
             except Exception as e:
                 print(f"  [prompt_gen] present-moment rewrite failed: {e}")
@@ -1368,7 +1387,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                 if len(act.split()) >= 12 and _opens_with_subject(act, card) and not _is_static_opening(act):
                     out = _strip_unpaintable(act)
                     if is_flat:
-                        out = _strip_light_words(out)
+                        out = _strip_light_words(out, protect=_name_words_for_protect(card))
                     print(f"  [prompt_gen] moment rewrite for {name}")
             except Exception as e:
                 print(f"  [prompt_gen] moment rewrite failed: {e}")
@@ -1412,7 +1431,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                         relit2 = _limit_scene_sentences(_strip_chat_preamble(relit2), 3)
                         if len(relit2.split()) >= 5 and _opens_with_subject(relit2, card):
                             out = _strip_unpaintable(relit2)
-                        out = _strip_light_words(out)
+                        out = _strip_light_words(out, protect=_name_words_for_protect(card))
                     print(f"  [prompt_gen] colour rewrite for {name}")
             except Exception as e:
                 print(f"  [prompt_gen] colour rewrite failed: {e}")
@@ -1450,7 +1469,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         out = _strip_invented_names(out, card, safe_flavor)
         out = _fix_invented_cyclops(out, base_desc)
         if is_flat:
-            out = _strip_light_words(out)
+            out = _strip_light_words(out, protect=_name_words_for_protect(card))
         out = _tidy_prompt(_fix_dangling_tail(out))
         out = _ensure_steer_in_prompt(out, steer, card)
         if len(out.split()) < 5:
@@ -1791,15 +1810,28 @@ def _strip_invented_names(text: str, card: dict, flavor: str = '') -> str:
         return text
     known = set(w.lower() for w in re.findall(r"[A-Za-z]+", ' '.join([
         card.get('name') or '', card.get('type_line') or '', flavor or ''])))
+    def _in_dict(w):
+        if w in words:
+            return True
+        for suf, rep in (('ies', 'y'), ('ing', ''), ('ing', 'e'), ('ed', ''), ('ed', 'e'), ('es', ''), ('s', ''), ('er', ''), ('est', '')):
+            if w.endswith(suf) and len(w) - len(suf) >= 3 and (w[:-len(suf)] + rep) in words:
+                return True
+        return False
     out_sents = []
-    for sent in re.split(r'(?<=[.!?])\s+', text.strip()):
+    for si, sent in enumerate(re.split(r'(?<=[.!?])\s+', text.strip())):
         clauses = re.split(r'(,\s*)', sent)
         kept = []
-        for c in clauses:
+        for ci, c in enumerate(clauses):
             bad = False
+            # a clause carrying the card's own name is never invented
+            if any(w in known for w in re.findall(r"[a-z]+", c.lower()) if len(w) > 3):
+                kept.append(c)
+                continue
             for m in re.finditer(r"\b([A-Z][a-z]{3,})(?:'s)?\b", c):
+                if si == 0 and ci == 0 and m.start() == 0:
+                    continue            # the opening word of the scene is capitalised by position
                 w = m.group(1).lower()
-                if w in known or w in words or w.rstrip('s') in words:
+                if w in known or _in_dict(w):
                     continue
                 bad = True
                 break
