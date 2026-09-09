@@ -3515,6 +3515,14 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         from vision_analyzer import style_idiom_seen, _SUBJECT_ITEM_RE
         data['style_idiom'] = [p for p in style_idiom_seen(first_img, '', bcfg.get('ollama_vision_model', 'llava:7b'))
                                if not _SUBJECT_ITEM_RE.search(p)]
+    # the signature surface treatment on the figures (a starfield inside the
+    # silhouette), read across the references — reaches the writer's Body line
+    from vision_analyzer import style_surface_device_seen
+    data['style_surface_device'] = style_surface_device_seen(ref_paths or [first_img],
+                                                             bcfg.get('ollama_vision_model', 'llava:7b'))
+    if data['style_surface_device']:
+        flux_style_prompt = data['flux_style_prompt'] = (
+            flux_style_prompt + f", figures filled with {data['style_surface_device']}")
     from vision_analyzer import style_lineage_recall, style_source_kind
     from prompt_generator import franchise_style_phrase
     # franchise / artist / movement — recalled, so a new source needs no table entry
@@ -4451,7 +4459,8 @@ def _execute_prompt_job(job, ctx):
                         steer=(job.feedback or ''),
                         style_source_name=style_name, staging=staging,
                         figure_idiom=figure_idiom,
-                        style_source_kind=_effective_source_kind(data))
+                        style_source_kind=_effective_source_kind(data),
+                        surface_device=(data.get('style_surface_device') or ''))
                     break
                 except Exception as e:
                     err_str = str(e)

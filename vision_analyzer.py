@@ -1674,8 +1674,53 @@ def style_idiom_recall(style_source: str, text_model: str,
 
 
 _SUBJECT_ITEM_RE = re.compile(
-    r"\b(?:creatures?|winged|deit(?:y|ies)|masses|characters?|people|crowds?|poses?|monsters?|beasts?|"
-    r"figures? (?:in|of|with)|warriors?|soldiers?|heroes|hero|villains?)\b", re.IGNORECASE)
+    r"\b(?:creatures?|winged|wings?|deit(?:y|ies)|masses|characters?|people|crowds?|poses?|monsters?|beasts?|"
+    r"figures? (?:in|of|with)|warriors?|soldiers?|heroes|hero|villains?|"
+    # props and anatomy of the reference's subject ('intricate chains', 'flowing wings')
+    # became content on every card — a chained winged orb for a card back
+    r"chains?|weapons?|swords?|staffs?|staves|spears?|armou?r|cloaks?|robes?|horns?|tails?|claws?|"
+    r"skulls?|crowns?|helmets?|masks?)\b", re.IGNORECASE)
+
+
+def style_surface_device_seen(image_paths, vision_model: str) -> str:
+    """The signature SURFACE treatment applied to the figures themselves — a
+    starfield inside the silhouette, cracked stone skin, a woven pattern —
+    read per reference and kept only when a majority agree. The idiom read
+    files it under 'starry background' and the stars end up in the sky; this
+    is the device that defines a cosmic-figure style. '' when none."""
+    paths = [p for p in (image_paths or []) if p][:4]
+    if not paths or not vision_model:
+        return ''
+    reads = []
+    for p in paths:
+        try:
+            import mlx_llm
+            r = mlx_llm.vision(
+                str(p),
+                "Look only at the main figure's BODY SURFACE. Is there a texture or pattern filling "
+                "the inside of its silhouette (a starfield or galaxy, cracked stone, glowing veins, "
+                "a woven pattern, scales of light) that is part of the picture's style rather than "
+                "its subject? Answer with ONE short noun phrase naming that surface treatment, "
+                "or exactly 'none'.",
+                model=vision_model, max_tokens=24, temperature=0.0)
+        except Exception as e:
+            print(f"  [style] surface device read failed: {e}")
+            continue
+        r = ' '.join((r or '').split()).strip().strip('."\'').lower()
+        if r and r != 'none' and len(r.split()) <= 8 and not _SUBJECT_ITEM_RE.search(r):
+            reads.append(r)
+    if not reads:
+        return ''
+    # majority by shared content words (two reads that both say 'starfield' agree)
+    import collections
+    words = collections.Counter(w for r in reads for w in set(re.findall(r'[a-z]{4,}', r)))
+    best = max(reads, key=lambda r: sum(words[w] for w in set(re.findall(r'[a-z]{4,}', r))))
+    agree = sum(1 for r in reads if set(re.findall(r'[a-z]{4,}', r)) & set(re.findall(r'[a-z]{4,}', best)))
+    if agree * 2 < len(paths):
+        print(f"  [style] surface device: no majority ({reads})")
+        return ''
+    print(f"  [style] surface device on the figures: {best}")
+    return best
 
 
 def style_idiom_seen(image_path, style_source: str, vision_model: str,

@@ -1234,3 +1234,23 @@ def test_writer_retries_once_after_a_worker_crash(monkeypatch):
     out2 = pg.generate_subject_with_ai({'name': 'Sol Ring', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'},
                                        None, backend='local', local_model='m')
     assert out2.startswith('Sol Ring, a single ornate ring') and 'mist' not in out2
+
+
+def test_surface_device_reaches_the_creature_body_and_props_leave_the_idiom(monkeypatch):
+    import sys, types
+    import prompt_generator as pg, vision_analyzer as va
+    for item in ('flowing wings', 'intricate chains', 'winged creature', 'dynamic pose'):
+        assert va._SUBJECT_ITEM_RE.search(item), item
+    assert not va._SUBJECT_ITEM_RE.search('dark ethereal wavy lines')
+    seen = []
+    def chat(messages, **kw):
+        seen.append(messages[1]['content'])
+        return 'Koma, Cosmos Serpent, a Serpent, its coils filled with a starfield, rises from a black sea. Storm clouds. A thin glow.'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    card = {'name': 'Koma, Cosmos Serpent', 'type_line': 'Legendary Creature — Serpent', 'oracle_text': '', 'card_type': 'creature'}
+    pg.generate_subject_with_ai(card, None, backend='local', local_model='m', surface_device='a starfield galaxy texture')
+    assert 'Surface: this style fills its figures with a starfield galaxy texture' in seen[0]
+    seen.clear()
+    pg.generate_subject_with_ai({**card, 'card_type': 'land', 'type_line': 'Land'}, None, backend='local', local_model='m',
+                                surface_device='a starfield galaxy texture')
+    assert 'Surface:' not in seen[0]

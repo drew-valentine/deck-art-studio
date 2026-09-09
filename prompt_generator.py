@@ -1198,7 +1198,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                               style_hint: str = '', steer: str = '',
                               style_source_name: str = '', staging: str = '',
                               figure_idiom: str = '', style_source_kind: str = '',
-                              _retrying: bool = False) -> str:
+                              surface_device: str = '', _retrying: bool = False) -> str:
     """Use an LLM to generate a subject description tailored to the deck's style.
 
     Sends the LLM a rule-based description as a reference anchor plus
@@ -1484,6 +1484,10 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         + f"Direction: {guidance}\n"
         + figure_line
         + _body_line(card, local_model, steer_present=has_steer)
+        + ((f"Surface{' (yields to the USER DIRECTION above)' if has_steer else ''}: this style fills its "
+            f"figures with {surface_device.strip()} — the creature's own body carries it; say so in the "
+            "first sentence.\n")
+           if surface_device and surface_device.strip() and card_type in ('creature', 'planeswalker') else '')
         + _object_line(card, local_model)
         + _camera_line(card_type, name)
         + _setting_line(is_flat, has_steer, card_type)
@@ -1810,7 +1814,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             print(f"  [prompt_gen] AI failed for {name}: {e}, retrying once")
             return generate_subject_with_ai(card, openai_client, backend, local_model, style_hint, steer,
                                             style_source_name, staging, figure_idiom, style_source_kind,
-                                            _retrying=True)
+                                            surface_device=surface_device, _retrying=True)
         print(f"  [prompt_gen] AI failed for {name}: {e}, using the minimal scene")
         return minimal_scene(card)
 
