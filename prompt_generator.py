@@ -2343,14 +2343,15 @@ def _ensure_surface_device(text: str, card: dict, device: str) -> str:
                    for w in key):
         return text                      # the body IS the device already
     name = (card.get('name') or '').split(' // ')[0]
-    clause = f" its whole body made of {dev}, silhouette and all,"
+    clause = f", its whole body made of {dev}, silhouette and all,"
     if name and name in text:
         i = text.index(name) + len(name)
-        # skip an existing ", a Cyclops Berserker," appositive so the clause follows it
-        m = re.match(r"(,\s*(?:a|an)\s+[A-Z][^,.]{0,40},)", text[i:])
+        # follow an existing ", a mighty Serpent," appositive (any case)
+        m = re.match(r"(,\s*(?:a|an)\s+[^,.]{1,40})(?=,)", text[i:], flags=re.IGNORECASE)
         if m:
             i += m.end()
-        return text[:i] + clause + text[i:]
+        out = text[:i] + clause + text[i:]
+        return re.sub(r',\s*,', ',', out)
     return f"{name}, its whole body made of {dev} — {text}" if name else text
 
 

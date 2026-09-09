@@ -1281,7 +1281,22 @@ def test_surface_device_is_guaranteed_in_the_opening():
     c = {'name': 'Koma, Cosmos Serpent', 'type_line': 'Legendary Creature — Serpent', 'card_type': 'creature'}
     out = _ensure_surface_device('Koma, Cosmos Serpent, a Serpent, coils through the black swamp, the starfield swirling around it.', c, 'starfield')
     assert out.startswith('Koma, Cosmos Serpent, a Serpent, its whole body made of starfield, silhouette and all, coils')
+    assert ',,' not in out
+    low = _ensure_surface_device('Koma, Cosmos Serpent, a mighty Serpent, coils on the floor.', c, 'starfield')
+    assert low.startswith('Koma, Cosmos Serpent, a mighty Serpent, its whole body made of starfield, silhouette and all, coils')
+    bare = _ensure_surface_device('Koma, Cosmos Serpent coils on the floor.', c, 'starfield')
+    assert bare.startswith('Koma, Cosmos Serpent, its whole body made of starfield, silhouette and all, coils')
     kept = 'Koma, Cosmos Serpent, a Serpent whose body is a starfield, rises.'
     assert _ensure_surface_device(kept, c, 'starfield') == kept
     assert _ensure_surface_device('Sol Ring rests.', {'name': 'Sol Ring', 'card_type': 'artifact'}, 'starfield') == 'Sol Ring rests.'
     assert _ensure_surface_device('x', c, '') == 'x'
+
+
+def test_medium_vote_is_a_majority_of_reads():
+    import vision_analyzer as va
+    lines = ['Art Style: Highly detailed digital painting', 'Medium: Digital painting with 3D modeling techniques',
+             'Art Style: Digital painting with atmospheric brushwork']
+    assert va._majority_medium(lines) == 'painted illustration'
+    assert va._evidence_medium_vote('\n'.join(lines)) == 'painted illustration'
+    assert va._majority_medium(['Art Style: cel animation', 'Art Style: 3D render', 'Medium: cel-shaded animation']) == 'cel animation'
+    assert va._majority_medium(['Vibe: calm']) == ''

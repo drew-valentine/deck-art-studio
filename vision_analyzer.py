@@ -1513,6 +1513,27 @@ def recognized_style_source(descriptions) -> str:
     return votes.most_common(1)[0][0] if votes else ''
 
 
+def _majority_medium(lines) -> str:
+    """Each Art Style / Medium / Source line votes once for the bucket it hits
+    hardest; the bucket with most lines wins (ties by map order). A pooled
+    token set let ONE read that said '3D render' outvote two that said
+    'digital painting', because that bucket has more distinct keywords."""
+    import re as _re
+    tally = {}
+    for ln in lines:
+        toks = set(_re.findall(r'[a-z0-9-]+', ln.lower()))
+        hits = {m: len(toks & keys) for m, keys in _MEDIUM_KEYWORD_MAP.items()}
+        best = max(hits.values()) if hits else 0
+        if not best:
+            continue
+        m = next(k for k, v in hits.items() if v == best)
+        tally[m] = tally.get(m, 0) + 1
+    if not tally:
+        return ''
+    top = max(tally.values())
+    return next(m for m in _MEDIUM_KEYWORD_MAP if tally.get(m, 0) == top)
+
+
 def _evidence_medium_vote(stored_descriptions: str) -> str:
     """Deterministic medium vote over the stored analyses' own Art Style /
     Medium / Source lines (no model in the loop). '' when no keyword hits."""
@@ -1523,12 +1544,7 @@ def _evidence_medium_vote(stored_descriptions: str) -> str:
              and not _re.search(r'source\s*:\s*(original|unknown|n/?a)\s*$', ln, _re.IGNORECASE)]
     if not lines:
         return ''
-    tokens = set(_re.findall(r'[a-z0-9-]+', ' '.join(lines).lower()))
-    votes = {m: len(tokens & keys) for m, keys in _MEDIUM_KEYWORD_MAP.items()}
-    best = max(votes.values()) if votes else 0
-    if not best:
-        return ''
-    return next(m for m, v in votes.items() if v == best)
+    return _majority_medium(lines)
 
 
 def _classify_medium_from_evidence(stored_descriptions: str, prose: str,
@@ -1548,7 +1564,11 @@ def _classify_medium_from_evidence(stored_descriptions: str, prose: str,
     lines = [ln for ln in text.splitlines()
              if _re.match(r'\s*[-*\s]*(art style|medium|source)\s*:', ln, _re.IGNORECASE)
              and not _re.search(r'source\s*:\s*(original|unknown|n/?a)\s*$', ln, _re.IGNORECASE)]
-    evidence = ' '.join(lines) if lines else (text or prose or '')
+    if lines:
+        voted = _majority_medium(lines)
+        if voted:
+            return voted
+    evidence = text or prose or ''
     tokens = set(_re.findall(r'[a-z0-9-]+', evidence.lower()))
     if tokens:
         votes = {m: len(tokens & keys) for m, keys in _MEDIUM_KEYWORD_MAP.items()}
