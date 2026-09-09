@@ -2584,7 +2584,7 @@ def build_flux_style_block(image_path, style_source: str = '',
             "NOT its subject. Describe, in order: medium and overall look; "
             "linework character (weight, flow, density); how surfaces and "
             "shading are handled; the color palette with 4-6 SPECIFIC hue names "
-            "(say 'dusty coral', never just 'red'); recurring decorative motifs "
+            "(each a modifier plus a hue, never a bare primary colour name); recurring decorative motifs "
             "or texture patterns; art-historical influences if visible. Be "
             "concrete and technical. Never mention the subject. Output ONLY the "
             "description."

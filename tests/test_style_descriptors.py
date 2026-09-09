@@ -1254,3 +1254,11 @@ def test_surface_device_reaches_the_creature_body_and_props_leave_the_idiom(monk
     pg.generate_subject_with_ai({**card, 'card_type': 'land', 'type_line': 'Land'}, None, backend='local', local_model='m',
                                 surface_device='a starfield galaxy texture')
     assert 'Surface:' not in seen[0]
+
+
+def test_style_read_prompt_carries_no_example_hue():
+    """'dusty coral' was in seven decks' palettes: the VLM prompt's own example
+    hue, parroted. Instructions carry categories, never example nouns."""
+    import inspect, vision_analyzer as va
+    src = inspect.getsource(va.build_flux_style_block)
+    assert "dusty coral" not in src
