@@ -191,6 +191,14 @@ decks/<deck-slug>/
   `style_reference.max_images` of 1 on a multi-reference deck averages the default unless
   `max_images_user_set`; the writer retries once after a failure and then uses `minimal_scene` (never the
   rule-based mana-colour filler).
+  Distillation is evidence-first against read variance (2026-09-09 regression sweeps): the medium is a
+  MAJORITY of the per-image Art Style/Medium/Source lines (`_majority_medium`; a pooled token count let one
+  '3D modeling' phrase flip a painting deck); `pixel_edge_hardness` (comic ≈0.19, ink ≈0.15, fine-line ≈0.17,
+  soft painting ≈0.08) overrides a 'painted' vote with the flat bucket the reads mention (comic > cel > ink)
+  when edges are hard, and decides painterly vs flat anchors when soft; the palette leads with hue names the
+  reads and the pixels agree on, then measured hues (`pixel_style_stats`; pastel reds/oranges are named pink/
+  coral); the coverage clause carries a measured tonal key and a sky-vs-subject key. After distillation
+  changes, RE-ANALYZE a deck before judging its renders — blocks are stored.
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
   unpaintable-abstraction strip → (flat media: rewrite without light words naming the offending
