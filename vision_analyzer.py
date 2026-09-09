@@ -2499,6 +2499,13 @@ def pixel_palette(image_path, n_bins: int = 12):
             acc[0] += 1; acc[1] += h * 360; acc[2] += sv; acc[3] += v
         paper = paper_n / total
         lum = sum(0.299 * r + 0.587 * g + 0.114 * b for r, g, b in px) / (255.0 * total)
+        w, hgt = im.size
+        def _band_lum(y0, y1, x0=0, x1=None):
+            x1 = w if x1 is None else x1
+            rows = [px[y * w + x] for y in range(int(hgt * y0), int(hgt * y1)) for x in range(int(x0), int(x1))]
+            return sum(0.299 * r + 0.587 * g + 0.114 * b for r, g, b in rows) / (255.0 * max(1, len(rows)))
+        lum_top = _band_lum(0.0, 0.35)
+        lum_mid = _band_lum(0.3, 0.75, w * 0.25, w * 0.75)
         ranked = sorted(bins.items(), key=lambda kv: -kv[1][0])
         hues = []
         for _, (n, hs, ss, vs) in ranked:
@@ -2510,7 +2517,7 @@ def pixel_palette(image_path, n_bins: int = 12):
             if len(hues) >= 5:
                 break
         return {'hues': hues, 'paper': round(paper, 3), 'saturation': round(sat_sum / total, 3),
-                'luminance': round(lum, 3)}
+                'luminance': round(lum, 3), 'lum_top': round(lum_top, 3), 'lum_mid': round(lum_mid, 3)}
     except Exception as e:
         print(f"  [style] pixel palette failed: {e}")
         return None
@@ -2540,6 +2547,14 @@ def pixel_coverage_phrase(stats) -> str:
         base += ', dark low-key palette, deep shadows with small bright highlights'
     elif lum is not None and lum > 0.72:
         base += ', bright high-key palette'
+    # sky-versus-subject key, measured: a dark figure silhouetted against a
+    # pale luminous sky is a composition fact the whole-image key cannot say
+    top, mid = stats.get('lum_top'), stats.get('lum_mid')
+    if top is not None and mid is not None:
+        if top - mid > 0.12:
+            base += ', a pale luminous sky behind a darker silhouetted subject'
+        elif mid - top > 0.12:
+            base += ', a bright subject against a dark ground'
     return base
 
 
@@ -2586,7 +2601,9 @@ def pixel_coverage_from_refs(image_path, reference_paths=None) -> str:
         return ''
     mean = {'paper': sum(x['paper'] for x in stats) / len(stats),
             'saturation': sum(x['saturation'] for x in stats) / len(stats),
-            'luminance': sum(x.get('luminance', 0.5) for x in stats) / len(stats)}
+            'luminance': sum(x.get('luminance', 0.5) for x in stats) / len(stats),
+            'lum_top': sum(x.get('lum_top', 0.5) for x in stats) / len(stats),
+            'lum_mid': sum(x.get('lum_mid', 0.5) for x in stats) / len(stats)}
     return pixel_coverage_phrase(mean)
 
 

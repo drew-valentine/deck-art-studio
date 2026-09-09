@@ -3521,6 +3521,19 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
     data['style_surface_device'] = style_surface_device_seen(ref_paths or [first_img],
                                                              bcfg.get('ollama_vision_model', 'llava:7b'))
     if data['style_surface_device']:
+        # the device explains the stars: a 'starry background' item would put
+        # them back in the sky, so items that pair the device word with a
+        # background/sky word are dropped
+        import re as _re
+        _dev = _re.findall(r'[a-z]{4,}', data['style_surface_device'].lower())
+        if _dev:
+            _items = [x.strip() for x in flux_style_prompt.split(',')]
+            _items = [x for x in _items if not (any(w[:5] in x.lower() for w in _dev)
+                                                and _re.search(r'background|backdrop|sky|skies', x.lower()))]
+            flux_style_prompt = ', '.join(_items)
+            data['style_idiom'] = [x for x in (data.get('style_idiom') or [])
+                                   if not (any(w[:5] in x.lower() for w in _dev)
+                                           and _re.search(r'background|backdrop|sky|skies', x.lower()))]
         flux_style_prompt = data['flux_style_prompt'] = (
             flux_style_prompt + f", figures filled with {data['style_surface_device']}")
     # the references' composition (camera, frame fill, horizon, sky) is a

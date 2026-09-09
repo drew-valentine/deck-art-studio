@@ -577,9 +577,9 @@ def test_pixel_palette_measures_paper_and_hues(tmp_path):
     st2 = va.pixel_palette(p2)
     assert st2['paper'] == 0 and va.pixel_coverage_phrase(st2).startswith('fully coloured with saturated')
     assert va.pixel_coverage_phrase(None) == ''
-    assert va.pixel_coverage_from_refs(p, [p, p2]) in ('coloured figures and objects on open white paper',
-                                                       'fully coloured with soft muted fills, no bare white paper',
-                                                       'fully coloured with saturated flat colour fills, no bare white paper')
+    assert va.pixel_coverage_from_refs(p, [p, p2]).startswith(('coloured figures and objects on open white paper',
+                                                                 'fully coloured with soft muted fills, no bare white paper',
+                                                                 'fully coloured with saturated flat colour fills, no bare white paper'))   # tonal/sky keys may follow
 
 
 def test_idiom_phrases_drop_writing_words():
@@ -1300,3 +1300,13 @@ def test_medium_vote_is_a_majority_of_reads():
     assert va._evidence_medium_vote('\n'.join(lines)) == 'painted illustration'
     assert va._majority_medium(['Art Style: cel animation', 'Art Style: 3D render', 'Medium: cel-shaded animation']) == 'cel animation'
     assert va._majority_medium(['Vibe: calm']) == ''
+
+
+def test_sky_versus_subject_key_is_measured():
+    import vision_analyzer as va
+    pale = va.pixel_coverage_phrase({'paper': 0.02, 'saturation': 0.3, 'luminance': 0.45, 'lum_top': 0.7, 'lum_mid': 0.3})
+    assert 'pale luminous sky behind a darker silhouetted subject' in pale
+    bright = va.pixel_coverage_phrase({'paper': 0.02, 'saturation': 0.3, 'luminance': 0.45, 'lum_top': 0.2, 'lum_mid': 0.6})
+    assert 'bright subject against a dark ground' in bright
+    flat = va.pixel_coverage_phrase({'paper': 0.02, 'saturation': 0.3, 'luminance': 0.45, 'lum_top': 0.45, 'lum_mid': 0.44})
+    assert 'sky' not in flat and 'ground' not in flat
