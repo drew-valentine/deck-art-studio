@@ -1723,6 +1723,28 @@ def style_surface_device_seen(image_paths, vision_model: str) -> str:
     return best
 
 
+def _extract_vibe(stored_descriptions: str, cap: int = 3) -> list:
+    """Mood words from the per-image 'Vibe:' lines, kept when at least two
+    reads agree (or all we have is one read). The block carried hues and
+    medium but no register, and a sinister cosmic deck rendered cheerful."""
+    votes = {}
+    n_reads = 0
+    for ln in (stored_descriptions or '').splitlines():
+        m = re.match(r'\s*[-*\s]*vibe\s*:\s*(.+)$', ln, re.IGNORECASE)
+        if not m:
+            continue
+        n_reads += 1
+        for w in {x.strip().lower() for x in re.split(r'[,;/]| and ', m.group(1)) if x.strip()}:
+            w = re.sub(r'[^a-z -]', '', w).strip()
+            if 2 <= len(w) <= 24 and not _SUBJECT_ITEM_RE.search(w):
+                votes[w] = votes.get(w, 0) + 1
+    if not votes:
+        return []
+    need = 2 if n_reads >= 2 else 1
+    ranked = sorted(votes.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [w for w, c in ranked if c >= need][:cap]
+
+
 def style_idiom_seen(image_path, style_source: str, vision_model: str,
                      exclude=(), max_words: int = _IDIOM_MAX_WORDS) -> list:
     """What the vision model SEES of the idiom in a reference when told whose
@@ -2648,7 +2670,7 @@ def build_flux_style_block(image_path, style_source: str = '',
         flat = _np(('flat', 'opaque', 'gouache', 'poster', 'cel-shaded', 'solid fill', 'block colour',
                     'block color', 'matte'))
         if painterly > flat:
-            anchors = ['painterly digital painting', 'soft blended brushwork',
+            anchors = ['painterly digital painting', 'matte painting with visible brushwork and soft edges',
                        'luminous highlights and deep shadows', 'atmospheric depth']
     _ev_phrase = _evidence_medium_phrase(stored_descriptions, medium)
     if anchors and _ev_phrase and _ev_phrase not in ' '.join(anchors):
@@ -2739,6 +2761,9 @@ def build_flux_style_block(image_path, style_source: str = '',
     # it a saturated fine-line reference rendered as uncoloured line art.
     if hues:
         parts.append('palette of ' + ', '.join(hues))
+    mood = _extract_vibe(stored_descriptions)
+    if mood:
+        parts.append('mood of ' + ', '.join(mood))    # the reads' own register, by majority
     recalled = style_idiom_recall(style_source, text_model) if style_source else []
     parts.extend(recalled)            # deterministic knowledge: foundation
     parts.extend(motifs)

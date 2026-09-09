@@ -1484,13 +1484,13 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         + f"Direction: {guidance}\n"
         + figure_line
         + _body_line(card, local_model, steer_present=has_steer)
-        + ((f"Surface{' (yields to the USER DIRECTION above)' if has_steer else ''}: this style fills its "
-            f"figures with {surface_device.strip()} — the creature's own body carries it; say so in the "
-            "first sentence.\n")
+        + ((f"Surface{' (yields to the USER DIRECTION above)' if has_steer else ''}: in this style a figure's "
+            f"whole body IS {surface_device.strip()} — its silhouette reads as {surface_device.strip()} rather "
+            "than skin, scales or fur, its edges dissolving into it; say so in the first sentence.\n")
            if surface_device and surface_device.strip() and card_type in ('creature', 'planeswalker') else '')
         + _object_line(card, local_model)
         + _camera_line(card_type, name)
-        + _setting_line(is_flat, has_steer, card_type)
+        + _setting_line(is_flat, has_steer, card_type, staging)
         + (f"World: this {card_type} exists in the style's own world — {staging.strip()} "
            "Let that world colour the plants, sky, rock and light of the card's OWN subject; use at "
            "most one of its signature features, and only where the card's name allows it — a forest "
@@ -2219,7 +2219,7 @@ def _figure_idiom_items(idiom: str) -> list:
     return [x for x in items if _FIGURE_WORD_RE.search(x)]
 
 
-def _setting_line(is_flat: bool, steer_present: bool = False, card_type: str = '') -> str:
+def _setting_line(is_flat: bool, steer_present: bool = False, card_type: str = '', staging: str = '') -> str:
     """H79: the second sentence must PLACE the subject. Every strip in the
     backstop chain removes words and nothing put the setting back, so scenes
     shrank to a subject on nothing (an altar as a blank slab, a ring on a
@@ -2227,14 +2227,23 @@ def _setting_line(is_flat: bool, steer_present: bool = False, card_type: str = '
     head = ("Setting (REQUIRED, yields to the USER DIRECTION above): "
             if steer_present else "Setting (REQUIRED): ")
     tail = (" — in flat colour and pattern, never light." if is_flat else ".")
+    stage = ''
+    if staging and staging.strip():
+        # the references' own staging (camera, horizon, sky, air) — read across
+        # the deck's images — is how THIS style places a subject; a cosmic
+        # figure meant for a vast pale storm sky was put on a forest floor
+        first = re.split(r'(?<=[.!?])\s+', staging.strip())[0]
+        first = re.sub(r'^\s*scenes are staged\s*', '', first, flags=re.IGNORECASE).strip(' .')
+        if first:
+            stage = f" Stage it the way this style stages every scene — {first} — and"
     if card_type == 'artifact':
         # H89: left to itself the writer presents every object for display on a
         # soft stand; a thing belongs where it is found or used
-        return (head + "the second sentence places the object where such a thing is found or "
+        return (head + stage.strip() + (" " if stage else "") + "the second sentence places the object where such a thing is found or "
                 "used — a real place with the ground, what surrounds it at scale and the weather or "
                 "air, in plain visual words; never presented for display on a stand or a soft "
                 "surface" + tail + "\n")
-    return (head + "the second sentence places the subject somewhere specific — the ground "
+    return (head + stage.strip() + (" " if stage else "") + "the second sentence places the subject somewhere specific — the ground "
             "under it, what surrounds it at scale, and the weather or air around it, in plain "
             "visual words" + tail + "\n")
 

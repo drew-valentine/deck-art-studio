@@ -1249,7 +1249,7 @@ def test_surface_device_reaches_the_creature_body_and_props_leave_the_idiom(monk
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
     card = {'name': 'Koma, Cosmos Serpent', 'type_line': 'Legendary Creature — Serpent', 'oracle_text': '', 'card_type': 'creature'}
     pg.generate_subject_with_ai(card, None, backend='local', local_model='m', surface_device='a starfield galaxy texture')
-    assert 'Surface: this style fills its figures with a starfield galaxy texture' in seen[0]
+    assert "Surface: in this style a figure's whole body IS a starfield galaxy texture" in seen[0]
     seen.clear()
     pg.generate_subject_with_ai({**card, 'card_type': 'land', 'type_line': 'Land'}, None, backend='local', local_model='m',
                                 surface_device='a starfield galaxy texture')
@@ -1262,3 +1262,15 @@ def test_style_read_prompt_carries_no_example_hue():
     import inspect, vision_analyzer as va
     src = inspect.getsource(va.build_flux_style_block)
     assert "dusty coral" not in src
+
+
+def test_setting_line_stages_like_the_references_and_vibe_is_majority():
+    from prompt_generator import _setting_line
+    import vision_analyzer as va
+    s = _setting_line(False, False, 'creature', 'Scenes are staged with a low horizon under a vast pale sky. The tone is grim.')
+    assert 'Stage it the way this style stages every scene — with a low horizon under a vast pale sky —' in s
+    assert 'Stage it' not in _setting_line(False, False, 'creature', '')
+    descs = 'Vibe: sinister, ominous, otherworldly.\nVibe: nightmarish, ominous, otherworldly, eerie\nVibe: ominous, ethereal, cosmic'
+    assert va._extract_vibe(descs) == ['ominous', 'otherworldly']
+    assert va._extract_vibe('Vibe: calm, gentle') == ['calm', 'gentle']
+    assert va._extract_vibe('') == []
