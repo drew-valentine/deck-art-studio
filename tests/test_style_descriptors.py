@@ -1310,3 +1310,19 @@ def test_sky_versus_subject_key_is_measured():
     assert 'bright subject against a dark ground' in bright
     flat = va.pixel_coverage_phrase({'paper': 0.02, 'saturation': 0.3, 'luminance': 0.45, 'lum_top': 0.45, 'lum_mid': 0.44})
     assert 'sky' not in flat and 'ground' not in flat
+
+
+def test_edge_hardness_and_measured_hues(tmp_path):
+    from PIL import Image, ImageDraw
+    import vision_analyzer as va
+    hard = Image.new('RGB', (200, 200), (250, 250, 250))
+    d = ImageDraw.Draw(hard)
+    for x in range(0, 200, 8):
+        d.line([x, 0, x, 200], fill=(0, 0, 0), width=2)
+    soft = Image.new('RGB', (200, 200), (40, 40, 90))
+    for y in range(200):
+        ImageDraw.Draw(soft).line([0, y, 200, y], fill=(40, 40, 90 + y // 4))
+    ph, ps = tmp_path / 'hard.png', tmp_path / 'soft.png'; hard.save(ph); soft.save(ps)
+    assert va.pixel_edge_hardness(ph) > 0.13 > va.pixel_edge_hardness(ps)
+    st = va.pixel_style_stats(ps, [ps, ps])
+    assert st['hardness'] < 0.115 and isinstance(st['hues'], list)

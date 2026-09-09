@@ -2592,6 +2592,37 @@ def _evidence_medium_phrase(stored_descriptions: str, medium: str) -> str:
 
 
 
+def pixel_edge_hardness(image_path):
+    """Mean edge magnitude of a reference (0..1): hard line art and comic
+    fills sit around 0.15-0.20, soft painterly work around 0.07-0.10.
+    Measured on the decks: comic 0.19, ink-on-white 0.15, fine-line 0.17,
+    cosmic digital painting 0.08. Deterministic — the text reads called the
+    comic deck 'digital painting' on every image."""
+    try:
+        from PIL import Image, ImageFilter
+        im = Image.open(image_path).convert('L')
+        im.thumbnail((192, 192))
+        px = list(im.filter(ImageFilter.FIND_EDGES).getdata())
+        return sum(px) / (255.0 * max(1, len(px)))
+    except Exception as e:
+        print(f"  [style] edge hardness failed: {e}")
+        return None
+
+
+def pixel_style_stats(image_path, reference_paths=None) -> dict:
+    """Pooled pixel evidence over the references: mean edge hardness and the
+    hue names ranked by how many references carry them."""
+    paths = [p for p in (reference_paths or [image_path]) if p][:6]
+    hard = [h for h in (pixel_edge_hardness(p) for p in paths) if h is not None]
+    counts = {}
+    for p in paths:
+        st = pixel_palette(p)
+        for i, h in enumerate((st or {}).get('hues') or []):
+            counts[h] = counts.get(h, 0) + (5 - min(i, 4))      # earlier = more coverage
+    hues = [h for h, _ in sorted(counts.items(), key=lambda kv: -kv[1])]
+    return {'hardness': (sum(hard) / len(hard)) if hard else None, 'hues': hues}
+
+
 def pixel_coverage_from_refs(image_path, reference_paths=None) -> str:
     """Colour-coverage clause measured over the deck's references (mean paper
     fraction and saturation); '' when nothing is readable."""
@@ -2693,12 +2724,28 @@ def build_flux_style_block(image_path, style_source: str = '',
                                             img_desc=(ev_lines or best_prose)[:400])
     else:
         medium = _classify_medium_from_evidence(stored_descriptions, best_prose, text_model)
+    pix = pixel_style_stats(image_path, reference_paths)
+    hardness = pix.get('hardness')
+    if medium == 'painted illustration' and hardness is not None and hardness >= 0.13:
+        # 'Digital painting' is the vision model's answer for ANY digital art;
+        # hard edges say line art or comic. Take the specific flat bucket the
+        # reads mention most (a comic deck re-analysed as painterly otherwise).
+        import re as _re
+        lines = [ln for ln in (stored_descriptions or '').splitlines()
+                 if _re.match(r'\s*[-*\s]*(art style|medium)\s*:', ln, _re.IGNORECASE)]
+        toks = set(_re.findall(r'[a-z0-9-]+', ' '.join(lines).lower()))
+        hits = {m: len(toks & _MEDIUM_KEYWORD_MAP[m]) for m in ('comic book', 'cel animation', 'ink illustration')}
+        best = max(hits.values()) if hits else 0
+        if best:
+            medium = next(m for m, v in hits.items() if v == best)
+            print(f"  [style] hard edges ({hardness:.2f}) + '{medium}' in the reads override 'painted illustration'")
     anchors = _medium_anchors(medium)
     if medium == 'painted illustration':
         # the bucket's anchor said 'flat opaque paint' for EVERY painted deck,
         # and the writer then stripped all light from the scene — for cosmic
         # references built from glow and atmospheric depth that deleted the
-        # vibe. Decide flat vs painterly from the evidence, like the ink axes.
+        # vibe. Soft edges (measured) mean painterly; hard edges mean flat;
+        # in between the text evidence decides.
         ev_p = ((stored_descriptions or '') or evidence).lower()
         _np = lambda words: sum(ev_p.count(w) for w in words)
         painterly = _np(('gradient', 'soft transition', 'glow', 'luminous', 'atmospheric', 'airbrush',
@@ -2706,7 +2753,9 @@ def build_flux_style_block(image_path, style_source: str = '',
                          'layered brushwork', 'volumetric'))
         flat = _np(('flat', 'opaque', 'gouache', 'poster', 'cel-shaded', 'solid fill', 'block colour',
                     'block color', 'matte'))
-        if painterly > flat:
+        soft = (hardness is not None and hardness < 0.115) or (hardness is None and painterly > flat) \
+            or (hardness is not None and 0.115 <= hardness < 0.13 and painterly > flat)
+        if soft:
             anchors = ['painterly digital painting', 'matte painting with visible brushwork and soft edges',
                        'luminous highlights and deep shadows', 'atmospheric depth']
     _ev_phrase = _evidence_medium_phrase(stored_descriptions, medium)
@@ -2785,6 +2834,19 @@ def build_flux_style_block(image_path, style_source: str = '',
     modified = [h for h in hues if ' ' in h]
     bare = [h for h in hues if ' ' not in h]
     hues = (modified + bare)[:6] if len(modified) < 3 else modified[:6]
+    # measured hues first: the reads' hue names changed with every re-analysis
+    # (a pastel deck came back 'deep red, vibrant purple'); pixels do not
+    measured_hues = list(pix.get('hues') or [])[:5]
+    if measured_hues:
+        # names the reads and the pixels AGREE on come first (the read's
+        # modifier kept: 'dusty pink' over 'pink'), then the measured hues
+        # the reads missed, then the reads' remaining modified hues
+        mbase = [h.split()[-1] for h in measured_hues]
+        agreed = [h for h in hues if h.split()[-1] in mbase]
+        agreed_base = {h.split()[-1] for h in agreed}
+        rest_measured = [h for h in measured_hues if h.split()[-1] not in agreed_base]
+        rest_read = [h for h in hues if h not in agreed and ' ' in h]
+        hues = (agreed + rest_measured + rest_read)[:6]
     # a motif that names a SUBJECT or a pose ('winged creature', 'dynamic pose',
     # 'undead masses') is the reference's content, not its style — it grew
     # wings on a flightless serpent
