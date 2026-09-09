@@ -106,6 +106,7 @@
   - Reopened for the day's composition work: the owner judged v1.49.0's compositions more cohesive than today's, so the branch now also carries H90, H91, H92 and H93.
   - Not shipping yet by the owner's instruction: defects first, wow second. Rounds 3–5 on `feat/night-composition`; the remaining misses are per-roll variance, addressed by the two-scene take + inspection pick and a literal-thing retry for place/object drafts.
   - State 2026-09-08 20:30: 40+ commits on `feat/night-composition`, 554 tests, docs current. Across the day's runs the new writer sits at roughly half the current art's inspector defect count on fresh cards, two-scene batches deliver 18 of 19 clean finals, and objects and places no longer grow onlookers. Awaiting the owner's read of the latest sheets.
+  - State 2026-09-09 02:00: ~60 commits on `feat/night-composition`, 564 tests, docs current; the Koma vibe transfers; the regression sweep is clean. Awaiting the owner's merge call.
 
 - [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Review Started: 2026-09-02 | Owner: drew-valentine
   - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — In Review, awaiting the owner's ship decision.
@@ -255,6 +256,15 @@
 
 ## Done
 
+- [x] Regression sweeps after the Koma fixes | Priority: P0 | Completed: 2026-09-09 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits d3c361e, fad2e33 and 36f0d6a.
+  - Sweep 1 (re-analyze three decks, then 21 fresh cards) caught read variance rather than a code regression: the comic deck re-analysed as painterly — 'Medium: Digital painting' is the vision model's answer for any digital art — and the pastel deck's palette came back 'deep red, vibrant purple'.
+  - Holistic fix, no per-deck rules: measured edge hardness (comic 0.19, ink 0.15, fine-line 0.17, soft painting 0.08) overrides a painted vote with whichever flat bucket the reads mention (comic > cel > ink) and decides painterly against flat; the palette leads with the hues the reads and the pixels agree on and then adds the measured hues; pastel reds and oranges are named pink and coral.
+  - Sweep 2 stopped early — 'linework' had let ink outrank comic.
+  - Sweep 3 on the fixes: the comic deck is back to 'comic book art, bold ink outlines'; 21 cards against each card's current art — defects 4 against 10, subject missing 3 against 5, text 1 against 6, judge 4 new / 6 current / 11 undecided. By eye: no homogenized backdrops, correct subjects, colours kept. Within the noise band of rounds 4–5 (3–8 defects).
+  - Sheets: regress-cur-round5-new.jpg, regress3-cur-round5-new.jpg.
+  - Note: the three experiment decks now carry re-analysed blocks; the owner's own decks keep their stored blocks until re-analysed.
+
 - [x] Cosmic-painting references now transfer (Koma deck vibe gap) | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
   - Branch: `feat/night-composition`, commits b07848c and 2bfd404.
   - Reported gap: the cosmos-serpent deck's dark painterly references — figures whose bodies are a starfield, oppressive skies, a glow at the horizon — rendered flat, pastel and winged.
@@ -268,6 +278,15 @@
   - Also shipped: a majority read across the references of the signature surface treatment inside the figures' silhouettes (`style_surface_device`, e.g. 'starfield'), appended to the block and given to the writer as a Surface line for creatures.
   - Validated on the deck after re-analysis: the block reads painterly and dark low-key; the serpent renders dark and painterly with a galaxy inside its coils at both seeds, no wings. The card back is ornamental — the averaged references still lend it wing shapes.
   - Sheets: koma-after.jpg, koma-after2.jpg.
+  - Rounds 3–6, 2026-09-08/09 (commits 024ab04, b369a71, b7cd9e0, fed1677, e09c64d): the owner judged rounds 1–2 short of the references. Six further fixes:
+    - The Setting line now stages every scene the way the references do — staging composition applies to creatures and objects too, not only to places.
+    - The surface device is guaranteed in the creature's opening clause. The writer had put the starfield 'around' the serpent four runs running instead of inside it.
+    - The block carries the reads' majority mood and a composition clause.
+    - The writer's anchor no longer carries mana-colour filler, and the REQUIRED lines close the user message. The serpent went to a forest floor three times because 'dense foliage, rich earth, deep water, cool mist' sat last in the message.
+    - The medium is a majority of the reads. A single '3D modeling' phrase had flipped a painting deck to '3D render'.
+    - A measured sky-vs-subject key (quiet on this deck).
+  - Round 6 result: block = painterly, dark low-key, the mood, figures filled with starfield, composition clause; renders = a star-filled body, low horizon, moon glow, no wings.
+  - Sheets: koma-after3.jpg, koma-after4.jpg, koma-after5.jpg, koma-after6.jpg.
 
 - [x] H94 — the no-people clause rides in the prompt head for objects, places and card backs | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
   - Branch: `feat/night-composition`, commit ce55564.
