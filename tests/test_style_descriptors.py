@@ -1326,3 +1326,12 @@ def test_edge_hardness_and_measured_hues(tmp_path):
     assert va.pixel_edge_hardness(ph) > 0.13 > va.pixel_edge_hardness(ps)
     st = va.pixel_style_stats(ps, [ps, ps])
     assert st['hardness'] < 0.115 and isinstance(st['hues'], list)
+
+
+def test_pastel_hue_names():
+    import vision_analyzer as va
+    assert va._hue_name(340, 0.25, 0.9) == 'pale pink'
+    assert va._hue_name(345, 0.4, 0.85) == 'pink'
+    assert va._hue_name(20, 0.35, 0.9) == 'coral'
+    assert va._hue_name(345, 0.4, 0.3) == 'maroon'
+    assert va._hue_name(190, 0.6, 0.6) == 'cyan'

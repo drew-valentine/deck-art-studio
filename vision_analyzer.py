@@ -2463,6 +2463,12 @@ def _hue_name(h_deg: float, sat: float, val: float) -> str:
         return 'brown'
     if base == 'red' and val < 0.45:
         return 'maroon'
+    # pastels: a light, unsaturated red or magenta is pink, a light orange is
+    # coral/peach — 'dusty red' for a pink sky skewed a pastel deck's palette
+    if base in ('red', 'magenta') and val > 0.75 and sat < 0.55:
+        return 'pale pink' if sat < 0.3 else 'pink'
+    if base == 'orange' and val > 0.8 and sat < 0.55:
+        return 'peach' if sat < 0.3 else 'coral'
     if sat < 0.4:
         return {'red': 'dusty red', 'orange': 'peach', 'yellow': 'sand', 'green': 'sage',
                 'teal': 'muted teal', 'blue': 'slate blue', 'purple': 'mauve',
@@ -2735,9 +2741,16 @@ def build_flux_style_block(image_path, style_source: str = '',
                  if _re.match(r'\s*[-*\s]*(art style|medium)\s*:', ln, _re.IGNORECASE)]
         toks = set(_re.findall(r'[a-z0-9-]+', ' '.join(lines).lower()))
         hits = {m: len(toks & _MEDIUM_KEYWORD_MAP[m]) for m in ('comic book', 'cel animation', 'ink illustration')}
-        best = max(hits.values()) if hits else 0
+        # a 'comic' or 'cel' mention is a specific idiom claim; 'linework'
+        # is true of every flat medium, so ink only wins when nothing more
+        # specific was said (a comic deck came back 'fine-line ink')
+        best = None
+        for m in ('comic book', 'cel animation', 'ink illustration'):
+            if hits.get(m):
+                best = m
+                break
         if best:
-            medium = next(m for m, v in hits.items() if v == best)
+            medium = best
             print(f"  [style] hard edges ({hardness:.2f}) + '{medium}' in the reads override 'painted illustration'")
     anchors = _medium_anchors(medium)
     if medium == 'painted illustration':
