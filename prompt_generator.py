@@ -26,6 +26,19 @@ COLOR_VIBES = {
 # ---------------------------------------------------------------------------
 # Rule-based prompt generation
 # ---------------------------------------------------------------------------
+def _strip_colour_filler(text: str) -> str:
+    """Remove the COLOR_VIBES phrases (and the generic 'mysterious magical
+    energy') from a rule-based description; the deck's own style and staging
+    say what the world looks like."""
+    out = text or ''
+    for phrase in list(COLOR_VIBES.values()) + ['mysterious magical energy']:
+        out = out.replace(phrase, '')
+    out = re.sub(r'\b(?:radiating with|infused with|surrounded by|unleashing|set in an atmosphere of|and)\s*(?=[,.])', '', out)
+    out = re.sub(r'\s*,\s*(?=[,.])', '', out)
+    out = re.sub(r'\s{2,}', ' ', out).replace(' .', '.').replace(',.', '.').strip()
+    return out
+
+
 def _is_card_back(card: dict) -> bool:
     name = (card.get('name') or '').strip().lower()
     return name.startswith('card back') or (card.get('type_line') or '').strip().lower() == 'card back'
@@ -1224,8 +1237,11 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     flavor = card.get('flavor_text', '')
     card_type = card.get('card_type', 'other')
 
-    # Rule-based description as anchor — ensures correct subject identity
-    base_desc = generate_subject_description(card)
+    # Rule-based description as anchor — ensures correct subject identity.
+    # Its mana-colour 'atmosphere' ('dense foliage, rich earth, deep water,
+    # cool mist') is filler the writer anchors on — a cosmic serpent went to
+    # a forest floor three times — so it is cut from the anchor.
+    base_desc = _strip_colour_filler(generate_subject_description(card))
 
     # Type-specific guidance so the LLM knows WHAT to depict
     # NO_CHARACTER cards must NOT get a person/face/creature as the focal point —
@@ -1481,6 +1497,9 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
          if has_steer else "")
         + f"Card: {name}\nType: {type_line}\n{rules_line}"
         + (f"Flavor text (use this as the THEMATIC ANCHOR for the scene): {safe_flavor}\n" if safe_flavor else "")
+        + (f"User steer (OVERRIDES the reference description wherever they "
+           f"conflict): {steer.strip()}\n" if steer and steer.strip() else "")
+        + f"Reference description: {base_desc}\n"
         + f"Direction: {guidance}\n"
         + figure_line
         + _body_line(card, local_model, steer_present=has_steer)
@@ -1502,10 +1521,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
            "one atmospheric detail. Three sentences, about sixty words.\n" if is_flat else
            "One subject. Then camera and scale, one strong light, one moment, one "
            "atmospheric detail. Three sentences, about sixty words.\n")
-        + (f"User steer (OVERRIDES the reference description wherever they "
-           f"conflict): {steer.strip()}\n" if steer and steer.strip() else "")
-        + f"Reference description: {base_desc}\n"
-        f"Ground the scene in this card's name and flavor — concrete subjects, not "
+        +         f"Ground the scene in this card's name and flavor — concrete subjects, not "
         f"abstract energy. Rewrite into a scene description (three sentences, about sixty words):"
     )
 
