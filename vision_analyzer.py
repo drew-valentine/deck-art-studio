@@ -1673,6 +1673,11 @@ def style_idiom_recall(style_source: str, text_model: str,
     return phrases
 
 
+_SUBJECT_ITEM_RE = re.compile(
+    r"\b(?:creatures?|winged|deit(?:y|ies)|masses|characters?|people|crowds?|poses?|monsters?|beasts?|"
+    r"figures? (?:in|of|with)|warriors?|soldiers?|heroes|hero|villains?)\b", re.IGNORECASE)
+
+
 def style_idiom_seen(image_path, style_source: str, vision_model: str,
                      exclude=(), max_words: int = _IDIOM_MAX_WORDS) -> list:
     """What the vision model SEES of the idiom in a reference when told whose
@@ -1689,7 +1694,9 @@ def style_idiom_seen(image_path, style_source: str, vision_model: str,
             lead + "Describe the DRAWING IDIOM that "
             "makes this style recognizable, as visible in this image: line quality "
             "(weight, wobble, cleanliness), how eyes, faces and anatomy are drawn, "
-            "shading method, recurring textures or motifs. Output ONLY a comma-"
+            "shading method, recurring textures or motifs, and any signature surface treatment "
+            "applied to the figures themselves (a texture or pattern filling their silhouette). "
+            "Output ONLY a comma-"
             "separated list of 6-8 short concrete phrases. Never name characters, "
             "people, places or the creator.",
             model=vision_model, max_tokens=120, temperature=0.0)
@@ -2404,6 +2411,7 @@ def pixel_palette(image_path, n_bins: int = 12):
             acc = bins.setdefault(key, [0, 0.0, 0.0, 0.0])
             acc[0] += 1; acc[1] += h * 360; acc[2] += sv; acc[3] += v
         paper = paper_n / total
+        lum = sum(0.299 * r + 0.587 * g + 0.114 * b for r, g, b in px) / (255.0 * total)
         ranked = sorted(bins.items(), key=lambda kv: -kv[1][0])
         hues = []
         for _, (n, hs, ss, vs) in ranked:
@@ -2414,7 +2422,8 @@ def pixel_palette(image_path, n_bins: int = 12):
                 hues.append(name)
             if len(hues) >= 5:
                 break
-        return {'hues': hues, 'paper': round(paper, 3), 'saturation': round(sat_sum / total, 3)}
+        return {'hues': hues, 'paper': round(paper, 3), 'saturation': round(sat_sum / total, 3),
+                'luminance': round(lum, 3)}
     except Exception as e:
         print(f"  [style] pixel palette failed: {e}")
         return None
@@ -2434,8 +2443,17 @@ def pixel_coverage_phrase(stats) -> str:
     if paper >= 0.35:
         return 'coloured figures and objects on open white paper'
     if sat >= 0.38:
-        return 'fully coloured with saturated flat colour fills, no bare white paper'
-    return 'fully coloured with soft muted fills, no bare white paper'
+        base = 'fully coloured with saturated flat colour fills, no bare white paper'
+    else:
+        base = 'fully coloured with soft muted fills, no bare white paper'
+    # tonal key, measured: dark references rendered as pastel skies until the
+    # block said so (a night-sky deck came out pink and powder blue)
+    lum = stats.get('luminance')
+    if lum is not None and lum < 0.38:
+        base += ', dark low-key palette, deep shadows with small bright highlights'
+    elif lum is not None and lum > 0.72:
+        base += ', bright high-key palette'
+    return base
 
 
 def _medium_anchors(medium: str) -> list:
@@ -2480,7 +2498,8 @@ def pixel_coverage_from_refs(image_path, reference_paths=None) -> str:
     if not stats:
         return ''
     mean = {'paper': sum(x['paper'] for x in stats) / len(stats),
-            'saturation': sum(x['saturation'] for x in stats) / len(stats)}
+            'saturation': sum(x['saturation'] for x in stats) / len(stats),
+            'luminance': sum(x.get('luminance', 0.5) for x in stats) / len(stats)}
     return pixel_coverage_phrase(mean)
 
 
@@ -2571,6 +2590,21 @@ def build_flux_style_block(image_path, style_source: str = '',
     else:
         medium = _classify_medium_from_evidence(stored_descriptions, best_prose, text_model)
     anchors = _medium_anchors(medium)
+    if medium == 'painted illustration':
+        # the bucket's anchor said 'flat opaque paint' for EVERY painted deck,
+        # and the writer then stripped all light from the scene — for cosmic
+        # references built from glow and atmospheric depth that deleted the
+        # vibe. Decide flat vs painterly from the evidence, like the ink axes.
+        ev_p = ((stored_descriptions or '') or evidence).lower()
+        _np = lambda words: sum(ev_p.count(w) for w in words)
+        painterly = _np(('gradient', 'soft transition', 'glow', 'luminous', 'atmospheric', 'airbrush',
+                         'blend', 'soft edge', 'diffused', 'gradation', 'highlight', 'rim light',
+                         'layered brushwork', 'volumetric'))
+        flat = _np(('flat', 'opaque', 'gouache', 'poster', 'cel-shaded', 'solid fill', 'block colour',
+                    'block color', 'matte'))
+        if painterly > flat:
+            anchors = ['painterly digital painting', 'soft blended brushwork',
+                       'luminous highlights and deep shadows', 'atmospheric depth']
     _ev_phrase = _evidence_medium_phrase(stored_descriptions, medium)
     if anchors and _ev_phrase and _ev_phrase not in ' '.join(anchors):
         anchors.insert(1, _ev_phrase)
@@ -2647,7 +2681,10 @@ def build_flux_style_block(image_path, style_source: str = '',
     modified = [h for h in hues if ' ' in h]
     bare = [h for h in hues if ' ' not in h]
     hues = (modified + bare)[:6] if len(modified) < 3 else modified[:6]
-    motifs = motifs[:2]
+    # a motif that names a SUBJECT or a pose ('winged creature', 'dynamic pose',
+    # 'undead masses') is the reference's content, not its style — it grew
+    # wings on a flightless serpent
+    motifs = [m for m in motifs if not _SUBJECT_ITEM_RE.search(m)][:2]
 
     parts = list(anchors)
     # named-style idiom (see style_idiom_descriptors) sits right after the
@@ -2661,7 +2698,8 @@ def build_flux_style_block(image_path, style_source: str = '',
     parts.extend(recalled)            # deterministic knowledge: foundation
     parts.extend(motifs)
     # a VLM read of the reference (needs no name): enrichment, after the foundation
-    parts.extend(style_idiom_seen(image_path, style_source, vision_model, exclude=recalled))
+    parts.extend(p for p in style_idiom_seen(image_path, style_source, vision_model, exclude=recalled)
+                 if not _SUBJECT_ITEM_RE.search(p))
     if influence:
         parts.append(influence)
     out, count = [], 0

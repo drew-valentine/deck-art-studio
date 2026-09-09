@@ -1813,6 +1813,12 @@ def _style_reference_settings(meta) -> dict:
     # (256 tokens); scenery / pattern references keep Strong. A setting the
     # user has touched (user_set) is never overridden.
     stored = (meta or {}).get('style_reference') or {}
+    imgs_all = (meta or {}).get('inspiration_images') or []
+    if stored.get('max_images') == 1 and not stored.get('max_images_user_set') and len(imgs_all) > 1:
+        # legacy default of ONE reference: a single reference at Strong leaks
+        # its figures (two aliens on a card back, wings on a serpent);
+        # averaging needs at least two, so use the current default
+        cfg['max_images'] = min(STYLE_REFERENCE_MAX_IMAGES, STYLE_REFERENCE_DEFAULT['max_images'])
     if not stored.get('user_set') and cfg['enabled'] and cfg['tokens'] > STYLE_REFERENCE_MEDIUM_TOKENS:
         imgs = (meta or {}).get('inspiration_images') or []
         if any(isinstance(im, dict) and im.get('prominent_character') is True for im in imgs):
@@ -3500,8 +3506,15 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         reference_paths=ref_paths)
     # the drawing idiom as a list, for the scene writer's creature clause
     # (memoized — the block builder above already asked)
-    data['style_idiom'] = (style_idiom_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
-                           if style_source else [])
+    if style_source:
+        data['style_idiom'] = style_idiom_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
+    else:
+        # no name to recall from: read the idiom off the references themselves
+        # (an unnamed cosmic-painting deck had an empty idiom and its figures
+        # lost the starfield-in-the-body device that defines it)
+        from vision_analyzer import style_idiom_seen, _SUBJECT_ITEM_RE
+        data['style_idiom'] = [p for p in style_idiom_seen(first_img, '', bcfg.get('ollama_vision_model', 'llava:7b'))
+                               if not _SUBJECT_ITEM_RE.search(p)]
     from vision_analyzer import style_lineage_recall, style_source_kind
     from prompt_generator import franchise_style_phrase
     # franchise / artist / movement — recalled, so a new source needs no table entry
@@ -4109,6 +4122,7 @@ def api_style_reference(deck_id):
             cfg['max_images'] = max(1, min(STYLE_REFERENCE_MAX_IMAGES, int(body['max_images'])))
         except (TypeError, ValueError):
             return jsonify({'error': 'max_images must be an integer'}), 400
+        cfg['max_images_user_set'] = True       # a deliberate single reference stays single
     if 'average' in body:
         cfg['average'] = bool(body['average'])
     cfg['user_set'] = True          # the user's choice outranks the auto default

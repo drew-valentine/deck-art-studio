@@ -66,8 +66,10 @@ class TestSettings:
         paths = ds._style_reference_images(meta, tmp_path)
         assert len(paths) == ds.STYLE_REFERENCE_MAX_IMAGES   # all refs (averaged), hard cap
         assert paths[0].endswith('i0.png')
-        one = ds._style_reference_images({**meta, 'style_reference': {'max_images': 1}}, tmp_path)
+        # a deliberate single reference (the user set it) stays single; a legacy 1 averages the default
+        one = ds._style_reference_images({**meta, 'style_reference': {'max_images': 1, 'max_images_user_set': True}}, tmp_path)
         assert len(one) == 1
+        assert len(ds._style_reference_images({**meta, 'style_reference': {'max_images': 1}}, tmp_path)) == ds.STYLE_REFERENCE_MAX_IMAGES
         assert ds._style_reference_images({**meta, 'style_reference': {'enabled': False}}, tmp_path) == []
         assert ds._style_reference_images(meta, None) == []
 

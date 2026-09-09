@@ -1174,11 +1174,31 @@ def _strip_example_leak(text: str, card: dict) -> str:
     return out
 
 
+def minimal_scene(card: dict) -> str:
+    """The last-resort scene when the writer fails twice: the subject, whole
+    and large, in a fitting place. Never the mana-colour filler ('dense
+    foliage, rich earth, deep water, cool mist') the rule-based describer
+    adds, which overrode a cosmic deck's whole vibe."""
+    name = (card.get('name') or 'The subject').split(' // ')[0]
+    ctype = card.get('card_type', '')
+    tl = (card.get('type_line') or '').split(' // ')[0]
+    sub = tl.split('—', 1)[1].strip() if '—' in tl else ''
+    if ctype in ('creature', 'planeswalker') and sub:
+        return f"{name}, a {sub}, shown whole and large, caught mid-action in a fitting place with depth behind it."
+    if ctype == 'artifact':
+        lit = _literal_object_from_name(name) or 'the object itself'
+        return f"{name}, {lit}, shown whole and large where such a thing is found, with the place behind it."
+    if ctype == 'land':
+        return f"{name}, the place itself, seen from a deliberate vantage with one vast feature dominating the frame."
+    return f"{name}, its literal subject shown whole and large in a fitting place with depth behind it."
+
+
 def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'openai',
                               local_model: str = 'llama3.1:8b',
                               style_hint: str = '', steer: str = '',
                               style_source_name: str = '', staging: str = '',
-                              figure_idiom: str = '', style_source_kind: str = '') -> str:
+                              figure_idiom: str = '', style_source_kind: str = '',
+                              _retrying: bool = False) -> str:
     """Use an LLM to generate a subject description tailored to the deck's style.
 
     Sends the LLM a rule-based description as a reference anchor plus
@@ -1780,12 +1800,19 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         if len(out.split()) < 5:
             # the backstops can strip a draft down to nothing (a franchise
             # sentence, a fragment); never persist an empty prompt
-            print(f"  [prompt_gen] AI draft for {name} emptied by backstops, using rule-based")
-            return generate_subject_description(card)
+            print(f"  [prompt_gen] AI draft for {name} emptied by backstops, using the minimal scene")
+            return minimal_scene(card)
         return _ensure_creature_type_in_prompt(_ensure_subject_opening(out, card), card)
     except Exception as e:
-        print(f"  [prompt_gen] AI failed for {name}: {e}, using rule-based")
-        return generate_subject_description(card)
+        if not _retrying:
+            # the MLX worker exits under memory pressure now and then; one
+            # retry beats shipping a filler prompt
+            print(f"  [prompt_gen] AI failed for {name}: {e}, retrying once")
+            return generate_subject_with_ai(card, openai_client, backend, local_model, style_hint, steer,
+                                            style_source_name, staging, figure_idiom, style_source_kind,
+                                            _retrying=True)
+        print(f"  [prompt_gen] AI failed for {name}: {e}, using the minimal scene")
+        return minimal_scene(card)
 
 
 # Franchise -> de-named genre phrase. A franchise NAME in any model-facing

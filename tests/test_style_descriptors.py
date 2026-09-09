@@ -1194,3 +1194,43 @@ def test_creature_type_appositive_never_doubles_a_comma():
     out = _ensure_creature_type_in_prompt('Ohran Frostfang, a Snake, stretches across the floor.',
                                           {'name': 'Ohran Frostfang', 'type_line': 'Snow Creature — Snake', 'card_type': 'creature'})
     assert ',,' not in out and out.startswith('Ohran Frostfang, a Snake,')
+
+
+def test_tonal_key_and_subject_items_and_minimal_scene(monkeypatch):
+    import vision_analyzer as va, prompt_generator as pg, deck_studio as ds
+    dark = va.pixel_coverage_phrase({'paper': 0.02, 'saturation': 0.3, 'luminance': 0.22})
+    assert 'dark low-key palette' in dark and 'soft muted fills' in dark
+    assert 'high-key' in va.pixel_coverage_phrase({'paper': 0.05, 'saturation': 0.4, 'luminance': 0.8})
+    assert 'low-key' not in va.pixel_coverage_phrase({'paper': 0.05, 'saturation': 0.4, 'luminance': 0.5})
+    assert va._SUBJECT_ITEM_RE.search('winged creature') and va._SUBJECT_ITEM_RE.search('dynamic pose')
+    assert not va._SUBJECT_ITEM_RE.search('elongated faces with sparse features')
+    # legacy single reference on a multi-reference deck averages again; a deliberate one stays
+    meta = {'style_reference': {'enabled': True, 'tokens': 729, 'strength': 1.0, 'max_images': 1, 'average': True, 'user_set': True},
+            'inspiration_images': [{'filename': 'a.png'}, {'filename': 'b.png'}, {'filename': 'c.png'}]}
+    assert ds._style_reference_settings(meta)['max_images'] == 4
+    meta['style_reference']['max_images_user_set'] = True
+    assert ds._style_reference_settings(meta)['max_images'] == 1
+    # the minimal scene never carries mana-colour filler
+    m = pg.minimal_scene({'name': 'Koma, Cosmos Serpent', 'type_line': 'Legendary Creature — Serpent', 'card_type': 'creature',
+                          'color_identity': ['G', 'U']})
+    assert m.startswith('Koma, Cosmos Serpent, a Serpent') and 'foliage' not in m
+
+
+def test_writer_retries_once_after_a_worker_crash(monkeypatch):
+    import sys, types
+    import prompt_generator as pg
+    calls = {'n': 0}
+    def chat(messages, **kw):
+        calls['n'] += 1
+        if calls['n'] == 1:
+            raise RuntimeError('MLX worker exited unexpectedly (code -6)')
+        return 'Sol Ring, a gold ring, rests on a stump. Grey mud lies around it under a white sky. Dust drifts.'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    out = pg.generate_subject_with_ai({'name': 'Sol Ring', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'},
+                                      None, backend='local', local_model='m')
+    assert 'stump' in out and calls['n'] >= 2
+    def chat_dead(messages, **kw): raise RuntimeError('dead')
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat_dead))
+    out2 = pg.generate_subject_with_ai({'name': 'Sol Ring', 'type_line': 'Artifact', 'oracle_text': '', 'card_type': 'artifact'},
+                                       None, backend='local', local_model='m')
+    assert out2.startswith('Sol Ring, a single ornate ring') and 'mist' not in out2
