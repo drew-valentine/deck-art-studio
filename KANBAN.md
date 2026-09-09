@@ -255,6 +255,20 @@
 
 ## Done
 
+- [x] Cosmic-painting references now transfer (Koma deck vibe gap) | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits b07848c and 2bfd404.
+  - Reported gap: the cosmos-serpent deck's dark painterly references — figures whose bodies are a starfield, oppressive skies, a glow at the horizon — rendered flat, pastel and winged.
+  - Six generic causes found and fixed:
+    - The 'painted illustration' bucket's anchor said 'flat opaque paint' for every painted deck, so the writer stripped all light. Painterly against flat is now decided from the evidence (gradients and glow against flat and opaque), with anchors 'painterly digital painting, soft blended brushwork, luminous highlights and deep shadows, atmospheric depth'.
+    - No tonal key reached the prompt. The coverage clause now carries a measured luminance key — 'dark low-key palette, deep shadows with small bright highlights' or 'bright high-key'.
+    - Unnamed sources got no idiom read at all. The reference idiom read now runs without a name.
+    - Subject nouns and props from the reference read ('winged creature', 'dynamic pose', 'flowing wings', 'intricate chains') sat in the block and the idiom and grew wings on a flightless serpent. Filtered by a category rule.
+    - A legacy stored reference count of 1 on a multi-reference deck sent one reference at Strong. It now averages the default unless the user set it.
+    - A worker crash fell back to mana-colour filler ('dense foliage, rich earth, deep water, cool mist'). The writer retries once, then uses a minimal subject-true scene.
+  - Also shipped: a majority read across the references of the signature surface treatment inside the figures' silhouettes (`style_surface_device`, e.g. 'starfield'), appended to the block and given to the writer as a Surface line for creatures.
+  - Validated on the deck after re-analysis: the block reads painterly and dark low-key; the serpent renders dark and painterly with a galaxy inside its coils at both seeds, no wings. The card back is ornamental — the averaged references still lend it wing shapes.
+  - Sheets: koma-after.jpg, koma-after2.jpg.
+
 - [x] H94 — the no-people clause rides in the prompt head for objects, places and card backs | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
   - Branch: `feat/night-composition`, commit ce55564.
   - Validated on the 10 object and place cards at seed 1001 against each card's current art: inspector defects 1 against 5, subject missing 1 against 3, text 0 against 3, composition judge 3 new / 1 current / 6 undecided.
