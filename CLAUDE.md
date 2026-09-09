@@ -179,6 +179,18 @@ decks/<deck-slug>/
   names a document (`_DOCUMENT_RE`). Batch `takes>1`: each later take is preceded by a PROMPT job (a fresh
   scene — two seeds of one prompt render the same picture); tied takes fall back to the scene score of the
   two prompts (`_pick_cleaner_take`). Card backs: `card_back_scene`, no-people guard, never a written scene.
+  Painterly references (2026-09-08, cosmos-serpent deck): the 'painted illustration' bucket picks PAINTERLY
+  anchors ('painterly digital painting, soft blended brushwork, luminous highlights and deep shadows,
+  atmospheric depth') when the evidence says gradients/glow, flat ones otherwise (a flat anchor made the writer
+  strip all light); `pixel_palette` measures luminance and the coverage clause carries a tonal key ('dark
+  low-key palette…' / 'bright high-key palette'); unnamed sources get `style_idiom_seen` read off the
+  references; `_SUBJECT_ITEM_RE` drops subject/pose/prop items (winged creature, dynamic pose, flowing wings,
+  intricate chains) from motifs and idiom; `style_surface_device_seen` (majority across refs) names the
+  surface treatment inside the figures' silhouettes (e.g. 'starfield') → `deck.json.style_surface_device`,
+  appended to the block and passed to the writer as a Surface line for creatures; a stored
+  `style_reference.max_images` of 1 on a multi-reference deck averages the default unless
+  `max_images_user_set`; the writer retries once after a failure and then uses `minimal_scene` (never the
+  rule-based mana-colour filler).
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
   unpaintable-abstraction strip → (flat media: rewrite without light words naming the offending
