@@ -3523,6 +3523,18 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
     if data['style_surface_device']:
         flux_style_prompt = data['flux_style_prompt'] = (
             flux_style_prompt + f", figures filled with {data['style_surface_device']}")
+    # the references' composition (camera, frame fill, horizon, sky) is a
+    # render-side fact too: the scene text kept putting a sky-staged figure in
+    # a swamp, so the block carries a short composition clause
+    _stg = (data.get('style_staging') or '').strip()
+    if _stg:
+        import re as _re
+        _first = _re.split(r'(?<=[.!?])\s+', _stg)[0]
+        _first = _re.sub(r'^\s*scenes are staged\s*', '', _first, flags=_re.IGNORECASE).strip(' .')
+        _words = _first.split()
+        if 4 <= len(_words) <= 40:
+            flux_style_prompt = data['flux_style_prompt'] = (
+                flux_style_prompt + ', composition ' + ' '.join(_words[:18]).rstrip(','))
     from vision_analyzer import style_lineage_recall, style_source_kind
     from prompt_generator import franchise_style_phrase
     # franchise / artist / movement — recalled, so a new source needs no table entry

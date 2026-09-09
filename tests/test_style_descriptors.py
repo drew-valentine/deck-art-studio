@@ -1274,3 +1274,14 @@ def test_setting_line_stages_like_the_references_and_vibe_is_majority():
     assert va._extract_vibe(descs) == ['ominous', 'otherworldly']
     assert va._extract_vibe('Vibe: calm, gentle') == ['calm', 'gentle']
     assert va._extract_vibe('') == []
+
+
+def test_surface_device_is_guaranteed_in_the_opening():
+    from prompt_generator import _ensure_surface_device
+    c = {'name': 'Koma, Cosmos Serpent', 'type_line': 'Legendary Creature — Serpent', 'card_type': 'creature'}
+    out = _ensure_surface_device('Koma, Cosmos Serpent, a Serpent, coils through the black swamp, the starfield swirling around it.', c, 'starfield')
+    assert out.startswith('Koma, Cosmos Serpent, a Serpent, its whole body made of starfield, silhouette and all, coils')
+    kept = 'Koma, Cosmos Serpent, a Serpent whose body is a starfield, rises.'
+    assert _ensure_surface_device(kept, c, 'starfield') == kept
+    assert _ensure_surface_device('Sol Ring rests.', {'name': 'Sol Ring', 'card_type': 'artifact'}, 'starfield') == 'Sol Ring rests.'
+    assert _ensure_surface_device('x', c, '') == 'x'

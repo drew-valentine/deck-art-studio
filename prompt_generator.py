@@ -1822,7 +1822,10 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             # sentence, a fragment); never persist an empty prompt
             print(f"  [prompt_gen] AI draft for {name} emptied by backstops, using the minimal scene")
             return minimal_scene(card)
-        return _ensure_creature_type_in_prompt(_ensure_subject_opening(out, card), card)
+        out = _ensure_creature_type_in_prompt(_ensure_subject_opening(out, card), card)
+        if not (steer and steer.strip()):
+            out = _ensure_surface_device(out, card, surface_device)
+        return out
     except Exception as e:
         if not _retrying:
             # the MLX worker exits under memory pressure now and then; one
@@ -2322,6 +2325,33 @@ def _ensure_steer_in_prompt(text: str, steer: str, card: dict) -> str:
     if name and name in text:
         return text.replace(name, f"{name} — {phrase} —", 1)
     return f"{phrase[:1].upper()}{phrase[1:]}: {text}"
+
+
+def _ensure_surface_device(text: str, card: dict, device: str) -> str:
+    """Deterministic guarantee, like the creature-type appositive: when the
+    style's figures are made of something (a starfield) and the writer's first
+    sentence does not say so, the clause is injected after the subject. The
+    Surface line alone was ignored four runs in a row ('the starfield swirling
+    AROUND it')."""
+    dev = (device or '').strip().rstrip('.')
+    if not text or not dev or card.get('card_type') not in ('creature', 'planeswalker'):
+        return text
+    first = re.split(r'(?<=[.!?])\s+', text.strip())[0].lower()
+    key = [w for w in re.findall(r'[a-z]{4,}', dev.lower())]
+    body = r'(?:body|skin|silhouette|form|hide|scales|flesh)'
+    if key and any(re.search(body + r'[^.;]{0,30}\b' + re.escape(w) + r'|\b' + re.escape(w) + r'[^.;]{0,30}' + body, first)
+                   for w in key):
+        return text                      # the body IS the device already
+    name = (card.get('name') or '').split(' // ')[0]
+    clause = f" its whole body made of {dev}, silhouette and all,"
+    if name and name in text:
+        i = text.index(name) + len(name)
+        # skip an existing ", a Cyclops Berserker," appositive so the clause follows it
+        m = re.match(r"(,\s*(?:a|an)\s+[A-Z][^,.]{0,40},)", text[i:])
+        if m:
+            i += m.end()
+        return text[:i] + clause + text[i:]
+    return f"{name}, its whole body made of {dev} — {text}" if name else text
 
 
 def _ensure_creature_type_in_prompt(text: str, card: dict) -> str:
