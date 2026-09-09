@@ -105,6 +105,7 @@
   - Night run closed 2026-09-08 05:25 — 15 commits on `feat/night-composition`, all pushed; every experimented card is back on its pre-night art; the owner decides the merge on the V24b sheet.
   - Reopened for the day's composition work: the owner judged v1.49.0's compositions more cohesive than today's, so the branch now also carries H90, H91, H92 and H93.
   - Not shipping yet by the owner's instruction: defects first, wow second. Rounds 3–5 on `feat/night-composition`; the remaining misses are per-roll variance, addressed by the two-scene take + inspection pick and a literal-thing retry for place/object drafts.
+  - State 2026-09-08 20:30: 40+ commits on `feat/night-composition`, 554 tests, docs current. Across the day's runs the new writer sits at roughly half the current art's inspector defect count on fresh cards, two-scene batches deliver 18 of 19 clean finals, and objects and places no longer grow onlookers. Awaiting the owner's read of the latest sheets.
 
 - [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Review Started: 2026-09-02 | Owner: drew-valentine
   - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — In Review, awaiting the owner's ship decision.
@@ -254,8 +255,20 @@
 
 ## Done
 
+- [x] H94 — the no-people clause rides in the prompt head for objects, places and card backs | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit ce55564.
+  - Validated on the 10 object and place cards at seed 1001 against each card's current art: inspector defects 1 against 5, subject missing 1 against 3, text 0 against 3, composition judge 3 new / 1 current / 6 undecided.
+  - No onlookers on any render — the thumb hangs alone in a dark room, the chasm holds no figure.
+  - Sheet: h94-objects-places.jpg.
+
+- [x] Two-scene takes through the real batch path | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits d7cc230, bbb67b5 and ca66183.
+  - Three in-app batches with takes=2 and end-of-batch inspection: picture-book 6 cards, 6 of 6 finals clean; picture-book again, 5 of 6 (a Human Shaman drawn as a pointy-eared elder, correctly flagged); comic 7 cards, 7 of 7 finals clean against 3 of 7 of the current art flagged.
+  - The scene-score tie-break decided the ties — Junk Diver's earlier take won on score. The literal-thing retry gave Command Tower a real lighthouse-tower on a coast.
+  - Sheets: twotake2-cur-vs-final.jpg, twotake3-cur-vs-final.jpg.
+
 - [x] Two takes are two scenes | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
-  - Branch: `feat/night-composition`, commit d7cc230, plus a tie-break still in progress.
+  - Branch: `feat/night-composition`, commit d7cc230, tie-break landed in bbb67b5.
   - Shipped: with `takes>1` each later take is preceded by a fresh prompt job, so the two takes are two different scenes rather than the same scene at a second seed; inspection then keeps the cleaner one.
   - Validated in the app, real batch on 6 cards: 18 jobs, all six finals at 0 defects, cards restored afterwards.
   - The VLM style pick was undecided on all 6 of the 6 defect ties, so a deterministic scene-score tie-break was added on top of it.
