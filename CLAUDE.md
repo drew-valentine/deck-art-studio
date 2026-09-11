@@ -199,6 +199,12 @@ decks/<deck-slug>/
   reads and the pixels agree on, then measured hues (`pixel_style_stats`; pastel reds/oranges are named pink/
   coral); the coverage clause carries a measured tonal key and a sky-vs-subject key. After distillation
   changes, RE-ANALYZE a deck before judging its renders — blocks are stored.
+  Anatomy under a steer (2026-09-11): `_anatomy_negatives(card)` = the 'no X' facts of the kind from the body
+  gloss (+ 'no wings' unless flying); with a steer the Body line becomes an Anatomy line carrying only those
+  (a steer about pose dropped 'no limbs' and the serpent grew legs); `_limbless(card)` appends 'It has no legs
+  and no arms…' to the scene; the inspector counts `legs=` and flags 'limbs on a limbless creature'
+  (INSPECT_LIMBS=0 mutes). Validate steers by REGENERATING the prompt — a render with the same recorded
+  steer reuses the stored prompt.
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
   unpaintable-abstraction strip → (flat media: rewrite without light words naming the offending
