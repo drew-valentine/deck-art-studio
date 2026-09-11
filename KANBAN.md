@@ -256,6 +256,20 @@
 
 ## Done
 
+- [x] A steer keeps the kind's negative anatomy; limbless kinds get a no-legs guard; the inspector counts legs | Priority: P0 | Completed: 2026-09-11 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit b105b21.
+  - Reported: a steered Koma ("the long, writhing, coiling serpent") rendered with four legs.
+  - Three causes:
+    - With a user direction the whole Body line yielded, so "no limbs, no wings" from the serpent's model-derived body gloss never reached the writer.
+    - The deck's three references are limbed humanoid figures at Strong, so the image channel grows legs unless the text forbids them.
+    - A single steer-and-render skips the end-of-batch inspection, so nothing caught it.
+  - Three fixes:
+    - The kind's "no X" facts survive a steer as an Anatomy line; appearance still yields to the steer.
+    - A limbless kind's scene ends deterministically with "no legs and no arms, a limbless body from head to tail".
+    - The inspector counts legs and flags "limbs on a limbless creature" the way it flags wings on a flightless one.
+  - Validated: the prompt regenerated through the writer with the owner's steer and without it, both rendered at seed 1001 — no legs on either. Sheet: koma-limbless2.jpg.
+  - For the record: a first validation reused the card's stored prompt, because the same steer was already recorded on the card, so it never exercised the writer. Validate steers by regenerating.
+
 - [x] Regression sweeps after the Koma fixes | Priority: P0 | Completed: 2026-09-09 | Owner: drew-valentine
   - Branch: `feat/night-composition`, commits d3c361e, fad2e33 and 36f0d6a.
   - Sweep 1 (re-analyze three decks, then 21 fresh cards) caught read variance rather than a code regression: the comic deck re-analysed as painterly — 'Medium: Digital painting' is the vision model's answer for any digital art — and the pastel deck's palette came back 'deep red, vibrant purple'.
