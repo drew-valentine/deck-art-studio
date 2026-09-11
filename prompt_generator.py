@@ -1825,6 +1825,8 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         out = _ensure_creature_type_in_prompt(_ensure_subject_opening(out, card), card)
         if not (steer and steer.strip()):
             out = _ensure_surface_device(out, card, surface_device)
+        if _limbless(card, local_model) and not re.search(r'\b(?:limbless|no legs|no arms|no limbs)\b', out, re.IGNORECASE):
+            out = out.rstrip() + ' It has no legs and no arms, a limbless body from head to tail.'
         return out
     except Exception as e:
         if not _retrying:
@@ -2008,15 +2010,46 @@ def _strip_wings(text: str, card: dict) -> str:
     return ' '.join(sents) if sents else text
 
 
+def _anatomy_negatives(card: dict, local_model: str = '') -> list:
+    """The 'no X' facts of a creature's kind, from the model-derived body gloss
+    ('Long, slender body, narrow head, no limbs, no wings, tapering tail' ->
+    ['no limbs', 'no wings']). Kept even under a user steer: a steer about
+    pose ('long, writhing, coiling') dropped the whole Body line and the
+    serpent grew legs."""
+    tl = (card.get('type_line') or '').split(' // ')[0]
+    if card.get('card_type') != 'creature' or '—' not in tl:
+        return []
+    kind = ' '.join(tl.split('—', 1)[1].strip().split()).lower()
+    gloss = _BODY_GLOSS.get(kind) or (_body_gloss(kind, local_model) if local_model else '')
+    negs = [m.group(0).strip().lower() for m in re.finditer(r"\bno (?:[a-z]+(?: or [a-z]+)?)", gloss or '')]
+    if not _card_flies(card) and not any('wing' in n for n in negs):
+        negs.append('no wings')
+    return list(dict.fromkeys(negs))
+
+
+def _limbless(card: dict, local_model: str = '') -> bool:
+    return any(re.search(r'\bno (?:limbs|legs|arms)\b', n) for n in _anatomy_negatives(card, local_model))
+
+
 def _body_line(card: dict, local_model: str = '', steer_present: bool = False) -> str:
     """H45: the first creature subtype names WHAT the body is — Magic writes
     race/animal first, class second ("Bat God" is a bat, "Human Wizard" a
     human). The writer otherwise gives a Bat God a woman's face with wings.
     Deterministic, no creature tables."""
-    if card.get('card_type') != 'creature' or steer_present:
-        # with a user direction the user owns the appearance entirely; the
-        # Body line's own anatomy ideas (wings for a corrupted elf) fought it
+    if card.get('card_type') != 'creature':
         return ''
+    if steer_present:
+        # with a user direction the user owns the appearance entirely; the
+        # Body line's own anatomy ideas (wings for a corrupted elf) fought it.
+        # The kind's NEGATIVE anatomy stays, though: a steer about pose is
+        # not a steer about legs, and the serpent grew four of them.
+        negs = _anatomy_negatives(card, local_model)
+        if not negs:
+            return ''
+        tl = (card.get('type_line') or '').split(' // ')[0]
+        kind = tl.split('—', 1)[1].strip().lower() if '—' in tl else 'creature'
+        return (f"Anatomy (kept under the USER DIRECTION): a {kind} has {', '.join(negs)} — "
+                "never draw what its kind lacks.\n")
     type_line = card.get('type_line', '') or ''
     if '—' not in type_line:
         return ''

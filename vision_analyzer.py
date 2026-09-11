@@ -1927,7 +1927,7 @@ def _parse_counts(text: str) -> dict:
     subject=yes; hands_ok=yes' (order-free, tolerant of prose around it)."""
     import re as _re
     out = {}
-    for key in ('heads', 'arms', 'hands', 'copies', 'wings'):
+    for key in ('heads', 'arms', 'hands', 'copies', 'wings', 'legs'):
         m = _re.search(key + r'\s*[=:]\s*(\d+)', text, _re.IGNORECASE)
         if m:
             out[key] = int(m.group(1))
@@ -1939,7 +1939,8 @@ def _parse_counts(text: str) -> dict:
 
 
 def inspect_render(image_path, card_name: str, card_type: str, vision_model: str,
-                   advisory: dict | None = None, subject_hint: str = '', flies: bool | None = None) -> list:
+                   advisory: dict | None = None, subject_hint: str = '', flies: bool | None = None,
+                   limbless: bool | None = None) -> list:
     """Defect checklist over a finished render, by the vision model. Asking
     the model to LIST defects made it echo the whole label list; asking it to
     COUNT (heads, arms, hands, copies of the subject) and answer yes/no
@@ -1961,6 +1962,7 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
             "EXACTLY this format and nothing else:\n"
             "heads=<number of heads on the main figure, 0 if no figure>; "
             "arms=<number of arms on the main figure>; hands=<number of hands>; "
+            "legs=<number of legs on the main figure, 0 if none>; "
             "wings=<number of wings on the main figure, 0 if none>; "
             "copies=<how many times the main subject appears>; "
             "text=<yes/no: any letters, words, numerals, handwriting or logo>; "
@@ -1994,6 +1996,10 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
             defects.append('subject missing')
         if c.get('copies', 1) > 1:        # a procession or a crowd is a scene, not a defect
             defects.append('duplicated subject')
+        if limbless and (c.get('arms', 0) > 0 or c.get('legs', 0) > 0) and os.environ.get('INSPECT_LIMBS', '1') != '0':
+            # the kind has no limbs (serpent, fish, worm): a legged render is
+            # the wrong creature, like wings on a flightless one
+            defects.append('limbs on a limbless creature')
         if flies is False and c.get('wings', 0) > 0 and os.environ.get('INSPECT_WINGS', '1') != '0':
             # the rules text has no flying: a winged render is the wrong creature
             defects.append('wings on a flightless creature')

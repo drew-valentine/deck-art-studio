@@ -812,7 +812,7 @@ def test_body_line_uses_the_whole_subtype_and_yields_to_a_steer(monkeypatch):
     monkeypatch.setenv('OBJECT_GLOSS', '0')
     card = {'card_type': 'creature', 'type_line': 'Legendary Creature — Phyrexian Zombie Elf'}
     assert 'is a phyrexian zombie elf' in pg._body_line(card)
-    assert pg._body_line(card, steer_present=True) == ''
+    assert pg._body_line(card, steer_present=True).startswith('Anatomy (kept under the USER DIRECTION)')
 
 
 def test_steer_leads_the_user_message(monkeypatch):
@@ -1060,7 +1060,7 @@ def test_human_subtypes_are_drawn_as_humans_and_artifact_guidance_has_no_example
                            'oracle_text': 'Flying'}, '')
     assert 'NO wings' not in flier
     assert pg._body_line({'name': 'Glissa', 'type_line': 'Creature — Human', 'card_type': 'creature',
-                          'oracle_text': ''}, '', steer_present=True) == ''
+                          'oracle_text': ''}, '', steer_present=True).startswith('Anatomy (kept under the USER DIRECTION)')
     src = open(pg.__file__).read()
     guidance = src[src.index("'artifact': 'Depict the artifact OBJECT"):]
     guidance = guidance[:guidance.index("',\n")]
@@ -1335,3 +1335,28 @@ def test_pastel_hue_names():
     assert va._hue_name(20, 0.35, 0.9) == 'coral'
     assert va._hue_name(345, 0.4, 0.3) == 'maroon'
     assert va._hue_name(190, 0.6, 0.6) == 'cyan'
+
+
+def test_limbless_kinds_keep_their_anatomy_under_a_steer(monkeypatch):
+    import sys, types
+    import prompt_generator as pg, vision_analyzer as va
+    pg._BODY_GLOSS['serpent'] = 'Long, slender body, narrow head, no limbs, no wings, tapering tail'
+    card = {'name': 'Koma, Cosmos Serpent', 'type_line': 'Legendary Creature — Serpent', 'card_type': 'creature', 'oracle_text': ''}
+    assert pg._anatomy_negatives(card) == ['no limbs', 'no wings'] and pg._limbless(card)
+    line = pg._body_line(card, '', steer_present=True)
+    assert line.startswith('Anatomy (kept under the USER DIRECTION): a serpent has no limbs, no wings')
+    seen = []
+    def chat(messages, **kw):
+        seen.append(messages[1]['content'])
+        return 'Koma, Cosmos Serpent, a Serpent, a long writhing coiling serpent, stretches across the dusty plain. Boulders lie about under the stars.'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=chat))
+    out = pg.generate_subject_with_ai(card, None, backend='local', local_model='m', steer='Koma the long, writhing, coiling serpent')
+    assert 'Anatomy (kept under the USER DIRECTION)' in seen[0]
+    assert 'no legs and no arms' in out and 'writhing' in out
+    # the inspector flags legs on a limbless kind
+    def vision(path, prompt, **kw):
+        return 'heads=1; arms=0; hands=0; legs=4; wings=0; copies=1; text=no; signature=no; subject=yes; hands_ok=yes; composition=yes; face=yes; body=yes'
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=vision, chat=chat))
+    monkeypatch.setenv('INSPECT_SUBJECT', '0'); monkeypatch.setenv('INSPECT_CENTRE_TEXT', '0')
+    defects = va.inspect_render('x.png', 'Koma, Cosmos Serpent', 'creature', 'vm', flies=False, limbless=True)
+    assert 'limbs on a limbless creature' in defects

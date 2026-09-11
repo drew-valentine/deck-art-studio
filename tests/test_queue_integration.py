@@ -324,7 +324,7 @@ def test_inspect_job_rerolls_defective_cards_once(monkeypatch, tmp_path):
     cards = [{'name': 'Keiga, the Tide Star', 'card_type': 'creature'}, {'name': 'Sol Ring', 'card_type': 'artifact'}]
     ctx = {'cards': cards, 'raw_art_dir': raw, 'deck_name': 'D'}
     verdicts = {'Keiga, the Tide Star': ['doubled head'], 'Sol Ring': []}
-    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='', flies=None: verdicts[name])
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='', flies=None, limbless=None: verdicts[name])
     monkeypatch.setattr(ds, 'has_second_art_face', lambda c: False)
     monkeypatch.setattr(ds, '_ollama_work_start', lambda: None)
     monkeypatch.setattr(ds, '_ollama_work_done', lambda: None)
@@ -372,7 +372,7 @@ def test_inspection_keeps_the_cleaner_take(monkeypatch, tmp_path):
     card = {'name': 'Keiga, the Tide Star', 'card_type': 'creature'}
     ctx = {'cards': [card], 'raw_art_dir': raw, 'composite_dir': comp, 'versions_dir': vroot, 'deck_name': 'D'}
     verdicts = {'keiga_the_tide_star.png': ['doubled head'], 'v1_raw.png': []}
-    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='', flies=None: verdicts[path.name])
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='', flies=None, limbless=None: verdicts[path.name])
     monkeypatch.setattr(ds, 'has_second_art_face', lambda c: False)
     monkeypatch.setattr(ds, '_ollama_work_start', lambda: None)
     monkeypatch.setattr(ds, '_ollama_work_done', lambda: None)
@@ -398,7 +398,7 @@ def test_final_inspection_hides_edge_signature_by_zoom(monkeypatch, tmp_path):
     deck_json = tmp_path / 'deck.json'; json.dump({'cards': [dict(card)]}, open(deck_json, 'w'))
     ctx = {'cards': [card], 'raw_art_dir': raw, 'composite_dir': comp, 'versions_dir': tmp_path / 'v',
            'deck_dir': tmp_path, 'meta': {}, 'deck_name': 'D'}
-    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='', flies=None: ['signature'])
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='', flies=None, limbless=None: ['signature'])
     monkeypatch.setattr(ds, 'has_second_art_face', lambda c: False)
     monkeypatch.setattr(ds, '_ollama_work_start', lambda: None)
     monkeypatch.setattr(ds, '_ollama_work_done', lambda: None)
@@ -442,7 +442,7 @@ def test_tied_takes_are_decided_by_style_pick(monkeypatch, tmp_path):
     import vision_analyzer as va
     from generation_queue import Job, INSPECT
     raw, comp, ctx = _two_take_ctx(tmp_path, monkeypatch)
-    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='', flies=None: [])
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='', flies=None, limbless=None: [])
     asked = []
     monkeypatch.setattr(va, 'pick_take', lambda refs, a, b, name, vm: (asked.append((len(refs), a.name, b.name)) or 'b'))
     job = Job(id='j', type=INSPECT, deck_id='d', card_name='', params={'final': True, 'takes': 2, 'card_names': ['Keiga, the Tide Star']})
@@ -557,7 +557,7 @@ def test_subject_missing_reroll_leads_with_the_literal_object(monkeypatch, tmp_p
     raw = tmp_path / 'raw_art'; raw.mkdir(); (raw / 'arcane_signet.png').write_bytes(b'x')
     card = {'name': 'Arcane Signet', 'card_type': 'artifact'}
     ctx = {'cards': [card], 'raw_art_dir': raw, 'deck_name': 'D', 'prompts': {'Arcane Signet': 'A silver ring lies on a desk.'}}
-    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='', flies=None: ['subject missing'])
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='', flies=None, limbless=None: ['subject missing'])
     monkeypatch.setattr(ds, 'has_second_art_face', lambda c: False)
     monkeypatch.setattr(ds, '_ollama_work_start', lambda: None)
     monkeypatch.setattr(ds, '_ollama_work_done', lambda: None)
@@ -706,7 +706,7 @@ def test_tied_takes_fall_back_to_the_scene_score(monkeypatch, tmp_path):
               open(raw / 'keiga_the_tide_star.meta.json', 'w'))
     json.dump({'card_prompt': 'Keiga, the Tide Star, a Dragon Spirit, rears out of a green wave and hurls white spray. Red sky.'},
               open(vdir / 'v1_meta.json', 'w'))
-    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='', flies=None: [])
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='', flies=None, limbless=None: [])
     monkeypatch.setattr(va, 'pick_take', lambda *a: None)
     job = Job(id='j', type=INSPECT, deck_id='d', card_name='', params={'final': True, 'takes': 2, 'card_names': ['Keiga, the Tide Star']})
     ds._execute_inspect_job(job, ctx)

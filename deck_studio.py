@@ -4625,7 +4625,8 @@ def _pick_cleaner_take(name, card, raw_path, defects, ctx, vmodel, inspect_rende
     if not prev_raw.exists():
         return defects
     prev_defects = inspect_render(prev_raw, name, card.get('card_type', ''), vmodel,
-                                  subject_hint=_inspect_subject_hint(card), flies=_card_flies_for_inspect(card))
+                                  subject_hint=_inspect_subject_hint(card), flies=_card_flies_for_inspect(card),
+                                  limbless=_card_limbless_for_inspect(card))
     if prev_defects is None:
         return defects
     if len(prev_defects) > len(defects or []):
@@ -4669,6 +4670,18 @@ def _pick_cleaner_take(name, card, raw_path, defects, ctx, vmodel, inspect_rende
         shutil.copy2(prev_comp, comp_path)
     print(f"  [inspect] {name}: kept the earlier take ({len(prev_defects)} defects vs {len(defects or [])})")
     return prev_defects
+
+
+def _card_limbless_for_inspect(card):
+    """True for a creature whose kind has no limbs (from the memoised body
+    gloss); None otherwise or when unknown."""
+    if card.get('card_type') not in ('creature', 'planeswalker'):
+        return None
+    try:
+        from prompt_generator import _limbless
+        return True if _limbless(card, '') else None
+    except Exception:
+        return None
 
 
 def _card_flies_for_inspect(card):
@@ -4752,7 +4765,8 @@ def _execute_inspect_job(job, ctx):
             for face_label, path in faces:
                 advisory = {}
                 defects = inspect_render(path, name, card.get('card_type', ''), vmodel, advisory=advisory,
-                                         subject_hint=_inspect_subject_hint(card), flies=_card_flies_for_inspect(card))
+                                         subject_hint=_inspect_subject_hint(card), flies=_card_flies_for_inspect(card),
+                                  limbless=_card_limbless_for_inspect(card))
                 if advisory.get('composition'):
                     print(f"  [inspect] {name} ({face_label}) composition advisory: "
                           f"{', '.join(advisory['composition'])}")
