@@ -1360,3 +1360,13 @@ def test_limbless_kinds_keep_their_anatomy_under_a_steer(monkeypatch):
     monkeypatch.setenv('INSPECT_SUBJECT', '0'); monkeypatch.setenv('INSPECT_CENTRE_TEXT', '0')
     defects = va.inspect_render('x.png', 'Koma, Cosmos Serpent', 'creature', 'vm', flies=False, limbless=True)
     assert 'limbs on a limbless creature' in defects
+
+
+def test_film_names_classify_as_photograph_and_camera_idioms_are_dropped():
+    import vision_analyzer as va
+    assert va._classify_style_medium("70's kung fu movie", 'm') == 'photograph'
+    assert va._classify_style_medium('Wes Anderson film', 'm') == 'photograph'
+    assert va._classify_style_medium('Sergio Leone westerns', 'm') == ''      # no keyword: the model is asked next
+    assert va._UNDRAWABLE_ITEM_RE.search('dramatic sweeping camera movements')
+    assert va._UNDRAWABLE_ITEM_RE.search('exaggerated dynamic fight choreography')
+    assert not va._UNDRAWABLE_ITEM_RE.search('foggy landscapes')

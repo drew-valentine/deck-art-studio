@@ -1415,7 +1415,8 @@ _MEDIUM_KEYWORD_MAP = {
     '3d render': frozenset({'pixar', 'dreamworks', '3d', 'cgi', 'render',
                             'octane', 'unreal'}),
     'photograph': frozenset({'photo', 'photograph', 'photography', 'cinematic',
-                             'noir', 'film'}),
+                             'noir', 'film', 'films', 'movie', 'movies', 'footage', 'still', 'stills',
+                             'cinema', 'cinematography', 'live-action', 'vhs', 'celluloid'}),
     'watercolor': frozenset({'watercolor', 'watercolour', 'gouache'}),
     'oil painting': frozenset({'oil', 'impressionist', 'baroque', 'rembrandt',
                                'renaissance'}),
@@ -1700,6 +1701,11 @@ _SUBJECT_ITEM_RE = re.compile(
     # became content on every card — a chained winged orb for a card back
     r"chains?|weapons?|swords?|staffs?|staves|spears?|armou?r|cloaks?|robes?|horns?|tails?|claws?|"
     r"skulls?|crowns?|helmets?|masks?)\b", re.IGNORECASE)
+
+
+_UNDRAWABLE_ITEM_RE = re.compile(
+    r"\b(?:camera (?:movements?|work|pans?|tracking)|sweeping camera|choreograph\w*|editing|cuts?|montage|"
+    r"soundtrack|pacing|slow[- ]motion|zoom(?:s|ing)?|footage|frame rate|dialogue|narration)\b", re.IGNORECASE)
 
 
 def style_surface_device_seen(image_paths, vision_model: str) -> str:
@@ -2726,6 +2732,12 @@ def build_flux_style_block(image_path, style_source: str = '',
         # deck declared "Ancient Egyptian Hieroglyphs" whose analyses said
         # "papyrus illustration" was classified PHOTOGRAPH because the raw
         # read described a photo of a painted wall.
+        # order: the declared NAME's keywords (film, movie, stills… now hit
+        # the photograph bucket — a '70s kung fu movie' deck had been filed
+        # as '3D render' because the vision model called grainy film stills
+        # 'digital rendering'), then the stored evidence vote, then the model
+        # with the reads as evidence (a raw read of a painted wall once made
+        # it say 'photograph' for a papyrus deck — evidence stays ahead of it)
         medium = _classify_style_medium(style_source, text_model, img_desc='')
         if not medium:
             medium = _evidence_medium_vote(stored_descriptions)
@@ -2883,11 +2895,12 @@ def build_flux_style_block(image_path, style_source: str = '',
     if mood:
         parts.append('mood of ' + ', '.join(mood))    # the reads' own register, by majority
     recalled = style_idiom_recall(style_source, text_model) if style_source else []
+    recalled = [p for p in recalled if not _UNDRAWABLE_ITEM_RE.search(p)]   # 'sweeping camera movements' cannot be painted
     parts.extend(recalled)            # deterministic knowledge: foundation
     parts.extend(motifs)
     # a VLM read of the reference (needs no name): enrichment, after the foundation
     parts.extend(p for p in style_idiom_seen(image_path, style_source, vision_model, exclude=recalled)
-                 if not _SUBJECT_ITEM_RE.search(p))
+                 if not _SUBJECT_ITEM_RE.search(p) and not _UNDRAWABLE_ITEM_RE.search(p))
     if influence:
         parts.append(influence)
     out, count = [], 0
