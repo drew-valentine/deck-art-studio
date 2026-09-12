@@ -2794,6 +2794,12 @@ def build_flux_style_block(image_path, style_source: str = '',
             anchors = ['painterly digital painting', 'matte painting with visible brushwork and soft edges',
                        'luminous highlights and deep shadows', 'atmospheric depth']
     _ev_phrase = _evidence_medium_phrase(stored_descriptions, medium, style_source)
+    declaration_is_medium = bool(style_source) and _classify_style_medium(style_source, text_model, img_desc='') == medium
+    if declaration_is_medium:
+        # the declaration itself names the medium ("70's kung fu movie"): it is
+        # the phrase, not the analyst's ('digital photograph' for 1970s film
+        # stills — the reads say 'digital' for anything with continuous tone)
+        _ev_phrase = style_source.strip().replace('&', 'and')
     if anchors and _ev_phrase and _ev_phrase not in ' '.join(anchors):
         anchors.insert(1, _ev_phrase)
     if anchors and anchors[0] == 'ink illustration':
@@ -2914,6 +2920,8 @@ def build_flux_style_block(image_path, style_source: str = '',
             continue
         out.append(p)
         count += n
-    line = _clean_descriptors(', '.join(out), style_source,
+    # the cleaner de-names the source inside descriptors (an artist or a show);
+    # a declaration that IS the medium ("70's kung fu movie") must stay whole
+    line = _clean_descriptors(', '.join(out), '' if declaration_is_medium else style_source,
                               max_descriptors=24, reorder=False)
     return _ensure_medium_floor(line, style_source)

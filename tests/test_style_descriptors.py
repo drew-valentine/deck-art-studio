@@ -1378,3 +1378,15 @@ def test_evidence_medium_phrase_prefers_the_declared_sources_words():
               "Art Style: 70's Kung Fu Movie\n- Medium: 70's kung fu movie footage\n"
               "- Medium: Low-resolution digitized image, possibly from a film or video clip.\n- Medium: Photograph\n")
     assert va._evidence_medium_phrase(stored, 'photograph', "70's kung fu movie") == "70's kung fu movie footage"
+
+
+def test_declared_medium_name_is_the_medium_phrase(monkeypatch):
+    import sys, types
+    import vision_analyzer as va
+    monkeypatch.setattr(va, 'style_idiom_recall', lambda *a, **k: [])
+    monkeypatch.setattr(va, 'style_idiom_seen', lambda *a, **k: [])
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(chat=lambda **kw: '', vision=lambda *a, **k: ''))
+    stored = "Source: Original\nArt Style: Digitally rendered action scene\n- Medium: Digital photograph\nColors: brown, red"
+    blk = va.build_flux_style_block('x.png', style_source="70's kung fu movie", text_model='m', stored_descriptions=stored)
+    assert blk.startswith("cinematic photograph, 70's kung fu movie, photographic lighting")
+    assert 'digital' not in blk.lower()
