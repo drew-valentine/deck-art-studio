@@ -1390,3 +1390,14 @@ def test_declared_medium_name_is_the_medium_phrase(monkeypatch):
     blk = va.build_flux_style_block('x.png', style_source="70's kung fu movie", text_model='m', stored_descriptions=stored)
     assert blk.startswith("cinematic photograph, 70's kung fu movie, photographic lighting")
     assert 'digital' not in blk.lower()
+
+
+def test_per_image_read_is_reconciled_with_a_declared_medium():
+    import vision_analyzer as va
+    txt = "Source: Original\nArt Style: Digitally rendered action scene\nColors: brown\nTechnique:\n- Medium: Digital painting\n- Edges: soft"
+    out = va._reconcile_read_with_declaration(txt, "70's kung fu movie")
+    assert "Art Style: 70's kung fu movie (cinematic photograph)" in out
+    assert '- Medium: cinematic photograph' in out and 'Digital' not in out and 'Colors: brown' in out
+    same = "Art Style: cel animation\n- Medium: digital animation"
+    assert va._reconcile_read_with_declaration(same, 'Studio Ghibli') == same      # no conflict, untouched
+    assert va._reconcile_read_with_declaration(txt, 'Sergio Leone westerns') == txt  # no recognised medium: untouched

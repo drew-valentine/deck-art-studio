@@ -373,13 +373,53 @@ def analyze_inspiration_style(image_path: str | Path, openai_client=None,
             prompt=prompt,
             model=local_model,
             max_tokens=400,
-            temperature=0.7,
+            temperature=0.3,            # 0.7 made every re-analysis a different read
         )
+        description = _reconcile_read_with_declaration(description, style_source)
         print(f"[vision] Style analysis complete: {description[:80]}...")
         return description
     except Exception as e:
         print(f"[vision] Style analysis failed: {e}")
         return ""
+
+
+def _reconcile_read_with_declaration(text: str, style_source: str) -> str:
+    """The vision model writes 'Medium: Digital painting' for grainy 1970s
+    film stills no matter what the prompt says. When the user's declaration
+    names a medium the keyword map recognises (film, movie, watercolor,
+    comic…) and the read's Art Style / Medium lines vote a different bucket,
+    those lines are rewritten from the declaration — the user's word is the
+    evidence, and it must not be contradicted in the text the user sees."""
+    if not text or not style_source:
+        return text
+    declared = _classify_style_medium(style_source, '', img_desc='')
+    if not declared:
+        return text
+    lines = text.splitlines()
+    medium_lines = [ln for ln in lines if re.match(r'\s*[-*\s]*(art style|medium)\s*:', ln, re.IGNORECASE)]
+    read = _majority_medium(medium_lines) if medium_lines else ''
+    conflict = bool(read) and read != declared
+    if not conflict and declared == 'photograph':
+        conflict = any(re.search(r'\b(?:digital|render\w*|3d|painting|painted|illustration|cgi)\b', ln, re.IGNORECASE)
+                       for ln in medium_lines)
+    if not conflict:
+        return text
+    anchors = _medium_anchors(declared)
+    head = anchors[0] if anchors else declared
+    src = style_source.strip().replace('&', 'and')
+    out = []
+    for ln in lines:
+        m = re.match(r'(\s*[-*\s]*)(art style|medium)(\s*:\s*)', ln, re.IGNORECASE)
+        if not m:
+            out.append(ln)
+            continue
+        label = m.group(2).lower()
+        if label == 'art style':
+            out.append(f"{m.group(1)}Art Style: {src} ({head})")
+        else:
+            out.append(f"{m.group(1)}Medium: {', '.join(anchors[:3]) if anchors else head}")
+    print(f"  [vision] read said '{read or 'digital'}' against the declared '{src}' ({declared}); medium lines rewritten")
+    return '\n'.join(out)
 
 
 def merge_style_descriptions(descriptions: list[str]) -> str:
