@@ -256,6 +256,24 @@
 
 ## Done
 
+- [x] A deck of 1970s film stills was filed as '3D render' — declared medium now wins in the block AND in the per-image text | Priority: P0 | Completed: 2026-09-12 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits 053308e, 000b15c, c4a7f1e and 3814522.
+  - Reported: the Alela B3 deck (declared source "70's kung fu movie", six film stills) showed a block of '3D render, digital 3d modeling' and per-image reads of 'Digitally rendered action scene / Medium: Digital painting'.
+  - Five causes:
+    - The vision model calls grainy continuous-tone stills 'digital rendering' even when told the declaration overrides it.
+    - 'movie' was not a photograph keyword, so the declaration never decided the medium.
+    - The keyword vote then ran over the wrong reads and won.
+    - The block cleaner de-named the declaration inside its own descriptors ('fu').
+    - Reads ran at temperature 0.7, so every re-analysis was a fresh roll.
+  - Five fixes, all generic:
+    - film / movie / footage / stills / cinema hit the photograph bucket at the name stage.
+    - A declaration that names a medium *is* the medium phrase, and is not de-named.
+    - The evidence phrase prefers the declaration's own words.
+    - Camera-movement, choreography and editing idioms are undrawable and are filtered from both the block and the stored idiom.
+    - Per-image reads whose Art Style / Medium lines contradict the declared medium are rewritten from the declaration; reads run at temperature 0.3.
+  - Result after re-analysis: block = 'cinematic photograph, 70's kung fu movie, photographic lighting, shallow depth of field, …, palette of dark red, brown, maroon, orange, slate blue, light gray, mood of dramatic, intense, action, …'; all six per-image reads say photograph / film stills, with no 'digital' anywhere.
+  - The owner's deck was backed up before re-analysis: `deck_backups/alela-b3.deck.json`.
+
 - [x] A steer keeps the kind's negative anatomy; limbless kinds get a no-legs guard; the inspector counts legs | Priority: P0 | Completed: 2026-09-11 | Owner: drew-valentine
   - Branch: `feat/night-composition`, commit b105b21.
   - Reported: a steered Koma ("the long, writhing, coiling serpent") rendered with four legs.
