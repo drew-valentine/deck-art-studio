@@ -2581,7 +2581,7 @@ def _medium_anchors(medium: str) -> list:
     return list(_MEDIUM_ANCHORS.get(medium, []))
 
 
-def _evidence_medium_phrase(stored_descriptions: str, medium: str) -> str:
+def _evidence_medium_phrase(stored_descriptions: str, medium: str, style_source: str = '') -> str:
     """H52: the analyst's own short 'Medium:' phrase that best matches the
     voted bucket ('papyrus parchment' for a papyrus deck the vote files under
     'painted illustration'). The bucket anchor is generic; the phrase is the
@@ -2589,16 +2589,20 @@ def _evidence_medium_phrase(stored_descriptions: str, medium: str) -> str:
     word so the image model reads it early. '' when none is usable."""
     import re as _re
     keys = _MEDIUM_KEYWORD_MAP.get(medium, frozenset())
+    # the declared source's own words outrank the analyst's: for a "70's kung
+    # fu movie" deck the phrase "70's kung fu movie footage" beats "digital
+    # still photography" (the analyst's 'digital' for grainy film stills)
+    src_words = {w for w in _re.findall(r"[a-z0-9']+", (style_source or '').lower()) if len(w) > 1}
     best, best_score = '', 0
     for ln in (stored_descriptions or '').splitlines():
         m = _re.match(r'\s*[-*\s]*medium\s*:\s*(.+)$', ln, _re.IGNORECASE)
         if not m:
             continue
         phrase = _re.split(r'[;(,.]| with | and ', m.group(1).strip())[0].strip().lower()
-        words = _re.findall(r'[a-z0-9-]+', phrase)
-        if not 1 <= len(words) <= 4:
+        words = _re.findall(r"[a-z0-9'-]+", phrase)
+        if not 1 <= len(words) <= 5:
             continue
-        score = len(set(words) & keys)
+        score = len(set(w.strip("'") for w in words) & keys) + 2 * len(set(words) & src_words)
         if score > best_score:
             best, best_score = ' '.join(words), score
     if not best or best == medium or set(best.split()) <= set(medium.split()):
@@ -2789,7 +2793,7 @@ def build_flux_style_block(image_path, style_source: str = '',
         if soft:
             anchors = ['painterly digital painting', 'matte painting with visible brushwork and soft edges',
                        'luminous highlights and deep shadows', 'atmospheric depth']
-    _ev_phrase = _evidence_medium_phrase(stored_descriptions, medium)
+    _ev_phrase = _evidence_medium_phrase(stored_descriptions, medium, style_source)
     if anchors and _ev_phrase and _ev_phrase not in ' '.join(anchors):
         anchors.insert(1, _ev_phrase)
     if anchors and anchors[0] == 'ink illustration':

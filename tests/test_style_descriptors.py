@@ -1370,3 +1370,11 @@ def test_film_names_classify_as_photograph_and_camera_idioms_are_dropped():
     assert va._UNDRAWABLE_ITEM_RE.search('dramatic sweeping camera movements')
     assert va._UNDRAWABLE_ITEM_RE.search('exaggerated dynamic fight choreography')
     assert not va._UNDRAWABLE_ITEM_RE.search('foggy landscapes')
+
+
+def test_evidence_medium_phrase_prefers_the_declared_sources_words():
+    import vision_analyzer as va
+    stored = ("Art Style: Digitally rendered action scene\n- Medium: Digital painting\n"
+              "Art Style: 70's Kung Fu Movie\n- Medium: 70's kung fu movie footage\n"
+              "- Medium: Low-resolution digitized image, possibly from a film or video clip.\n- Medium: Photograph\n")
+    assert va._evidence_medium_phrase(stored, 'photograph', "70's kung fu movie") == "70's kung fu movie footage"

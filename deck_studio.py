@@ -3507,7 +3507,9 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
     # the drawing idiom as a list, for the scene writer's creature clause
     # (memoized — the block builder above already asked)
     if style_source:
-        data['style_idiom'] = style_idiom_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
+        from vision_analyzer import _UNDRAWABLE_ITEM_RE
+        data['style_idiom'] = [p for p in style_idiom_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
+                               if not _UNDRAWABLE_ITEM_RE.search(p)]   # 'sweeping camera movements' cannot be painted
     else:
         # no name to recall from: read the idiom off the references themselves
         # (an unnamed cosmic-painting deck had an empty idiom and its figures
