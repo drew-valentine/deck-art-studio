@@ -205,6 +205,12 @@ decks/<deck-slug>/
   and no arms…' to the scene; the inspector counts `legs=` and flags 'limbs on a limbless creature'
   (INSPECT_LIMBS=0 mutes). Validate steers by REGENERATING the prompt — a render with the same recorded
   steer reuses the stored prompt.
+  Declared medium (2026-09-12): a declared source whose words hit the medium keyword map (film, movie, footage,
+  stills, cinema → photograph; watercolor; comic…) decides the bucket at the NAME stage, is the block's medium
+  phrase (not de-named by `_clean_descriptors`), and `_reconcile_read_with_declaration` rewrites a per-image
+  read's Art Style/Medium lines when they contradict it (the VLM writes 'digital painting' for 1970s film
+  stills regardless of the prompt). `_UNDRAWABLE_ITEM_RE` drops camera-movement/choreography/editing idioms.
+  Per-image reads run at temperature 0.3.
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
   unpaintable-abstraction strip → (flat media: rewrite without light words naming the offending
