@@ -1789,6 +1789,168 @@ def style_surface_device_seen(image_paths, vision_model: str) -> str:
     return best
 
 
+def _world_read_one(image_path, vision_model: str) -> str:
+    try:
+        import mlx_llm
+        r = mlx_llm.vision(
+            str(image_path),
+            # CATEGORY words only. Asked for a full sentence, the read named
+            # one picture's lighthouse and red railing and every card got a
+            # lighthouse (the H87 staging leak again)
+            "Describe the KIND of place this picture shows as a comma-separated list of category "
+            "words only, in this order: built or natural; indoors or outdoors; what the walls, "
+            "floor or ground and sky are made of; their colours; the era; how designed or "
+            "artificial it looks. Never name any specific object, building type, person, animal, "
+            "vehicle or prop — categories and materials only.",
+            model=vision_model, max_tokens=60, temperature=0.0)
+    except Exception as e:
+        print(f"  [style] world read failed: {e}")
+        return ''
+    r = ' '.join((r or '').split()).strip()
+    print(f"  [style] world read: {r}")
+    return r if 4 <= len(r.split()) <= 60 else ''
+
+
+_WORLD_BUILT_RE = re.compile(r"\b(built|natural|man-?made|constructed|urban|wild)\b", re.IGNORECASE)
+_WORLD_IN_OUT_RE = re.compile(r"\b(indoors?|interiors?|inside|outdoors?|exteriors?|outside|open[- ]air)\b", re.IGNORECASE)
+_WORLD_ERA_RE = re.compile(r"\b(\d{2,4}s|\d{1,2}(?:st|nd|rd|th) century|modern|contemporary|victorian|vintage|retro|"
+                           r"medieval|ancient|futuristic|mid-century|edwardian|baroque|gothic|art deco|prehistoric|"
+                           r"timeless|classical|industrial)\b", re.IGNORECASE)
+_WORLD_DESIGN_RE = re.compile(r"\b(artificial|designed|highly designed|staged|stylized|stylised|deliberate|"
+                              r"manicured|theatrical|set-like|pristine|natural-looking)\b", re.IGNORECASE)
+
+
+def merge_world_reads(reads, non_drawn: bool = True) -> str:
+    """Merge per-reference world reads (comma-separated category lists) by
+    MAJORITY per category — built/natural, indoors/outdoors, materials,
+    colours, era, how designed — into one category list. Deterministic:
+    a language-model merge hedged ('built or natural, outdoors or indoors')
+    and a single representative read carried one picture's colours only."""
+    # a read of the MEDIUM ('walls made of paper', 'hand-drawn') is not a
+    # read of the place
+    reads = [r for r in (reads or []) if r and r.strip()
+             and not re.search(r'\b(?:paper|canvas|hand-?drawn|parchment|vellum)\b', r, re.IGNORECASE)]
+    if not reads:
+        return ''
+    n = len(reads)
+    votes = {'built': {}, 'inout': {}, 'era': {}, 'design': {}, 'colour': {}}
+    materials = {}
+    for r in reads:
+        seen = {k: set() for k in votes}
+        seen_m = set()
+        for item in [x.strip().lower().strip('.') for x in r.split(',') if x.strip()]:
+            classified = False
+            for key, rx in (('built', _WORLD_BUILT_RE), ('inout', _WORLD_IN_OUT_RE),
+                            ('era', _WORLD_ERA_RE), ('design', _WORLD_DESIGN_RE)):
+                for m in rx.findall(item):
+                    w = m.lower().rstrip('s') if key == 'inout' else m.lower()
+                    w = {'interior': 'indoor', 'inside': 'indoor', 'exterior': 'outdoor', 'outside': 'outdoor',
+                         'open-air': 'outdoor', 'open air': 'outdoor', 'man-made': 'built', 'manmade': 'built',
+                         'constructed': 'built', 'urban': 'built', 'wild': 'natural'}.get(w, w)
+                    if key == 'design':
+                        w = 'designed'
+                    seen[key].add(w); classified = True
+            cols = {w for w in re.findall(r'[a-z-]+', item) if w in _COLOR_WORDS}
+            if cols:
+                seen['colour'] |= cols; classified = True
+            if not classified:
+                words = [w for w in re.findall(r'[a-z-]+', item) if w not in ('and', 'or', 'of', 'the', 'with', 'made', 'walls', 'wall', 'floor', 'floors', 'ground', 'sky', 'a', 'an')]
+                if 1 <= len(words) <= 4:
+                    seen_m.add(' '.join(words))
+        for key, ws in seen.items():
+            for w in ws:
+                votes[key][w] = votes[key].get(w, 0) + 1
+        for m in seen_m:
+            materials[m] = materials.get(m, 0) + 1
+
+    def _top(d, need, cap):
+        ranked = sorted(d.items(), key=lambda kv: (-kv[1], kv[0]))
+        keep = [w for w, c in ranked if c >= need][:cap]
+        return keep or [w for w, _ in ranked[:cap]]
+    need = (n // 2 + 1) if n >= 2 else 1          # a strict majority; a 2-of-4 'indoors' put a whole deck inside
+    def _strict(d, cap):
+        return [w for w, c in sorted(d.items(), key=lambda kv: (-kv[1], kv[0])) if c >= need][:cap]
+    parts = []
+    b = _strict(votes['built'], 1)
+    if b: parts.append(b[0])
+    io = _strict(votes['inout'], 1)
+    if io: parts.append(io[0] + 's')
+    # materials only by real majority (two reads out of six said 'metal' and
+    # a dinosaur got a machine room); colours may fall back to the top two
+    mats = [w for w, c in sorted(materials.items(), key=lambda kv: (-kv[1], kv[0])) if c >= need][:3]
+    if mats: parts.append('surfaces made of ' + ', '.join(mats))
+    cols = _top(votes['colour'], 2, 3) if n >= 2 else _top(votes['colour'], 1, 3)
+    if cols: parts.append('in ' + ', '.join(cols))
+    # 'modern' / 'contemporary' is the reader's word for anything designed and
+    # sent the writer to a high-tech control room; only a specific era counts
+    era = [w for w, c in sorted(votes['era'].items(), key=lambda kv: (-kv[1], kv[0]))
+           if c >= need and w not in ('modern', 'contemporary')][:1]
+    if era: parts.append(era[0])
+    if non_drawn and sum(votes['design'].values()) >= need:
+        # 'artificial / designed' is a fact about a photographed set; the
+        # reader says it of every drawing too, where it means nothing. One
+        # binary category: any design word is a vote for it
+        parts.append('designed and artificial')
+    return ', '.join(parts)
+
+
+def style_world_seen(image_paths, vision_model: str, text_model: str = '', medium: str = '') -> str:
+    """The KIND of place the references show — built or natural, indoors or
+    out, the surfaces and their colours, the era — read per reference and
+    merged to what they share. The staging read is composition only (H87),
+    so the scene writer had no idea what a place in this style looks like
+    and put every creature of a pastel built-set film style in a dry
+    wilderness. Category words only; a specific prop would be parroted."""
+    paths = [p for p in (image_paths or []) if p][:6]
+    if not paths or not vision_model:
+        return ''
+    reads = [r for r in (_world_read_one(p, vision_model) for p in paths) if r]
+    if not reads:
+        return ''
+    out = merge_world_reads(reads, non_drawn=is_non_drawn_medium(medium))
+    out = re.sub(r'^\s*(?:this picture shows|the picture shows|the image shows|the place is)\s*', '', out, flags=re.IGNORECASE)
+    print(f"  [style] world seen in {len(reads)} reference(s): {out}")
+    return out
+
+
+_EVEN_LIGHT_RE = re.compile(r"\b(?:flat|even|diffuse[d]?|soft|uniform|minimal shad\w*|no strong shadows?|"
+                            r"overcast|shadowless|ambient)\b", re.IGNORECASE)
+_HARD_LIGHT_RE = re.compile(r"\b(?:dramatic|hard|harsh|chiaroscuro|rim[- ]l\w*|strong shadows?|deep shadows?|"
+                            r"high[- ]contrast|directional|backlit|spotlight|stark)\b", re.IGNORECASE)
+
+
+def is_flat_medium_name(medium: str) -> bool:
+    low = (medium or '').lower()
+    return any(w in low for w in ('ink', 'cel', 'comic', 'pixel', 'woodblock', 'papyrus', 'fresco',
+                                  'hieroglyph', 'flat', 'manga', 'lino', 'screen print', 'etching'))
+
+
+def lighting_key(stored_descriptions: str) -> str:
+    """How the references are lit, by majority of the per-image Shading/
+    Lighting lines: 'even' (flat, diffused, no strong shadows) or 'dramatic'
+    (hard, directional, deep shadows); '' when the reads disagree or say
+    nothing. A flat-lit film style rendered golden-hour rim light on every
+    card because nothing carried the references' light to the block or the
+    writer."""
+    even = hard = n = 0
+    for ln in (stored_descriptions or '').splitlines():
+        if not re.match(r'\s*[-*\s]*(?:shading|lighting|shading\s*/\s*lighting|light)\s*:', ln, re.IGNORECASE):
+            continue
+        n += 1
+        e, h = len(_EVEN_LIGHT_RE.findall(ln)), len(_HARD_LIGHT_RE.findall(ln))
+        if e > h:
+            even += 1
+        elif h > e:
+            hard += 1
+    if n == 0:
+        return ''
+    if even * 2 > n and even > hard:
+        return 'even'
+    if hard * 2 > n and hard > even:
+        return 'dramatic'
+    return ''
+
+
 def _extract_vibe(stored_descriptions: str, cap: int = 3) -> list:
     """Mood words from the per-image 'Vibe:' lines, kept when at least two
     reads agree (or all we have is one read). The block carried hues and
@@ -2522,6 +2684,10 @@ def _hue_name(h_deg: float, sat: float, val: float) -> str:
     if base == 'orange' and val > 0.8 and sat < 0.55:
         return 'peach' if sat < 0.3 else 'coral'
     if sat < 0.4:
+        if base == 'red' and val >= 0.6:
+            # a light, unsaturated red is rose: pink film sets measured 'dusty
+            # red' and the block lost the one hue that names the style
+            return 'dusty pink'
         return {'red': 'dusty red', 'orange': 'peach', 'yellow': 'sand', 'green': 'sage',
                 'teal': 'muted teal', 'blue': 'slate blue', 'purple': 'mauve',
                 'magenta': 'dusty pink'}.get(base, 'muted ' + base)
@@ -2581,23 +2747,52 @@ def pixel_palette(image_path, n_bins: int = 12):
         return None
 
 
-def pixel_coverage_phrase(stats) -> str:
+# Media that are not drawn or painted: their block must never carry drawing
+# vocabulary. "fills, no bare white paper" in the lead and "drawn with ...
+# ruler-straight lines" on a film-still deck rendered every card as line art.
+NON_DRAWN_MEDIA = frozenset({'photograph', '3d render'})
+_DRAWING_VOCAB_RE = re.compile(
+    r"(?<!horizon )(?<!ground )(?<!eye )(?<!sight )(?<!skyline )(?<!water)"
+    r"\b(?:lines?|linework|line art|outlines?|outlined|hatching|cross-?hatch\w*|brush\w*|inks?|inked|"
+    r"inking|drawn|drawing|sketch\w*|pencil\w*|pen-and-ink|paper|colou?r fills|cel-shad\w*|flat colou?r|"
+    r"wobbly|cartoon\w*|caricature\w*|doodle\w*|squiggl\w*|scribbl\w*)\b",
+    re.IGNORECASE)
+
+
+def is_non_drawn_medium(medium: str) -> bool:
+    """True for a medium bucket (or anchor phrase) that is photographed or
+    rendered rather than drawn or painted."""
+    low = (medium or '').lower()
+    return any(m in low for m in NON_DRAWN_MEDIA) or any(
+        w in low.split(',')[0] for w in ('photograph', 'photo', 'film still', 'cinematic'))
+
+
+def drawing_vocabulary(item: str) -> bool:
+    """Does a descriptor name lines, ink, brushes or paper?"""
+    return bool(_DRAWING_VOCAB_RE.search(item or ''))
+
+
+def pixel_coverage_phrase(stats, medium: str = '') -> str:
     """Colour-coverage clause from measurements: how much paper shows and how
-    saturated the fills are. '' when no stats."""
+    saturated the fills are. '' when no stats. A photographed or rendered
+    medium gets the same facts in photographic words (tones, not fills)."""
     if not stats:
         return ''
     paper, sat = stats.get('paper', 0.0), stats.get('saturation', 0.0)
+    non_drawn = is_non_drawn_medium(medium)
     # the mean saturation is over ALL pixels; on 75% white paper a coloured
     # drawing averages below the monochrome line. Judge the ink, not the paper.
     sat_ink = sat / (1.0 - paper) if paper < 0.95 else sat
     if sat_ink < 0.12:
-        return 'monochrome, uncoloured ink on white paper'
+        return 'monochrome black and white' if non_drawn else 'monochrome, uncoloured ink on white paper'
     if paper >= 0.35:
-        return 'coloured figures and objects on open white paper'
+        return 'full colour against bright white' if non_drawn else 'coloured figures and objects on open white paper'
     if sat >= 0.38:
-        base = 'fully coloured with saturated flat colour fills, no bare white paper'
+        base = ('full colour, rich saturated tones' if non_drawn
+                else 'fully coloured with saturated flat colour fills, no bare white paper')
     else:
-        base = 'fully coloured with soft muted fills, no bare white paper'
+        base = ('full colour, soft muted tones' if non_drawn
+                else 'fully coloured with soft muted fills, no bare white paper')
     # tonal key, measured: dark references rendered as pastel skies until the
     # block said so (a night-sky deck came out pink and powder blue)
     lum = stats.get('luminance')
@@ -2671,6 +2866,21 @@ def pixel_edge_hardness(image_path):
         return None
 
 
+def _read_majority_hues(stored: str) -> list:
+    """Bare hue names carried by at least half of the per-image reads'
+    Colors lines (two reads minimum); neutrals excluded."""
+    lines = [ln for ln in (stored or '').splitlines()
+             if re.match(r'\s*[-*\s]*colou?rs?\s*:', ln, re.IGNORECASE)]
+    if len(lines) < 2:
+        return []
+    counts = {}
+    for ln in lines:
+        for w in set(re.findall(r'[a-z]+', ln.lower())):
+            if w in _COLOR_WORDS and w not in ('white', 'black', 'gray', 'grey'):
+                counts[w] = counts.get(w, 0) + 1
+    return [w for w, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])) if n * 2 >= len(lines)]
+
+
 def pixel_style_stats(image_path, reference_paths=None) -> dict:
     """Pooled pixel evidence over the references: mean edge hardness and the
     hue names ranked by how many references carry them."""
@@ -2685,7 +2895,7 @@ def pixel_style_stats(image_path, reference_paths=None) -> dict:
     return {'hardness': (sum(hard) / len(hard)) if hard else None, 'hues': hues}
 
 
-def pixel_coverage_from_refs(image_path, reference_paths=None) -> str:
+def pixel_coverage_from_refs(image_path, reference_paths=None, medium: str = '') -> str:
     """Colour-coverage clause measured over the deck's references (mean paper
     fraction and saturation); '' when nothing is readable."""
     paths = [p for p in (reference_paths or [image_path]) if p]
@@ -2697,7 +2907,7 @@ def pixel_coverage_from_refs(image_path, reference_paths=None) -> str:
             'luminance': sum(x.get('luminance', 0.5) for x in stats) / len(stats),
             'lum_top': sum(x.get('lum_top', 0.5) for x in stats) / len(stats),
             'lum_mid': sum(x.get('lum_mid', 0.5) for x in stats) / len(stats)}
-    return pixel_coverage_phrase(mean)
+    return pixel_coverage_phrase(mean, medium)
 
 
 def build_flux_style_block(image_path, style_source: str = '',
@@ -2882,7 +3092,7 @@ def build_flux_style_block(image_path, style_source: str = '',
     # of saturated flat fills rendered as uncoloured ink once the block led
     # with "ink illustration" and pale hue names. Stated explicitly, right
     # after the medium, so the image model knows whether the paper is filled.
-    measured = pixel_coverage_from_refs(image_path, reference_paths)
+    measured = pixel_coverage_from_refs(image_path, reference_paths, medium)
     ev_all = ((stored_descriptions or '') or evidence).lower()
     _c = lambda words: sum(ev_all.count(w) for w in words)
     coloured = _c(('saturated', 'vibrant', 'vivid', 'bold color', 'bold colour',
@@ -2895,9 +3105,11 @@ def build_flux_style_block(image_path, style_source: str = '',
     if measured:                      # a measurement outranks the word vote
         anchors.append(measured)
     elif coloured > mono and coloured > 0:
-        anchors.append('fully coloured with saturated flat colour fills, no bare white paper')
+        anchors.append('full colour, rich saturated tones' if is_non_drawn_medium(medium)
+                       else 'fully coloured with saturated flat colour fills, no bare white paper')
     elif mono > coloured:
-        anchors.append('monochrome, uncoloured ink on white paper')
+        anchors.append('monochrome black and white' if is_non_drawn_medium(medium)
+                       else 'monochrome, uncoloured ink on white paper')
 
     # -- foundation + enrichment: hues/motifs/influence (stored data FIRST) -----
     hues, motifs, influence = [], [], ''
@@ -2925,9 +3137,14 @@ def build_flux_style_block(image_path, style_source: str = '',
         mbase = [h.split()[-1] for h in measured_hues]
         agreed = [h for h in hues if h.split()[-1] in mbase]
         agreed_base = {h.split()[-1] for h in agreed}
+        # a hue that at least half of the per-image reads name is a fact of
+        # the deck even when the pixel names differ (pink walls measured
+        # 'red' and the palette of a pastel deck carried no pink at all)
+        majority = [h for h in _read_majority_hues(stored_descriptions) if h not in agreed_base][:2]
+        agreed_base |= set(majority)
         rest_measured = [h for h in measured_hues if h.split()[-1] not in agreed_base]
-        rest_read = [h for h in hues if h not in agreed and ' ' in h]
-        hues = (agreed + rest_measured + rest_read)[:6]
+        rest_read = [h for h in hues if h not in agreed and ' ' in h and h.split()[-1] not in agreed_base]
+        hues = (agreed + rest_measured + majority + rest_read)[:6]
     # a motif that names a SUBJECT or a pose ('winged creature', 'dynamic pose',
     # 'undead masses') is the reference's content, not its style — it grew
     # wings on a flightless serpent
@@ -2944,6 +3161,11 @@ def build_flux_style_block(image_path, style_source: str = '',
     mood = _extract_vibe(stored_descriptions)
     if mood:
         parts.append('mood of ' + ', '.join(mood))    # the reads' own register, by majority
+    _lk = lighting_key(stored_descriptions)
+    if _lk == 'even' and not is_flat_medium_name(medium):
+        parts.append('flat even diffused lighting, no strong shadows')
+    elif _lk == 'dramatic':
+        parts.append('dramatic directional light, deep shadows')
     recalled = style_idiom_recall(style_source, text_model) if style_source else []
     recalled = [p for p in recalled if not _UNDRAWABLE_ITEM_RE.search(p)]   # 'sweeping camera movements' cannot be painted
     parts.extend(recalled)            # deterministic knowledge: foundation
@@ -2953,6 +3175,13 @@ def build_flux_style_block(image_path, style_source: str = '',
                  if not _SUBJECT_ITEM_RE.search(p) and not _UNDRAWABLE_ITEM_RE.search(p))
     if influence:
         parts.append(influence)
+    if is_non_drawn_medium(medium):
+        # a photograph has no lines, ink or paper: 'clean lines, precise
+        # ruler-straight lines' recalled for a film director drew line art
+        dropped = [p for p in parts if drawing_vocabulary(p)]
+        if dropped:
+            print(f"  [style] {medium}: dropped drawing vocabulary {dropped}")
+        parts = [p for p in parts if not drawing_vocabulary(p)]
     out, count = [], 0
     for p in parts:
         n = len(p.split())

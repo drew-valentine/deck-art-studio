@@ -211,6 +211,28 @@ decks/<deck-slug>/
   read's Art Style/Medium lines when they contradict it (the VLM writes 'digital painting' for 1970s film
   stills regardless of the prompt). `_UNDRAWABLE_ITEM_RE` drops camera-movement/choreography/editing idioms.
   Per-image reads run at temperature 0.3.
+  Non-drawn media (2026-09-12, animated-army / director-named film stills): a `photograph` or `3d render`
+  bucket (`vision_analyzer.is_non_drawn_medium`) gets its coverage clause in photographic words ('full colour,
+  soft muted tones', never 'fills' / 'no bare white paper'), descriptors naming lines/ink/brush/paper are dropped
+  from the block and the stored idiom (`drawing_vocabulary`), and the render-side figure idiom verb follows the
+  medium (`_idiom_verb`: staged / rendered / painted / drawn with) — the old wording drew every card of a film
+  deck as line art. Palette: an unsaturated light red is 'dusty pink' (pink walls measured 'dusty red') and hues
+  named by at least half of the per-image reads join the palette (`_read_majority_hues`, max 2). POSED REGISTER:
+  when the style's own staging or idiom says symmetrical / frontal / tableau / deadpan (`_posed_register`), the
+  creature grammar opens 'posed still and facing the camera in a composed, deadpan tableau', the static-opening
+  moment rewrite is skipped, `_scene_score` is verb-neutral, and the idiom's composition items go to the writer as
+  a `Composition (REQUIRED)` line (`_composition_line`; `_figure_idiom_items` no longer carries them).
+  STYLE WORLD: `vision_analyzer.style_world_seen` reads the KIND of place each reference shows (built/natural,
+  indoors/out, surface materials and colours, era — a comma list of CATEGORY words; asked for a sentence it
+  named one picture's lighthouse and every card got one) over up to 6 references and merges them by per-category
+  MAJORITY (`merge_world_reads`; an LLM merge hedged 'built or natural, outdoors or indoors' every time and the
+  writer took the wilderness half; a single representative read carried one picture's colours only)
+  → `deck.json.style_world`, carried on the writer's Setting line for EVERY
+  card type ('the place is one of this style's own — …'); the staging read is composition-only (H87), so before
+  this a pastel built-set film style put every creature on cracked earth. LIGHTING KEY: `lighting_key` votes
+  the per-image Shading/Lighting lines ('even' vs 'dramatic'); an even majority on a non-flat medium adds
+  'flat even diffused lighting, no strong shadows' to the block and switches the writer's light line to
+  even, shadowless light (no golden hour, beams or rim light). Slogans/graffiti/signage count as lettering.
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
   unpaintable-abstraction strip → (flat media: rewrite without light words naming the offending

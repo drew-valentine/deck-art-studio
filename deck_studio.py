@@ -1904,11 +1904,25 @@ def _style_block_window(card_type):
     return {'double': list(range(a, b + 1)), 'single': []}
 
 
-def _with_figure_idiom(subject: str, idiom, max_phrases: int = 3) -> str:
+def _idiom_verb(block: str) -> str:
+    """How the medium makes a figure: a drawing is drawn, a painting painted,
+    a photograph staged, a 3D scene rendered. Read off the block's medium
+    anchor (its first item). 'drawn with' on a film-still deck drew line art."""
+    head = (block or '').split(',')[0].lower()
+    if any(w in head for w in ('photograph', 'photo', 'film', 'cinematic')):
+        return 'staged with'
+    if '3d' in head or 'render' in head:
+        return 'rendered with'
+    if any(w in head for w in ('paint', 'watercolor', 'watercolour', 'oil', 'gouache', 'fresco', 'acrylic')):
+        return 'painted with'
+    return 'drawn with'
+
+
+def _with_figure_idiom(subject: str, idiom, max_phrases: int = 3, verb: str = 'drawn with') -> str:
     """Append the style's drawing idiom to the subject's FIRST sentence
     ("Keiga, a Dragon Spirit, rises from the sea, drawn with wobbly eyes,
     lumpy anatomy"). No-op without idiom or when the sentence already
-    carries any of it."""
+    carries any of it. `verb` follows the medium (see _idiom_verb)."""
     import re as _re
     phrases = [p.strip() for p in (idiom or []) if p and p.strip()][:max_phrases]
     if not subject or not phrases:
@@ -1918,7 +1932,7 @@ def _with_figure_idiom(subject: str, idiom, max_phrases: int = 3) -> str:
     low = first.lower()
     if any(p.lower() in low for p in phrases):
         return subject
-    first = first.rstrip(' .!?') + ', drawn with ' + ', '.join(phrases) + '.'
+    first = first.rstrip(' .!?') + f', {verb} ' + ', '.join(phrases) + '.'
     return ' '.join([first] + sents[1:])
 
 
@@ -1968,7 +1982,7 @@ def _block_without_idiom(block: str, idiom) -> str:
 
 _DOCUMENT_RE = re.compile(r"\b(?:books?|tomes?|scrolls?|pages?|letters?|contracts?|documents?|maps?|signs?|"
                           r"labels?|banners?|plaques?|tablets?|journals?|ledgers?|parchments?|notes?|posters?|"
-                          r"newspapers?|manuscripts?|inscriptions?)\b", re.IGNORECASE)
+                          r"newspapers?|manuscripts?|inscriptions?|slogans?|graffiti|signage|logos?)\b", re.IGNORECASE)
 FLUX_TOKEN_BUDGET = 250        # schnell's T5 window is 256 tokens; mflux truncates silently
 _T5_TOKENIZER = [None]
 
@@ -2056,7 +2070,9 @@ def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '', car
         # of the scene. Medium-first kept colour but lost a Seuss elf to her
         # tree; subject-early kept the elf but lost the colour.
         items = [x.strip() for x in ', '.join(block).split(',') if x.strip()]
-        cov = [x for x in items if x.lower().startswith(('fully coloured', 'no bare', 'monochrome', 'uncoloured'))]
+        cov = [x for x in items if x.lower().startswith(('fully coloured', 'full colour', 'no bare',
+                                                          'monochrome', 'uncoloured', 'black and white',
+                                                          'soft muted tones', 'rich saturated tones'))]
         others = [x for x in items if x not in cov]
         pieces = [', '.join(x for x in [lead] + cov if x), first, ', '.join(others), rest]
     else:
@@ -2188,7 +2204,8 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
         _steered = next((c.get('steer') for c in (cards_db or []) if c.get('name') == _base_name), '') or ''
     if card_type in _idiom_types and os.environ.get('FIGURE_IDIOM', '1') != '0' and not (_steered or '').strip():
         # a user direction owns the figure's appearance (see _record_steer)
-        subject = _with_figure_idiom(subject, (_meta.get('style_idiom') or []))
+        subject = _with_figure_idiom(subject, (_meta.get('style_idiom') or []),
+                                     verb=_idiom_verb(_meta.get('flux_style_prompt') or ''))
     # --- H60: the style's WORLD features lead a land's scene in the render
     # prompt itself (early tokens), not only in the writer's hint. Seed A/B on a
     # cartoon deck: crystal shards appeared in both seeds; WORLD_LEAD=0 mutes.
@@ -3510,6 +3527,11 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         from vision_analyzer import _UNDRAWABLE_ITEM_RE
         data['style_idiom'] = [p for p in style_idiom_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
                                if not _UNDRAWABLE_ITEM_RE.search(p)]   # 'sweeping camera movements' cannot be painted
+    from vision_analyzer import is_non_drawn_medium as _non_drawn, drawing_vocabulary as _drawing
+    if _non_drawn(flux_style_prompt):
+        # a photographed or rendered style has no lines or ink: the writer's
+        # figure idiom must not say 'ruler-straight lines' on a film deck
+        data['style_idiom'] = [p for p in (data.get('style_idiom') or []) if not _drawing(p)]
     else:
         # no name to recall from: read the idiom off the references themselves
         # (an unnamed cosmic-painting deck had an empty idiom and its figures
@@ -3519,9 +3541,16 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
                                if not _SUBJECT_ITEM_RE.search(p)]
     # the signature surface treatment on the figures (a starfield inside the
     # silhouette), read across the references — reaches the writer's Body line
-    from vision_analyzer import style_surface_device_seen
+    from vision_analyzer import style_surface_device_seen, style_world_seen
     data['style_surface_device'] = style_surface_device_seen(ref_paths or [first_img],
                                                              bcfg.get('ollama_vision_model', 'llava:7b'))
+    # the KIND of place this style shows (built/natural, surfaces, colours,
+    # era) — the writer's Setting line for every card type; the staging read
+    # is composition only and a built-set film style got wilderness scenes
+    data['style_world'] = style_world_seen(ref_paths or [first_img],
+                                           bcfg.get('ollama_vision_model', 'llava:7b'),
+                                           bcfg.get('ollama_model', 'llama3.2:3b'),
+                                           medium=flux_style_prompt)
     if data['style_surface_device']:
         # the device explains the stars: a 'starry background' item would put
         # them back in the sky, so items that pair the device word with a
@@ -3568,6 +3597,7 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         active_deck_meta['flux_style_prompt'] = flux_style_prompt
         active_deck_meta['style_staging'] = data['style_staging']
         active_deck_meta['style_idiom'] = data['style_idiom']
+        active_deck_meta['style_world'] = data.get('style_world', '')
         active_deck_meta['style_lineage'] = data['style_lineage']
         active_deck_meta['style_source_kind'] = data['style_source_kind']
 
@@ -4487,7 +4517,8 @@ def _execute_prompt_job(job, ctx):
                         style_source_name=style_name, staging=staging,
                         figure_idiom=figure_idiom,
                         style_source_kind=_effective_source_kind(data),
-                        surface_device=(data.get('style_surface_device') or ''))
+                        surface_device=(data.get('style_surface_device') or ''),
+                        world=(data.get('style_world') or ''))
                     break
                 except Exception as e:
                     err_str = str(e)

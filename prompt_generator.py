@@ -811,7 +811,7 @@ def _cut_light_phrases(sentence: str) -> str:
 
 _SCRIPT_CLAUSE_RE = re.compile(
     r"(?:,\s*)?\b(?:the |a |an |its |his |her )?[a-z' ]{0,30}?\b(?:fine |tiny |dense |flowing |elegant |cramped )?"
-    r"(?:scripts?|handwriting|calligraphy|fine print|lettering|writing|inscriptions?)\b[^,.;]*", re.IGNORECASE)
+    r"(?:scripts?|handwriting|calligraphy|fine print|lettering|writing|inscriptions?|slogans?|graffiti|signage|logos?)\b[^,.;]*", re.IGNORECASE)
 _LETTERING_RE = re.compile(
     r"(?:,\s*)?\b(?:with|bearing|showing|displaying|marked with|engraved with|stamped with|etched with)\s+"
     r"(?:a |an |the )?[^.;]{0,60}?(?:\b(?:letters?|initials?|monogram|inscriptions?|lettering|numerals?|runes?|glyphs?|sigils?|symbols?|"
@@ -1055,15 +1055,37 @@ def _subject_words(card: dict) -> set:
     return words
 
 
-def _scene_score(draft: str, card: dict, local_model: str = ''):
+_POSED_REGISTER_RE = re.compile(
+    r"\b(?:symmetr\w*|frontal\w*|cent(?:re|er)d composition|tableau\w*|deadpan|posed|static|"
+    r"planimetric|head-on|straight-on|formal(?:ly)? composed|stiffly|stillness)\b", re.IGNORECASE)
+
+
+def _posed_register(staging: str = '', idiom: str = '') -> bool:
+    """Does the style stage its figures posed and composed rather than caught
+    mid-action? Read from the style's own staging and idiom (symmetrical,
+    frontal, tableau, deadpan). The film-still grammar's MOMENT rule, the
+    static-opening rewrite and the action-verb score all fight such a style:
+    a symmetrical, deadpan film aesthetic rendered lunging dinosaurs."""
+    return bool(_POSED_REGISTER_RE.search(f"{staging or ''} {idiom or ''}"))
+
+
+def _composition_items(idiom: str) -> list:
+    """Idiom phrases that describe COMPOSITION (symmetry, centring, framing,
+    camera distance), for the writer's Composition line."""
+    return [it for it in _figure_idiom_items(idiom, composition=True)]
+
+
+def _scene_score(draft: str, card: dict, local_model: str = '', posed: bool = False):
     """Deterministic 'how striking' score for a scene draft. The 8B scored
     every draft 9/10 (H87 run: 12/12 ties), so the judge is arithmetic on
     what the grammar asks for: action verbs and colour words up, static
-    verbs, abstractions and a buried subject down. No model call."""
+    verbs, abstractions and a buried subject down. No model call. Under a
+    posed register (see _posed_register) verbs are neutral: the style wants
+    the figure still."""
     if not draft:
         return -99
-    action = len(_ACTION_VERB_RE.findall(draft))
-    static = len(_STATIC_VERB_RE.findall(draft))
+    action = 0 if posed else len(_ACTION_VERB_RE.findall(draft))
+    static = 0 if posed else len(_STATIC_VERB_RE.findall(draft))
     colours = len(_re_colour_words(draft))
     abstractions = len(_UNPAINTABLE_RE.findall(draft))
     words = len(draft.split())
@@ -1110,10 +1132,10 @@ def _names_the_thing(draft: str, card: dict) -> bool:
     return any(re.search(r"\b" + re.escape(w.rstrip('s')) + r"s?\b", first) for w in wanted)
 
 
-def _pick_scene(a: str, b: str, card: dict, local_model: str = ''):
+def _pick_scene(a: str, b: str, card: dict, local_model: str = '', posed: bool = False):
     """'b' when the second draft scores strictly higher AND still names the
     thing (places and objects), else 'a'."""
-    sa, sb = _scene_score(a, card, local_model), _scene_score(b, card, local_model)
+    sa, sb = _scene_score(a, card, local_model, posed), _scene_score(b, card, local_model, posed)
     print(f"  [prompt_gen] scene scores: first {sa}, second {sb}")
     if sb is not None and sa is not None and sb > sa and not _names_the_thing(b, card) and _names_the_thing(a, card):
         print("  [prompt_gen] second draft dropped: it no longer names the thing")
@@ -1211,7 +1233,8 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                               style_hint: str = '', steer: str = '',
                               style_source_name: str = '', staging: str = '',
                               figure_idiom: str = '', style_source_kind: str = '',
-                              surface_device: str = '', _retrying: bool = False) -> str:
+                              surface_device: str = '', _retrying: bool = False,
+                              world: str = '') -> str:
     """Use an LLM to generate a subject description tailored to the deck's style.
 
     Sends the LLM a rule-based description as a reference anchor plus
@@ -1231,6 +1254,12 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
     """
     if _is_card_back(card):
         return card_back_scene(card)          # a design, never a written scene
+    # a posed, composed style (symmetrical, frontal, deadpan — read from its
+    # own staging and idiom) wants its figures still; everything that pushes
+    # the scene toward mid-action yields to it
+    posed = _posed_register(staging, figure_idiom)
+    _moment_clause = ("posed still and facing the camera in a composed, deadpan tableau" if posed
+                      else "caught at a MOMENT — mid-action, or the instant before something happens")
     name = card.get('name', 'Unknown')
     type_line = card.get('type_line', '')
     oracle = card.get('oracle_text', '')
@@ -1285,8 +1314,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         "so every extra element muddies the picture. "
         "SCENE GRAMMAR (what makes it art rather than a catalogue photo), in three "
         "sentences of about sixty words total: (1) the subject, opened as the OPENING "
-        "RULE says, caught at a MOMENT — mid-action, or the instant before something "
-        "happens; (2) a deliberate CAMERA and SCALE — a low angle so it fills the frame, "
+        "RULE says, " + _moment_clause + "; (2) a deliberate CAMERA and SCALE — a low angle so it fills the frame, "
         "an extreme close-up, or the subject tiny against something vast — plus, if the "
         "medium renders light at all, ONE strong LIGHT with a named quality (rim-lit from "
         "behind, a single shaft through dust, hard side light, glow from below); (3) ONE "
@@ -1321,8 +1349,11 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
         system_msg += (
             "\n\nCOMPOSITION OVERRIDE (replaces sentences 2 and 3 of the scene grammar): write "
             "the scene as a calm, artful film still. (1) The subject, opened as the OPENING RULE "
-            + ("says, caught at a MOMENT — mid-action, a decisive instant that shows what it is, "
-               "LARGE in the frame (at least a third of it, face visible). "
+            + ((("says, posed still and facing the camera in a composed, deadpan tableau, "
+                 "LARGE in the frame (at least a third of it, face visible), the scene arranged "
+                 "around it the way this style composes. ") if posed else
+                ("says, caught at a MOMENT — mid-action, a decisive instant that shows what it is, "
+                 "LARGE in the frame (at least a third of it, face visible). "))
                if card_type in ('creature', 'planeswalker') else
                "says, shown whole and LARGE in the frame (at least a third of it), resting where it belongs. "
                if card_type == 'artifact' else
@@ -1435,7 +1466,12 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                       "Make the drama with pose, scale, silhouette, colour contrast and pattern; "
                       "state each thing's colour directly as flat local colour.\n")
     elif medium_word:
-        if any(w in medium_word for w in ('paint', 'watercolor', 'watercolour', 'oil')):
+        if 'flat even diffused lighting' in hint_low:
+            # the references' own light (majority of the reads): even and
+            # shadowless — no golden hour, no beams, no rim light
+            how = ('flat, even, diffused light with no strong shadows — never golden-hour, warm glow, '
+                   'beams, shafts or rim light; state the local colour of each surface')
+        elif any(w in medium_word for w in ('paint', 'watercolor', 'watercolour', 'oil')):
             how = 'painted light: opaque fills, soft brushed glow, no photographic realism'
         else:
             how = 'one strong light with a named quality'
@@ -1509,8 +1545,10 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
            if surface_device and surface_device.strip() and card_type in ('creature', 'planeswalker') else '')
         + _object_line(card, local_model)
         + _camera_line(card_type, name)
-        + _setting_line(is_flat, has_steer, card_type, staging)
+        + _composition_line(figure_idiom, has_steer)
+        + _setting_line(is_flat, has_steer, card_type, staging, world)
         + (f"World: this {card_type} exists in the style's own world — {staging.strip()} "
+           + (f"{world.strip().rstrip('.')}. " if world and world.strip() else '') +
            "Let that world colour the plants, sky, rock and light of the card's OWN subject; use at "
            "most one of its signature features, and only where the card's name allows it — a forest "
            "stays a forest, a swamp a swamp. Never add buildings, flags or props the card does not "
@@ -1578,7 +1616,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                     model=local_model, max_tokens=220, temperature=0.9)
                 alt = _strip_chat_preamble(alt)
                 if _opens_with_subject(alt, card) and len(alt.split()) >= 20:
-                    picked = _pick_scene(out, alt, card, local_model)
+                    picked = _pick_scene(out, alt, card, local_model, posed)
                     if picked == 'b' or (not _names_the_thing(out, card) and _names_the_thing(alt, card)):
                         out = alt          # a first draft that lost the thing yields to one that has it
                     print(f"  [prompt_gen] scene pick for {name}: {'second' if out is alt else 'first'} draft")
@@ -1672,7 +1710,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                 print(f"  [prompt_gen] present-moment rewrite failed: {e}")
         if card_type in ('creature', 'planeswalker') and _is_static_opening(out) \
                 and os.environ.get('MOMENT_REWRITE', '1') != '0' \
-                and not (steer and steer.strip()):
+                and not (steer and steer.strip()) and not posed:
             # H61: "stands tall / rests serenely" openings are the writer's
             # default and read as plain; the grammar asks for a MOMENT. One
             # rewrite asks for a decisive action in the first sentence.
@@ -1817,6 +1855,12 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
                               f"{'no subject opening' if not _opens_with_subject(grown, card) else 'not longer'}")
             except Exception as e:
                 print(f"  [prompt_gen] thin-scene growth failed: {e}")
+            if _is_thin_scene(out) and world and world.strip():
+                # both growth passes refused: the style's own world is the
+                # setting, deterministically — a one-line scene rendered a
+                # raccoon on nothing and the image model made a cartoon of it
+                out = _tidy_prompt(out.rstrip(' .') + '. ' + _world_sentence(world, card_type))
+                print(f"  [prompt_gen] thin scene for {name}: appended the style's world as the setting")
         if len(out.split()) < 5:
             # the backstops can strip a draft down to nothing (a franchise
             # sentence, a fragment); never persist an empty prompt
@@ -1835,7 +1879,7 @@ def generate_subject_with_ai(card: dict, openai_client=None, backend: str = 'ope
             print(f"  [prompt_gen] AI failed for {name}: {e}, retrying once")
             return generate_subject_with_ai(card, openai_client, backend, local_model, style_hint, steer,
                                             style_source_name, staging, figure_idiom, style_source_kind,
-                                            surface_device=surface_device, _retrying=True)
+                                            surface_device=surface_device, _retrying=True, world=world)
         print(f"  [prompt_gen] AI failed for {name}: {e}, using the minimal scene")
         return minimal_scene(card)
 
@@ -2262,16 +2306,57 @@ _FIGURE_WORD_RE = re.compile(
     re.IGNORECASE)
 
 
-def _figure_idiom_items(idiom: str) -> list:
+_COMPOSITION_WORD_RE = re.compile(
+    r"\b(?:symmetr\w*|cent(?:re|er)(?:d|ed)?|centring|centering|frontal\w*|composition\w*|framing|framed|"
+    r"tableau\w*|planimetric|head-on|straight-on|wide[- ]shot|close-?up|horizon|vantage|eye[- ]level|"
+    r"low angle|high angle|flat staging|staging)\b", re.IGNORECASE)
+
+
+def _figure_idiom_items(idiom: str, composition: bool = False) -> list:
     """H88: the Figure idiom line describes the creature's eyes, face and body,
     so only idiom items ABOUT figures belong on it. A rendering term there is
     read as anatomy — 'flat shaded forms' became a demon with a 'flat head',
-    'delicate hatching' a hatched face. Word categories, no style tables."""
+    'delicate hatching' a hatched face. Word categories, no style tables.
+    With `composition=True` the COMPOSITION items are returned instead (for
+    the writer's Composition line)."""
     items = [x.strip() for x in (idiom or '').split(',') if x.strip()]
-    return [x for x in items if _FIGURE_WORD_RE.search(x)]
+    if composition:
+        return [x for x in items if _COMPOSITION_WORD_RE.search(x)]
+    return [x for x in items if _FIGURE_WORD_RE.search(x) and not _COMPOSITION_WORD_RE.search(x)]
 
 
-def _setting_line(is_flat: bool, steer_present: bool = False, card_type: str = '', staging: str = '') -> str:
+def _composition_line(idiom: str, steer_present: bool = False) -> str:
+    """The style's own composition idiom ('meticulous symmetrical composition')
+    as a REQUIRED line in the user message, where the writer obeys. Off the
+    block alone a symmetrical film aesthetic staged nothing symmetrically."""
+    items = _composition_items(idiom)
+    if not items:
+        return ''
+    head = ("Composition (REQUIRED, yields to the USER DIRECTION above): "
+            if steer_present else "Composition (REQUIRED): ")
+    return head + "compose the frame as this style does — " + ', '.join(items[:3]) + ".\n"
+
+
+def _world_sentence(world: str, card_type: str = '') -> str:
+    """A plain setting sentence from the style's merged world phrase
+    ('built, indoors, in pink, white, designed and artificial') for a scene
+    that stayed thin after the growth passes. Category words only."""
+    w = re.sub(r'^\s*places are\s*', '', (world or '').strip(), flags=re.IGNORECASE).rstrip('.')
+    items = [x.strip() for x in w.split(',') if x.strip()]
+    if card_type == 'land':
+        items = [x for x in items if not re.fullmatch(r'(?:built|natural|indoors?|outdoors?)', x, re.IGNORECASE)]
+    if not items:
+        return ''
+    place = [x for x in items if re.fullmatch(r'(?:built|natural|indoors?|outdoors?)', x, re.IGNORECASE)]
+    rest = [x for x in items if x not in place]
+    head = 'The place around it is ' + ' and '.join(place) if place else 'The place around it is'
+    if rest:
+        head += (', ' if place else ' ') + ', '.join(rest)
+    return head.strip() + '.'
+
+
+def _setting_line(is_flat: bool, steer_present: bool = False, card_type: str = '', staging: str = '',
+                  world: str = '') -> str:
     """H79: the second sentence must PLACE the subject. Every strip in the
     backstop chain removes words and nothing put the setting back, so scenes
     shrank to a subject on nothing (an altar as a blank slab, a ring on a
@@ -2288,6 +2373,19 @@ def _setting_line(is_flat: bool, steer_present: bool = False, card_type: str = '
         first = re.sub(r'^\s*scenes are staged\s*', '', first, flags=re.IGNORECASE).strip(' .')
         if first:
             stage = f" Stage it the way this style stages every scene — {first} — and"
+    if world and world.strip() and (card_type != 'land' or re.search(r'\b(?:in|surfaces made of)\b', world)):
+        # the KIND of place this style shows (read across the references):
+        # a built pastel set, a misty mountain, a cosmic sky — the place must
+        # be one of those, never a generic wilderness the style never shows
+        w = re.sub(r'^\s*places are\s*', '', world.strip(), flags=re.IGNORECASE).rstrip('.')
+        w = w[:1].lower() + w[1:]
+        if card_type == 'land':
+            # a land names its own place (a glade is outdoors whatever the
+            # references show); only the style's surfaces and colours carry
+            w = ', '.join(x for x in (t.strip() for t in w.split(','))
+                          if x and not re.fullmatch(r'(?:built|natural|indoors?|outdoors?)', x, re.IGNORECASE))
+        stage += (" the place is one of this style's own — " + w + " — and" if stage
+                  else f" The place is one of this style's own — {w} — and")
     if card_type == 'artifact':
         # H89: left to itself the writer presents every object for display on a
         # soft stand; a thing belongs where it is found or used

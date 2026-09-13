@@ -2,6 +2,13 @@
 
 ## Backlog
 
+- [ ] Creature drawn as the wrong kind — inspector has no kind check for creatures | Priority: P1 | Created: 2026-09-12 | Owner: unassigned
+  - Found during the Animated Army deck (director-named live-action film stills) rounds: a Snake Shaman rendered twice as a human woman and passed every check.
+  - The inspector's open naming question (`_names_object`) runs for ARTIFACTS only. Creatures get the subject-present check (is anything living named), the body check and the wing/limb counts, none of which notice that the living thing is the wrong animal.
+  - Proposed: for a creature whose subtypes include a non-Human animal kind, ask the same open naming question about the creature ("what animal do you see") and require the subtype noun or a model-derived synonym; a miss re-rolls, with a category second opinion before it counts, as the artifact check does.
+  - Acceptance: Given a creature card with a non-Human animal subtype, when the render shows a different kind, then the inspector flags "wrong kind" and re-rolls once; and given a correct render across a mixed slice, then the check produces no false positives.
+  - Measure the false-positive rate on a slice before promoting it from advisory, the way `_names_object`, the body check and the centre-text probe were promoted.
+
 - [ ] H81 — revisit the flat-media light ban on ink/comic decks | Priority: P2 | Created: 2026-09-07 | Owner: unassigned
   - PARKED 2026-09-08 on the H78 verdict: the strips are not where the composition loss is, so the gate this item was waiting on came back negative. Kept here in case a later experiment points at the light ban again.
   - The flat-media path strips light vocabulary, and the strip-then-rewrite passes are the largest single source of prompt shortening. Ink and comic decks lose drama words the render could have used.
@@ -90,9 +97,56 @@
 
 ## In Progress
 
-- [ ] (empty — H93 closed to Done; the branch's ship decision sits with H79 In Review)
+- [ ] Five-deck regression sweep for the non-drawn-media stack | Priority: P0 | Started: 2026-09-12 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, uncommitted work in progress.
+  - Gate for the six In Review items below: the medium, palette, register, world, lighting and lettering changes all touch shared distillation and writer code, so every deck has to be re-checked, not only the one that forced the fixes.
+  - Method: five decks re-distilled from their stored references (ink, comic, painterly, kung-fu film stills, fine-line), then 10 cards each rendered at seed 1001 under tag `reg`, judged against each card's current art.
+  - Running now. Re-distillation is required before judging — blocks are stored, so a deck still carrying an old block proves nothing about the new code.
+  - Acceptance: Given each of the five decks, when the sweep renders its 10 cards, then no deck loses its medium bucket, its palette hues or its register, and the defect count stays inside the 3–8 noise band of the earlier sweeps.
 
 ## In Review
+
+- [ ] Non-drawn media get drawing vocabulary | Priority: P0 | Started: 2026-09-12 | Review Started: 2026-09-12 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, uncommitted work in progress.
+  - Reported on the Animated Army deck (director-named live-action film stills): the deck rendered as line art. The medium bucket was right — photograph — and everything downstream still spoke about drawing.
+  - Three causes, all in code that assumed the medium was drawn:
+    - The colour-coverage clause said things like "fills" and "no bare white paper", which describe paper and ink.
+    - Descriptors naming lines, ink, brush or paper survived into the block and into the stored idiom, because nothing filtered them by medium.
+    - The figure-idiom clause always said "drawn with", so a film still was told it was a drawing.
+  - Three fixes, keyed on the medium rather than on the deck: `vision_analyzer.is_non_drawn_medium` gates a photographic coverage clause ("full colour, soft muted tones") for the photograph and 3D-render buckets; `vision_analyzer.drawing_vocabulary` drops line/ink/brush/paper descriptors from the block and the stored idiom for those buckets; `deck_studio._idiom_verb` picks the verb from the medium (staged / rendered / painted / drawn with).
+  - Validated on the deck itself, round 1: 7 cards re-rendered after re-analysis, all photographic, none in line art.
+  - Held for the five-deck sweep — the coverage clause and the descriptor filter are shared by every drawn deck too.
+
+- [ ] Palette: pastel pink lost | Priority: P1 | Started: 2026-09-12 | Review Started: 2026-09-12 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, uncommitted work in progress.
+  - The Animated Army deck's pink interiors came back as "red" in the measured palette and vanished from the block, so renders lost the one hue the references share.
+  - Two fixes: `_hue_name` names a low-saturation light red "dusty pink" (the pastel-red/coral naming from the 2026-09-09 sweep, extended to the pink end); and a hue that at least half the per-image reads agree on joins the palette even when the pixel measurement disagrees (`_read_majority_hues`, capped at 2 so the reads cannot flood the clause).
+  - Validated on the deck: the block leads with dusty pink and the renders carry it.
+
+- [ ] Posed register | Priority: P1 | Started: 2026-09-12 | Review Started: 2026-09-12 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, uncommitted work in progress.
+  - The references stage their figures symmetrically, frontally and deadpan; the film-still grammar drove every creature into a decisive action at a dramatic angle, so the renders were plausible cinema and the wrong cinema.
+  - `prompt_generator._posed_register` reads the register out of the style's own staging and idiom (symmetrical / frontal / tableau / deadpan) — derived, not a per-deck table. When it fires: the creature grammar opens on a posed still facing the camera, the static-opening moment rewrite is skipped (a posed opening is the point, not a defect), `_scene_score` stops rewarding action verbs and penalising static ones, and a new `Composition (REQUIRED)` writer line is built from the idiom's composition items.
+  - Validated on the deck: frontal, centred staging across the round-7/8 renders.
+  - Watch in the sweep: every deck without the register must keep the film-still grammar unchanged.
+
+- [ ] Style world for every card type | Priority: P0 | Started: 2026-09-12 | Review Started: 2026-09-12 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, uncommitted work in progress.
+  - Lands, enchantments and spells were built from generic terrain instead of the style's own world, and the earlier staging read could not fix it.
+  - Shipped: `vision_analyzer.style_world_seen` reads up to 6 references in category words only, `merge_world_reads` takes a per-category majority (built or natural, indoors or out, materials, colours, era, designed or not), the result is stored as `deck.json.style_world`, and the writer's Setting line becomes "the place is one of this style's own — …".
+  - Three earlier merge designs failed and are recorded so they are not retried: an LLM merge hedged into uselessness; a full-sentence read pasted one picture's lighthouse onto every card; a single representative read carried one picture's colours across the deck. Category words plus a per-category majority is the design that held — the same lesson as the composition-only staging merge (H87).
+  - Validated on the deck: rounds 7 and 8 show symmetrical frontal staging on pink surfaces, the references' own world rather than a generic room.
+  - Sweep gate: check the four other decks for the deck-wide sameness that H60 caused — one shared backdrop on every land is the failure mode this class of change produces.
+
+- [ ] Lighting key | Priority: P1 | Started: 2026-09-12 | Review Started: 2026-09-12 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, uncommitted work in progress.
+  - `vision_analyzer.lighting_key` takes a majority of the per-image Shading/Lighting lines. An "even" key on a non-flat medium adds "flat even diffused lighting, no strong shadows" to the block and switches the writer's light line to even shadowless light — previously only flat media could ask for flat light, so an evenly lit photographic deck kept being given a named dramatic light source.
+  - Validated on the deck.
+
+- [ ] Slogans, graffiti and signage are lettering | Priority: P1 | Started: 2026-09-12 | Review Started: 2026-09-12 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, uncommitted work in progress.
+  - A scene naming a slogan, graffiti or signage renders it as words in the art, the same way quoted slogans and rune clauses did (H71). Both sides now cover it: the writer strips the clause, and the render guard states it.
+  - Validated on the deck.
 
 - [ ] H79 — scenes keep their setting | Priority: P0 | Started: 2026-09-07 | Review Started: 2026-09-08 | Owner: drew-valentine
   - Branch: `feat/night-composition`, committed 831a073.
@@ -107,6 +161,7 @@
   - Not shipping yet by the owner's instruction: defects first, wow second. Rounds 3–5 on `feat/night-composition`; the remaining misses are per-roll variance, addressed by the two-scene take + inspection pick and a literal-thing retry for place/object drafts.
   - State 2026-09-08 20:30: 40+ commits on `feat/night-composition`, 554 tests, docs current. Across the day's runs the new writer sits at roughly half the current art's inspector defect count on fresh cards, two-scene batches deliver 18 of 19 clean finals, and objects and places no longer grow onlookers. Awaiting the owner's read of the latest sheets.
   - State 2026-09-09 02:00: ~60 commits on `feat/night-composition`, 564 tests, docs current; the Koma vibe transfers; the regression sweep is clean. Awaiting the owner's merge call.
+  - State 2026-09-12: the branch now also carries the six In Review items above (non-drawn media, palette, posed register, style world, lighting key, lettering), uncommitted. 583 tests passing, `tests/test_non_drawn_media.py` added. The deck's own validation renders are done; the five-deck regression sweep in In Progress is the last gate. This item still holds the whole branch — the merge call is the owner's.
 
 - [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Review Started: 2026-09-02 | Owner: drew-valentine
   - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — In Review, awaiting the owner's ship decision.
