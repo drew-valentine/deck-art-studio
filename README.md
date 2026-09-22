@@ -37,7 +37,7 @@ In the app: click **Import** and paste your decklist, add three to five referenc
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/samples-fineline-dark.jpg">
   <img alt="Fine-line ink illustration style — five generated cards" src="docs/images/samples-fineline.jpg">
 </picture></p>
-<p align="center"><em>Fine-line ink — teal, coral and gold on parchment: a pillar of fire in a dead wood, a blood-veined sinkhole, a demon in red, a sunburst through a ruined nave, a canyon at sundown</em></p>
+<p align="center"><em>Fine-line ink — teal, coral and gold on parchment: a pillar of fire in a dead wood, a blood-veined sinkhole, a mage phasing out above the rooftops, a sunburst through a ruined nave, a canyon at sundown</em></p>
 
 <p align="center"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/samples-picturebook-dark.jpg">
