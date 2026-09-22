@@ -1,10 +1,7 @@
-# Mac-only (Apple Silicon) MLX-native pipeline dependencies.
-#
-# This feature branch replaces the cloud (OpenAI) + PyTorch-MPS/Ollama pipeline
-# with MLX-native components. These packages require Apple Silicon + macOS and
-# will NOT install on the Ubuntu CI runner — that's why they live here and not in
-# requirements.txt, and why every import of them in the codebase is lazy
-# (inside functions), so prompt_generator.py / vision_analyzer.py still import on CI.
+# Apple Silicon (MLX) generation stack. These packages need Apple Silicon and
+# macOS, so they live apart from requirements.txt (which installs anywhere,
+# including the Ubuntu CI runner) and every import of them in the codebase is
+# lazy, inside functions.
 #
 #   pip install -r requirements.txt -r requirements-mac.txt
 #

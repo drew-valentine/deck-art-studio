@@ -2,451 +2,78 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-A self-hosted web app for generating custom AI art for Magic: The Gathering proxy decks. Import any decklist, upload inspiration art, and generate unique artwork for every card — running **entirely on your own Apple Silicon Mac**, no API keys, no cloud, no per-image cost. Export your cards for proxy printing, or use the included browser extension to render your custom art on [edhplay.com](https://edhplay.com).
+**Custom art for every card in your Magic deck, made on your own Mac.** Paste a decklist, drop in a few pictures whose look you love, and Deck Art Studio illustrates the whole deck in that style, frames every card, and hands you print-ready proxies. Nothing leaves your machine and nothing costs per image.
 
-> **Apple Silicon only.** Image generation, prompt writing, and style analysis all run locally via Apple's **MLX** framework. Deck Art Studio used to support an OpenAI cloud backend and a PyTorch/Ollama local backend; both have been replaced by a single MLX-native pipeline (FLUX.1-schnell + Llama + Qwen2.5-VL). It needs an M-series Mac with **18 GB+ unified memory** (16 GB may work; see [Requirements](#requirements)).
+<p align="center"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-gallery-dark.jpg">
+  <img alt="Eight generated cards across four decks and four art styles — comic-book ink, fine-line ink, pastel film stills, and picture-book pen and ink" src="docs/images/hero-gallery.jpg">
+</picture></p>
 
-<p align="center"><img alt="Eight generated cards across four art styles — fine-line ink, picture-book, cartoon dragons, and comic-book" src="docs/images/hero-gallery.jpg" /></p>
+**Every card above was generated on a laptop.** Four real Commander decks, four styles, each learned from a handful of reference images. The same pipeline handled ink drawings, comic pages, paintings and live-action film stills without a line of per-style code.
 
-**One decklist in, a fully illustrated deck out.** Four real decks, four styles — every card below was generated locally by the same app, from nothing but a decklist and a handful of inspiration images:
+## Get started in two steps
 
-<p align="center"><img alt="Fine-line ink illustration style — five generated cards" src="docs/images/samples-fineline.jpg" /></p>
-<p align="center"><em>Fine-line ink illustration — parchment, coral, and gold, with a beholder, a demon, and a sun titan</em></p>
-
-<p align="center"><img alt="Picture-book ink style — five generated cards" src="docs/images/samples-picturebook.jpg" /></p>
-<p align="center"><em>Picture-book pen and ink — scratchy linework, flat fills, and a fox that found some yarn</em></p>
-
-<p align="center"><img alt="Cartoon dragon style — five generated cards" src="docs/images/samples-dragons.jpg" /></p>
-<p align="center"><em>Saturday-morning dragons — candy skies, big eyes, and a gem mid-explosion</em></p>
-
-<p align="center"><img alt="Comic-book ink style — five generated cards" src="docs/images/samples-comic.jpg" /></p>
-<p align="center"><em>Comic-book ink — heavy blacks, teal-and-coral smoke, and a goblin who wants your coin</em></p>
-
-Upload a few reference images and the style carries across your entire deck — creatures, lands, artifacts, sagas, battles, and double-faced cards alike.
-
-## Features
-
-- **100% local, MLX-native** — FLUX.1-schnell for images, Llama 3.x for prompts, Qwen2.5-VL for vision — all running on the Apple GPU. No API key, no cloud, no per-image cost.
-- **Your inspiration images steer every render** — Upload 1–10 reference images and FLUX Redux feeds the images *themselves* into generation (the FLUX-native successor to IP-Adapter), so a papyrus deck renders on papyrus and a picture-book deck gets its bendy architecture. The references are injected into the model's *style* blocks only, so every card keeps its own subject at any strength; a per-deck **Reference strength** dial (Off · Light · Medium · Strong) defaults to Strong — the references' full medium, palette and stroke — at little speed cost.
-- **Procedural style analysis** — A vision model reads each reference and a deterministic pipeline classifies the medium, detects line weight and density, and extracts the palette: re-analyzing a deck produces the same style block every time, so your look never drifts. Your declared style source overrides the model's interpretation wherever they conflict.
-- **Franchise-safe styling** — Name a show as your style ("Rick & Morty", "Studio Ghibli") and you get its *look*, never its cast: franchise names are translated into de-named style language before they ever reach the image model, so the actual characters don't leak into your card art.
-- **A real generation queue** — Art, prompts, flavor, and style analysis all flow through one global queue: enqueue instantly, keep browsing, switch decks freely — every job carries its own deck and keeps running. The queue drawer shows progress, supports cancel / bump-to-top / pause, and **pending jobs survive a server restart**.
-- **Subject-faithful prompts** — Type-aware generation keeps each card's real subject as the focal point, opens with the creature's type ("Okaun, Eye of Chaos, a Cyclops Berserker, …"), depicts literal objects literally (a card named "Krark's Thumb" is a *thumb*), and gives a Cyclops exactly one eye.
-- **Flavor-grounded scenes** — Prompts anchor in each card's flavor and rules text for concrete subject matter — with a firewall that keeps franchise quotes in flavor text from smuggling characters into the art.
-- **Full card frames, a dozen themes** — SVG-rendered borderless frames with mana pips, hybrid mana, rules and flavor text, P/T and loyalty — including sagas, battles (landscape + defense shield), split cards, and double-faced backs. Twelve frame themes (Showcase, Art Deco, Etched, Mystical Archive, Samurai, M15, …) with a live WYSIWYG designer, auto-colored from each card's mana identity — override per card or per deck.
-- **Version history & steering** — Every render is archived with the prompt that produced it: re-roll on a fresh seed, steer in plain language ("at night", "more menacing"), and scrub back through every take of a card — reverting restores the art *and* its prompt, so no experiment is ever destructive.
-- **Crash-safe memory model** — FLUX and the language/vision models run in separate subprocesses and are mutually evicted, so the heavy models never co-reside and exhaust an 18 GB machine (see [Architecture](#architecture--memory-model)).
-- **Multi-deck management** — Import (Archidekt/MTGO/Arena formats, with Scryfall auto-fetch and rate-limit-safe retry), rename, delete, and switch decks freely.
-- **Export anywhere** — Print-ready PNG ZIPs, or a self-contained JSON manifest for the included **browser extension** that shows your art on [edhplay.com](https://edhplay.com).
-
-## Requirements
-
-- **Apple Silicon Mac (M1/M2/M3/M4).** The generation stack uses Apple's Metal GPU via MLX; it does not run on Intel Macs, Windows, or Linux.
-- **18 GB+ unified memory recommended.** FLUX.1-schnell peaks around 15.5 GB during generation. 16 GB machines may work but leave little headroom; 18 GB+ is the comfortable target (developed on an M3 Pro / 18 GB).
-- **macOS 14+** and **Python 3.10+**.
-- **~15–20 GB free disk** for the models, which download from Hugging Face on first use (FLUX ~6–9 GB, Qwen2.5-VL ~5 GB, Llama 3B/8B). No login or token required — the defaults are non-gated mirrors.
-
-## Quick Start
+**1. Install** (Apple Silicon Mac, Python 3.10+):
 
 ```bash
-# Install base + Apple-Silicon (MLX) dependencies
+git clone https://github.com/drew-valentine/deck-art-studio.git
+cd deck-art-studio
 pip install -r requirements.txt -r requirements-mac.txt
+```
 
-# Run the app (defaults to port 5001 to avoid macOS AirPlay on 5000)
+**2. Run**, then open [http://localhost:5001](http://localhost:5001):
+
+```bash
 python3 deck_studio.py
 ```
 
-Open `http://localhost:5001` in your browser.
+In the app: click **Import** and paste your decklist, add three to five reference images in the **Inspiration** panel, select all cards and press **Art**. The first run downloads the models (about 20 GB, one time, no account or API key). After that a card takes about a minute on an M3 Pro.
 
-> **First run** downloads the models from Hugging Face (one-time, ~15–20 GB). The image model is pre-selected and loads automatically the first time you generate — there is nothing to configure and no API key to enter.
+> **What you need:** an M-series Mac with 18 GB of unified memory or more (16 GB can work with little headroom), macOS 14+, and roughly 20 GB of free disk for the models. Intel Macs, Windows and Linux are not supported: the whole stack runs on Apple's GPU through MLX.
 
-## Usage Guide
+## What it makes
 
-### Step 1: Import a Deck
+<p align="center"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/samples-fineline-dark.jpg">
+  <img alt="Fine-line ink illustration style — five generated cards" src="docs/images/samples-fineline.jpg">
+</picture></p>
+<p align="center"><em>Fine-line ink — teal, coral and gold on parchment: a pillar of fire in a dead wood, a blood-veined sinkhole, a mage phasing out above the rooftops, a sunburst through a ruined nave, a canyon at sundown</em></p>
 
-1. Click **"+ Import"** in the header bar (next to the deck dropdown).
-2. Enter a deck name (e.g. "Coin Flip Chaos").
-3. Paste your decklist in any standard format (Archidekt, MTGO, Arena export):
-   ```
-   1x Sol Ring
-   1x Command Tower
-   1x Okaun, Eye of Chaos (bbd) 6 [Commander]
-   ```
-4. Click **"Import & Fetch from Scryfall"** — card data, oracle text, flavor text, and art crops are fetched automatically.
-5. Your new deck appears in the **deck dropdown** in the header bar — use it to switch between decks.
+<p align="center"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/samples-picturebook-dark.jpg">
+  <img alt="Picture-book pen and ink style — five generated cards" src="docs/images/samples-picturebook.jpg">
+</picture></p>
+<p align="center"><em>Picture-book pen and ink — a treehouse library, a tutor buried in books, a pact signed at a door under falling paper, a clockwork fox, a scrap-diving bird in rainbow feathers</em></p>
 
-### Step 2: Upload Inspiration Art
+<p align="center"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/samples-comic-dark.jpg">
+  <img alt="Comic-book ink style — five generated cards" src="docs/images/samples-comic.jpg">
+</picture></p>
+<p align="center"><em>Comic-book ink — teal-and-coral smoke: a goblin in her workshop, a pyromancer's ignition, a hooded gambler between two lanterns and a pillar of fire, a crater blowing its top, a lighthouse under a green moon</em></p>
 
-This is what makes your deck unique. Upload 1–10 images that represent the visual style you want.
+<p align="center"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/samples-filmstill-dark.jpg">
+  <img alt="Pastel film-still style — five generated cards" src="docs/images/samples-filmstill.jpg">
+</picture></p>
+<p align="center"><em>Pastel film stills — symmetrical sets and deadpan animals under flat, even light: a cobra on a lotus, a goblin offering a gem, a gilded chariot, a lotus in a white hall, a ring under a pink dome</em></p>
 
-1. In the **Inspiration** panel, click **"+"** to upload an inspiration image.
-2. Good sources: concept art, illustration styles, album covers, movie stills — anything with a distinctive visual identity.
-3. Optionally type a **style source** label (e.g. "Studio Ghibli", "Borderlands"); when set, it overrides the model's own read of the images wherever they conflict. Leave it blank and the source the vision model *recognizes* in your references (a show, an artist, a movement) fills in automatically.
-4. A vision model (**Qwen2.5-VL**) reads each image and distills FLUX-ready style descriptors — medium, linework, palette, colour coverage, lighting, and mood. For a named source the language model adds what it *knows* about that style — its drawing idiom (how lines, eyes, faces and anatomy are drawn), how it stages a scene and in what tone, and its production lineage — and the vision model adds what it *sees* of the same things in your references (this part needs no name, so a deck with no source label gets it too). Every recall answers UNKNOWN rather than guess, and the reference read wins over recall for staging. All of it is cached per deck and applied to every card automatically: the drawing idiom goes onto creatures in their scene prompts, the staging and tone shape every scene, and the lineage gives franchise decks a de-named render lead.
-5. The images themselves also condition every render (**FLUX Redux**). The **Reference strength** slider sets how strongly: *Light* borrows the palette and medium, *Medium* more of the rendering, *Strong* (default) the references' full medium, palette and stroke. At every setting the card keeps its own subject, because the references are only shown to the model's style blocks (see below). All of a deck's references (up to four) contribute: their reference tokens are **averaged**, so what differs between them (each image's figures and layout) cancels out and what they share (medium, palette, stroke) is what steers the render — more consistent references make a cleaner style signal. **Tip:** references without prominent characters (scenery, patterns, texture) transfer style cleanly at higher settings; character-heavy references are best kept at Subtle.
-6. Click **"Re-analyze Style"** any time to rerun the analysis (useful after adding images).
+The style carries across the entire deck: creatures, lands, artifacts, sagas, battles and double-faced cards alike.
 
-> **Tip:** The more consistent your inspiration images are, the more cohesive your deck's art will be. 3–5 images from the same artist or aesthetic work best.
+## Why it works
 
-The same pipeline, pointed at cartoon screenshots instead of fine-line illustration — the whole deck follows:
+- **Your references set the style.** A vision model reads your images and the app measures them too: medium, line character, palette, lighting and how scenes are staged. The result is a deterministic style description, so re-analysing a deck gives the same look every time. The references also feed the image model directly, so palette and finish come through even where words fall short; a per-deck **Reference strength** dial (Off, Light, Medium, Strong) sets how much.
+- **Every card stays itself.** Prompts open with the card's real subject and creature type, keep literal objects literal (a card named for a thumb shows a thumb), give a cyclops one eye, and draw the scene from the card's own rules and flavor text. An inspector checks each render for extra limbs, missing faces, stray lettering and signatures, and re-rolls the misses.
+- **Name a style without importing its cast.** Type a show or a film as your style and you get its look, never its characters: names are translated into style language before they reach the image model.
+- **Nothing you try is lost.** Every render is archived with the prompt that made it. Re-roll, steer in plain language ("at night", "more menacing"), and step back through every take of a card, prompt included.
+- **A real queue.** Art, prompts, flavor text and style analysis run through one queue that survives a restart. Enqueue a deck and keep working on another.
+- **Finished cards, not just art.** SVG frames with mana pips, rules and flavor text, power and toughness, loyalty, sagas, battles, split cards and card backs. Twelve frame themes, coloured from each card's mana identity, with a live designer for overrides.
+- **Play with it online.** Export a manifest for the included browser extension and your art replaces the card images on [edhplay.com](https://edhplay.com).
 
-![A second deck rendered in an adult-cartoon style](docs/images/app-cartoon-deck.jpg)
+## Using the studio
 
-### Step 3: Generate Art Prompts
+### Import a deck
 
-A prompt describes the **scene** each card depicts. The deck's style is applied automatically on top — so a prompt only needs to describe *what* to show, not the art style.
-
-1. Select cards in the grid (or **"Select All"** in the action toolbar).
-2. Click **"Prompts"** to generate a scene prompt for each selected card.
-3. Each prompt combines a type-aware rule-based anchor (so the card's real subject stays the focal point) with LLM enhancement (**Llama 3.x**) and is grounded in the card's flavor and rules text.
-
-> **Tip:** Click any card tile to open the **detail panel**. Each card has a single **Prompt** field — the scene. Use **Generate Random** for a brand-new random scene, or edit it directly, then render.
-
-### Step 4: Generate Art
-
-1. Select the cards you want art for (or **"Select All"**).
-2. Click **"Art"** to start generation (~70 s/card on an M3 Pro). Progress updates appear on each card tile as it renders.
-
-Everything — art, prompts, flavor text, style analysis — runs through one **global generation queue**. Enqueueing is instant: click generate and keep browsing, editing prompts, or reviewing cards while the GPU works through the backlog. Click **Queue** in the header to watch it live:
-
-![Generation queue drawer — a render in progress with queued jobs from two different decks](docs/images/app-queue.jpg)
-
-In this shot a render is mid-flight with a live progress bar while three more jobs wait behind it — **from two different decks**. Every job carries its own deck, so you can switch decks freely and work on one while another finishes rendering. Jobs are cancellable and re-orderable (bump to top), the whole queue can be paused, and pending jobs are persisted to disk — **a server restart picks up right where it left off**.
-
-> **Tip:** Click **"Flavor"** in the action toolbar to generate themed flavor text for selected cards — it's rendered onto each card frame alongside the rules text. You can also edit flavor text per-card in the detail panel.
-
-### Step 5: Iterate Until It's Right
-
-Generation is a conversation, not a slot machine. Click any card tile to open its **detail panel**:
-
-![Card detail panel — composited card with prompt controls](docs/images/app-detail.jpg)
-
-- **Render Art** — re-render the current prompt on a fresh seed (same scene, different take).
-- **Steer & Render** — type a direction in plain language ("at night", "more menacing") and it rewrites the prompt that way, then renders.
-- **Generate Random** — write a brand-new random scene prompt (edit it, then Render Art).
-- **Portrait / Landscape** — toggle orientation. **Pin** a card to protect it from batch regeneration.
-
-And nothing you try is ever lost. **Every render is archived as a version** — art, metadata, and the exact prompt that produced it. The commander below has been through 31 takes; any of them is one click from being current again, prompt included:
-
-![Version history — steer input, editable prompt, and a 31-version archive strip](docs/images/app-versions.jpg)
-
-That's what makes aggressive experimentation safe: re-roll a whole deck, keep the winners, revert the rest.
-
-### Step 6: Design the Frame
-
-Art is only half the card — the **Frame** tab is a live WYSIWYG designer for the other half. Twelve frame themes render the same card completely differently:
-
-![The same card in five frame themes — Showcase, Art Deco, Etched, Mystical Archive, Samurai](docs/images/frame-themes.jpg)
-
-Frame colors are derived automatically from each card's mana identity (with Blend / Split / Gold modes for multicolor), and everything is overridable — border, frame, and title-bar colors with a live canvas preview:
-
-![WYSIWYG frame designer — theme picker and color controls](docs/images/app-frame.jpg)
-
-Save the result per card, apply it to every checked card at once, or set it as the deck default that new imports pick up.
-
-### Step 7: Export
-
-**For printing proxies:** Click the **`⋯`** menu next to the deck dropdown → **"Export ZIP"** to download all composite cards as print-ready PNGs.
-
-**For the EDH Play extension:** From the **`⋯`** menu → **"Export for EDH Play"** to download a JSON manifest, then import it into the browser extension (see [below](#edh-play-browser-extension)).
-
-**For sharing with friends:** Use the extension's **"Export All Art as .json"** to create a self-contained file (~3–4 MB per deck) anyone can import.
-
-## Architecture & Memory Model
-
-The defining constraint is the **18 GB unified-memory budget**. macOS caps the GPU working set at ~13.3 GB, and FLUX.1-schnell uses nearly all of it — so FLUX and the language/vision models **cannot be resident at the same time**. Deck Art Studio enforces this with subprocess isolation:
-
-```mermaid
-flowchart TB
-    subgraph FLASK["Flask app (deck_studio.py) — orchestration only, ~no GPU memory"]
-        GATE["gpu_coord.GPU_LOCK\n(one reentrant lock — serializes\nALL heavy GPU work, one lock order)"]
-    end
-
-    subgraph FW["flux_worker.py — subprocess"]
-        FLUX["FLUX.1-schnell 4-bit (mflux)\n~13 GB while resident"]
-    end
-
-    subgraph MW["mlx_worker.py — subprocess"]
-        VLM["Qwen2.5-VL 7B (mlx-vlm)"]
-        LLM["Llama 3.2 3B / 3.1 8B (mlx-lm)"]
-    end
-
-    FLASK -->|"generate"| FW
-    FLASK -->|"analyze · prompts · flavor"| MW
-    FW <-. "spawning one worker KILLS the other —\nprocess death returns all GPU memory\nto the OS (no fragmentation residue)" .-> MW
-```
-
-- **Only one worker is ever resident.** Before the Flask app sends work to one worker, it evicts the other by **killing its process** — the most reliable way to reclaim FLUX's ~13 GB on this hardware (`mx.clear_cache()` alone left fragments that still OOM-killed the server).
-- **`gpu_coord.GPU_LOCK`** is a single reentrant lock both paths acquire as the outermost lock, giving one consistent order. It eliminates the cross-module deadlock that two independent locks caused, and prevents a style analysis from tearing down a live generation.
-- **Inactivity watchdogs** kill a worker that goes silent past a timeout, so a stuck inference can never wedge the whole app.
-- **Parent-death watchdogs** in each worker exit the subprocess if the Flask app dies, so a 13 GB worker can never orphan.
-
-### Generation Pipeline
-
-**Phase 1 — Style analysis & prompt generation** (runs in `mlx_worker`):
-
-```mermaid
-flowchart TD
-    INSP["Inspiration images (1–10)"]
-    CARD["Decklist — Scryfall auto-fetch\n(type, oracle, flavor, art crop)"]
-
-    subgraph VIS["Style analysis (procedural)"]
-        VLM["Qwen2.5-VL reads each image →\nstored per-image analysis\n(medium · palette · motifs)"]
-        RECON["Deterministic style block:\nclassified medium anchors +\nextracted palette (VLM enriches,\nnever subtracts)"]
-    end
-
-    subgraph PR["Prompt generation"]
-        ANCHOR["Type-aware rule anchor\nsubject-lock · no-character for\nobjects/places · literal-object map\n· single-eye anatomy"]
-        GROUND["Grounded in card flavor + rules"]
-        LLMP["Llama enhancement →\none rich per-card scene"]
-    end
-
-    INSP --> VLM --> RECON --> FSP["flux_style_prompt\n(deck.json)"]
-    CARD --> ANCHOR --> GROUND --> LLMP --> AP["art_prompts.json\n(one scene per card)"]
-```
-
-**Phase 2 — Art generation** (runs in `flux_worker`):
-
-```mermaid
-flowchart TD
-    SCENE["Per-card scene prompt"]
-    STYLE["flux_style_prompt\n(front-loaded — FLUX weights early tokens)"]
-    FLUX["FLUX.1-schnell txt2img\n~4 steps · ~70 s\nFLUX composes the scene from the prompt"]
-    OUT["Raw art — 672×896 (3:4)"]
-
-    SCENE --> FLUX
-    STYLE --> FLUX
-    FLUX --> OUT
-```
-
-**Phase 3 — Card compositing & output:**
-
-```mermaid
-flowchart LR
-    RAW["Raw art PNG\n672×896"]
-    RESIZE["Fit to art window"]
-    SVG["SVG frame render\n(mana pips, type line,\noracle + flavor, P/T)"]
-    COMP["Alpha composite\nart + translucent frame\n→ 750×1050"]
-    FINAL["Composite card"]
-    ARCHIVE["Version archive\nart_versions/v1, v2…"]
-    ZIP["ZIP / JSON export"]
-
-    RAW --> RESIZE --> COMP
-    SVG --> COMP
-    COMP --> FINAL --> ARCHIVE
-    FINAL --> ZIP
-```
-
-### Key Design Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| **Subprocess isolation of FLUX and MLX** | Killing a worker process is the only reliable way to return FLUX's ~13 GB of GPU memory to the OS before the language/vision models load. In-process `clear_cache` left fragments that still OOM-killed the server on 18 GB. |
-| **Single reentrant `GPU_LOCK`** | FLUX and MLX workers can't co-reside, so all heavy work is serialized under one outermost lock. One consistent lock order removes the AB-BA deadlock two independent module locks caused. |
-| **672×896 (3:4) render resolution** | Matches the card frame's art window so composites align, and peaks ~15.5 GB — comfortably under the 13.3 GB working-set + 18 GB budget. 768×1024 peaked ~17.5 GB and routinely OOM-killed the app. |
-| **Procedural style blocks** | The deck's style prompt is assembled from deterministic sources in a fixed order: a medium classified from the user's declaration, then the deck's own stored analyses, and only then the model's read; colour coverage measured from the reference pixels (paper fraction and saturation — a picture-book deck reads "coloured figures on open white paper", a comic "saturated flat colour fills") and the palette from the stored analyses; the recalled drawing idiom; motifs; then the vision model's reading of the references as enrichment. Palette sits before the idiom on purpose — with the idiom ahead of it a saturated fine-line reference rendered as uncoloured ink. Re-analyze reproduces the same block. |
-| **Franchise de-naming** | A franchise name in a prompt summons its cast (a literal Rick once rendered as card art). Whether a source *is* a franchise is recalled per deck (franchise / artist / movement) rather than looked up, so a brand-new show needs no code change; franchises render under their de-named production lineage ("2010s adult American animated science fiction sitcom") plus an "original character designs" guard, artists and movements pass verbatim. A small keyword table remains only as the offline fallback. Sentence stripping for a franchise's cast uses only that franchise's own name; unnamed and artist decks are never stripped. |
-| **End-of-batch render inspection** | The scene checklist judges the prompt; nothing judged the picture. A batch now ends with an inspection job: the vision model checks every new render for anatomy and duplication defects (extra or missing limbs and fingers, doubled heads, duplicated subjects, malformed hands or faces), stray text, signatures and watermarks, and a missing subject. It runs once per batch because the vision model cannot sit beside FLUX in 18 GB. Verdicts are stamped into each render's metadata; defective cards are re-rolled once and inspected again. With two takes per card, the inspection also compares the takes and keeps the cleaner one as current, archiving the other. An edge signature or stray mark on an otherwise sound render is not re-rolled: the card's art window gets a 10% zoom that crops the edge, and the composite is re-rendered (undo it in the Frame Designer). When two takes tie on defects, the vision model picks the one that looks more like the reference's artist, asked twice with the takes swapped so position bias cancels. |
-| **Durable queue** | Every queue mutation snapshots pending jobs to disk; a restart restores them (a job running at shutdown re-queues first). A routine restart can never silently destroy queued work. |
-| **Image conditioning via Redux** | Text alone tops out at a "strong echo" of a style — the March SDXL pipeline's IP-Adapter is what made references *scream*, and the MLX migration lost it. FLUX Redux restores the image channel on schnell. Its native strength dial is a scalar on 729 reference tokens that attention renormalizes (any strength clones the reference's content), and pooling the tokens only trades style for content along the same curve. The fix is **block-selective injection**: FLUX's early double-attention blocks carry style and its single/late blocks carry content, so the reference tokens are masked out of every block but a window of early double blocks. The window is chosen per card type — creatures and planeswalkers see the references in double blocks 0–14, where figure design lives (a dragon becomes the show's noodle-necked creature, an elf a spindly picture-book creature), everything else in 0–9, which never leaks a reference's cast or props. At the full 729-token grid the card keeps its subject and the reference's medium, palette and stroke come through, at ~15 s extra per card. References are averaged so what they share dominates; a deck whose references are character-heavy (the vision model checks each one) defaults to Medium strength, where cast and props stop bleeding, unless you set the dial yourself. |
-| **Front-loaded style, subject right behind it** | FLUX's T5 encoder weights early tokens most heavily. The style lead goes first, the scene's opening sentence (the subject) second, then the rest of the style block, then the rest of the scene. Style-first alone gave the block a 70-word head start and a bat god rendered as a temple gate; subject-first alone gave zero style transfer. |
-| **Subject-lock prompts** | The card's own subject must dominate the frame. Object/place cards get no stray character, literal names depict the literal thing (Krark's Thumb → a thumb), and a Cyclops / "Eye of …" creature gets exactly one eye — the deck theme stays in the background. |
-| **Name- and flavor-grounded scenes** | Prompts anchor on the card's name and flavor text, so they depict concrete subject matter instead of "swirling magical energy". Rules text is game mechanics, not imagery ("exile cards from the top of your library" made an enchantment a library) and is given to the writer only for creatures, whose keywords are visual. Coined compound names are split into their words with the system dictionary (Dragonstorm → dragon, storm); a draft that does not open with the subject is rewritten once. Scenes follow a grammar with one subject: the subject caught at a moment, a deliberate camera and scale with one named light, and one atmospheric detail, in three sentences of about sixty words — the difference between a catalogue photo of the subject and a piece someone would frame. Every draft is then judged by the same language model against a checklist (the card's own subject as the focal, object or location present as required, no invented person, hand, creature or prop, no game-zone places) and rewritten once at lower temperature if it fails. On flat media (ink, cel, comics, papyrus, woodblock, pixel) the writer gets no lighting vocabulary at all and builds the drama from pose, scale, silhouette, colour and pattern, because glow and shadow language pulls a flat medium toward smooth digital painting; any light words that slip through are rewritten out. Phrases about glyphs, lettering or text never enter the style block, so cards stop growing columns of pseudo-writing. |
-
-## EDH Play Browser Extension
-
-A cross-browser extension (Firefox + Chrome) that replaces Scryfall card images on [edhplay.com](https://edhplay.com) with your custom AI-generated art. Your opponents see the original Scryfall art — you see your custom art.
-
-![EDH Play extension showing custom art](docs/images/app-extension.jpg)
-
-### How It Works
-
-The extension watches edhplay.com for `<img>` elements pointing to `cards.scryfall.io` and swaps them with your custom art using a MutationObserver. Art is cached in the extension's IndexedDB so it persists across sessions.
-
-For cards with multiple printings (e.g. basic lands), the extension resolves unknown Scryfall UUIDs via the Scryfall API and matches by card name.
-
-### Installing the Extension
-
-**Firefox:**
-1. Open Firefox and paste this into the address bar: `about:debugging#/runtime/this-firefox`
-2. Click **"Load Temporary Add-on..."**
-3. Browse to the `extension/` folder and select `manifest.json`
-4. The extension icon appears in your toolbar — you're done!
-
-> **Note:** Temporary add-ons are removed when Firefox closes. You'll need to repeat these steps after restarting Firefox. For a permanent install, the extension can be [signed through AMO](https://extensionworkshop.com/documentation/publish/submitting-an-add-on/) as an unlisted add-on.
-
-**Chrome:**
-1. Open Chrome and paste this into the address bar: `chrome://extensions`
-2. Turn on **"Developer mode"** (toggle in the top right)
-3. Click **"Load unpacked"** and select the `extension/` folder
-4. The extension icon appears in your toolbar
-
-> **Note:** Chrome will show a "Disable developer mode extensions" popup on each launch. Just dismiss it — your extension keeps working.
-
-### Importing Your Art
-
-**From Deck Art Studio (for creators):**
-1. Make sure Deck Art Studio is running (`python3 deck_studio.py`)
-2. Click the extension icon to open the popup
-3. The Studio URL defaults to `http://localhost:5001`
-4. Select your deck from the dropdown and click **"Import Deck Art"**, or click **"Import All Decks"** to import every deck at once
-5. Navigate to edhplay.com — your custom art replaces the Scryfall defaults
-
-**From a shared .json file (for friends):**
-1. Click the extension icon and click **"Open Import Page"**
-2. Drag-and-drop the `.json` file onto the page, or click to browse
-3. Each deck in the file appears in the **Imported Decks** list automatically
-
-### Switching Decks
-
-The **Imported Decks** section in the popup shows every deck you've imported, with card count and import time. Each deck has a radio selector:
-
-- **Click a deck** to activate it — only that deck's art appears on edhplay.com
-- **"All Decks"** shows art from every imported deck (useful if cards don't overlap)
-- **"Remove"** deletes a deck's art from the cache
-
-Art is stored per-deck in IndexedDB, so shared cards like Sol Ring or basic lands keep their correct art style per deck. Switching is instant — just click and the page updates.
-
-### Sharing Art with Other Players
-
-Art is exported as self-contained JSON manifests with embedded base64 JPEG images (~30–40 KB per card, ~3–4 MB for a full deck). Multi-deck exports preserve each deck's name and cards separately.
-
-**Export:** Click **"Export All Art as .json"** in the popup. If a single deck is active, the file contains just that deck. If "All Decks" is active, every deck is included.
-
-**Import:** Click **"Open Import Page"** in the popup, then:
-- **From file:** Drop the `.json` file on the page or click to browse
-- **From URL:** Paste a Google Drive, Dropbox, or direct link and click Fetch
-
-Google Drive share links are auto-converted to direct download URLs.
-
-### Extension Files
-
-```
-extension/
-├── manifest.json            — WebExtensions Manifest V3 (Firefox + Chrome)
-├── browser-polyfill.min.js  — Mozilla webextension-polyfill for cross-browser API
-├── content.js               — MutationObserver image replacement on edhplay.com
-├── background.js            — Service worker: IndexedDB access, manifest fetching
-├── background-worker.js     — Chrome MV3 entry point (imports db.js + background.js)
-├── db.js                    — IndexedDB wrapper (deck-scoped card storage)
-├── popup.html/popup.js      — Extension popup UI (studio import, deck switching, export)
-├── import.html/import.js    — Dedicated import page for shared art (file/URL)
-└── icons/                   — Extension icons (16, 48, 128px)
-```
-
-## Project Structure
-
-```
-deck_studio.py              — Flask web app (UI + API, single-file, ~12K lines)
-gpu_coord.py                — Shared GPU_LOCK + worker inactivity watchdog (serializes FLUX/MLX)
-local_image_generator.py    — FLUX.1-schnell driver; spawns/controls the image worker
-flux_worker.py              — FLUX image-generation subprocess (mflux)
-mlx_worker.py               — MLX text + vision subprocess (mlx-lm + mlx-vlm)
-mlx_llm.py                  — Parent-side client for the MLX worker (chat + vision)
-prompt_generator.py         — Rule-based + LLM art prompt generation (subject-lock, flavor-grounded)
-vision_analyzer.py          — Inspiration style analysis → FLUX style descriptors
-backend_config.py           — MLX model selection + persistence
-card_frame_renderer.py      — SVG card frame generation + art compositing
-scryfall_client.py          — Scryfall API client (card lookup, decklist parsing)
-fetch_scryfall_art.py       — Downloads card art crops from Scryfall
-fetch_flavor_text.py        — Fetches oracle/flavor text from Scryfall
-fetch_mtg_fonts.py          — Downloads MTG card fonts (Beleren, MPlantin)
-build_pips_from_mana.py     — Renders SVG mana symbols to PNG pip images
-build_reference_collage.py  — Builds Scryfall art reference collages (legacy helper)
-color_transfer.py           — Color palette transfer between images (requires numpy)
-mana-master/                — SVG mana symbols (Andrew Gioia's Mana font)
-static/                     — Favicon and touch icon assets
-extension/                  — EDH Play browser extension (see above)
-tests/                      — Unit test suite (pytest, ~185 tests)
-.github/workflows/          — CI/CD (issue auto-fix, PR review, auto-release)
-.githooks/                  — Pre-commit hook (runs tests before each commit)
-requirements.txt            — Base dependencies (installable everywhere, incl. CI)
-requirements-mac.txt        — Apple-Silicon MLX stack (mflux, mlx-lm, mlx-vlm)
-```
-
-> The MLX packages (`mflux`, `mlx-lm`, `mlx-vlm`) are Apple-Silicon-only and are imported lazily, so the core modules still import on the Ubuntu CI runner using only `requirements.txt`.
-
-## Runtime Directories
-
-These are created automatically and excluded from git:
-
-- `decks/` — Per-deck data (card databases, prompts, generated art, versions)
-- `shared/` — Shared caches (Scryfall art, fonts, pip renders)
-- `ref_collages/` — Generated Scryfall reference collages (legacy)
-
-Model weights are cached by Hugging Face under `~/.cache/huggingface/` and shared across all decks.
-
-## Development
-
-### Running Tests
-
-```bash
-# Run all tests (~185 tests, <2s)
-pytest tests/
-
-# Run a single test file
-pytest tests/test_clip_directives.py -v
-```
-
-The unit tests run without MLX (the heavy imports are lazy), so they pass on any platform.
-
-### Pre-commit Hook
-
-The project includes a pre-commit hook that runs the test suite before each commit. To enable it:
-
-```bash
-git config core.hooksPath .githooks
-```
-
-To skip the hook temporarily (not recommended): `git commit --no-verify`
-
-### Running the Dev Server
-
-```bash
-# Kill any existing instance and start fresh
-lsof -ti:5001 | xargs kill -9 2>/dev/null
-python3 deck_studio.py --port 5001
-
-# For LAN access (debug mode auto-disabled)
-python3 deck_studio.py --host 0.0.0.0
-```
-
-After editing `deck_studio.py`, you must restart Flask to pick up changes. (The `flux_worker.py` / `mlx_worker.py` subprocesses are re-spawned on demand, so edits to them are picked up on the next generation without a manual restart.)
-
-### Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repo and create a feature branch
-2. Enable the pre-commit hook (`git config core.hooksPath .githooks`)
-3. Make sure `pytest tests/` passes before submitting a PR
-4. For UI changes, test in the actual browser — Python-side tests don't cover the frontend
-
-## License
-
-The source code is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0) — free to use, modify, and share for personal and non-commercial purposes.
-
-This software is not intended for commercial use. If you are a business or commercial entity interested in using Deck Art Studio, contact me.
-
-### Fan Content Disclaimer
-
-Deck Art Studio is unofficial Fan Content permitted under the [Fan Content Policy](https://company.wizards.com/en/legal/fancontentpolicy). Not approved/endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. &copy; Wizards of the Coast LLC.
-
-This tool generates **original AI artwork** — it does not reproduce, copy, or distribute official Wizards of the Coast art or card designs. Magic: The Gathering is a trademark of Wizards of the Coast LLC.
-
-### Credits
-
-Card frame artwork is composited from the open-source **[CardConjurer](https://github.com/ImKyle4815/cardconjurer)** project (© Kyle Burton and contributors, GPL-3.0), via the [maintained fork](https://github.com/Investigamer/cardconjurer). Mana symbols are from [Mana](https://github.com/andrewgioia/mana) by Andrew Gioia. See [NOTICE](NOTICE) for full third-party attributions.
-
-## Support
-
-Deck Art Studio is free and open source. If you enjoy the tool, consider buying me a coffee:
-
-[![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/drewvalentine)
-
-## Decklist Format
-
-Supports Archidekt, MTGO, and Arena export formats:
+Click **Import**, name the deck, and paste a decklist in Archidekt, MTGO or Arena format:
 
 ```
 1x Sol Ring
@@ -454,4 +81,137 @@ Supports Archidekt, MTGO, and Arena export formats:
 1x Okaun, Eye of Chaos (bbd) 6 [Commander]
 ```
 
-Lines containing `[Commander]` or `[Commanders]` are tagged as commanders.
+Card data, rules text, flavor text and reference art are fetched from Scryfall. The deck appears in the header dropdown; switch decks there at any time.
+
+### Add inspiration
+
+Upload one to ten images in the **Inspiration** panel. Concept art, illustration, album covers and film stills all work; three to five images from one artist or one aesthetic give the most cohesive deck. Optionally name the style source (a movement, an artist, a film) and the analysis reconciles your images with what it knows about that name. Click **Re-analyze Style** after adding images.
+
+The same pipeline pointed at cartoon screenshots instead of fine-line illustration:
+
+![A second deck rendered in an adult-cartoon style](docs/images/app-cartoon-deck.jpg)
+
+### Generate
+
+Select cards (or **Select All**), press **Prompts** to write a scene for each card, then **Art** to render them. Everything runs through the global queue; click **Queue** in the header to watch it:
+
+![Generation queue drawer — a render in progress with queued jobs from two different decks](docs/images/app-queue.jpg)
+
+Jobs carry their own deck, can be cancelled, bumped to the top or paused, and pending jobs are saved to disk, so a restart picks up where it left off. **Flavor** writes themed flavor text for selected cards and renders it onto the frame.
+
+### Iterate
+
+Click a card to open its detail panel:
+
+![Card detail panel — composited card with prompt controls](docs/images/app-detail.jpg)
+
+- **Render Art** re-renders the current prompt on a fresh take.
+- **Steer & Render** rewrites the prompt in the direction you type, then renders.
+- **Generate Random** writes a new scene; edit it, then render.
+- **Portrait / Landscape** sets orientation. **Pin** protects a card from batch regeneration.
+
+Every render is archived as a version with its prompt. This commander has been through 31 takes; any of them is one click from being current again:
+
+![Version history — steer input, editable prompt, and a 31-version archive strip](docs/images/app-versions.jpg)
+
+### Design the frame
+
+The **Frame** tab is a live designer. Twelve themes render the same card differently:
+
+![The same card in five frame themes — Showcase, Art Deco, Etched, Mystical Archive, Samurai](docs/images/frame-themes.jpg)
+
+Colours derive from each card's mana identity (blend, split or gold for multicolour) and every colour can be overridden with a live preview:
+
+![WYSIWYG frame designer — theme picker and color controls](docs/images/app-frame.jpg)
+
+Save per card, apply to every checked card, or set a deck default that new imports pick up.
+
+### Export
+
+From the **⋯** menu next to the deck dropdown:
+
+- **Export ZIP** downloads every composited card as a print-ready PNG.
+- **Export for EDH Play** downloads a JSON manifest for the browser extension below.
+
+## Show it on edhplay.com
+
+The `extension/` folder is a Firefox and Chrome extension that swaps the card images on [edhplay.com](https://edhplay.com) for your art. Your opponents see the usual Scryfall art; you see your deck.
+
+![EDH Play extension showing custom art](docs/images/app-extension.jpg)
+
+**Install it.** Firefox: open `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on** and pick `extension/manifest.json` (temporary add-ons are removed when Firefox closes). Chrome: open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked** and select the `extension/` folder.
+
+**Load your art.** With Deck Art Studio running, click the extension icon, pick a deck and press **Import Deck Art** (or **Import All Decks**). Then open edhplay.com.
+
+**Share with friends.** **Export All Art as .json** in the popup produces a self-contained file (about 3 to 4 MB per deck). Anyone with the extension can load it from **Open Import Page**, by file or by link; Google Drive share links are converted automatically. Imported decks are listed in the popup, and one click switches which deck's art shows.
+
+The extension resolves unknown Scryfall printings by card name, so basic lands and reprints get the right art. Everything is cached in the browser's IndexedDB.
+
+## Under the hood
+
+Three local models share one Apple GPU: **FLUX.1-schnell** paints, **Llama 3** writes scenes, and **Qwen2.5-VL** reads references and inspects renders. FLUX needs about 13 GB while resident, so it and the language models can never be loaded together on an 18 GB machine. Each runs in its own subprocess, one is evicted before the other loads, and a single lock serialises all GPU work. Watchdogs kill a worker that goes silent and exit a worker whose parent has died, so a stuck inference can never wedge the app or orphan 13 GB of memory.
+
+```mermaid
+flowchart LR
+    INSP["Reference images"] --> VLM["Qwen2.5-VL reads them\n+ pixel measurements"] --> STYLE["Deterministic style block\n+ reference tokens"]
+    DECK["Decklist → Scryfall"] --> WRITER["Llama writes one scene per card\n(subject-locked, flavor-grounded)"]
+    STYLE --> FLUX["FLUX.1-schnell render"]
+    WRITER --> FLUX
+    FLUX --> INSPECT["Qwen2.5-VL inspects\n(re-roll on defect)"] --> FRAME["SVG frame composite\n750×1050"] --> OUT["Versioned card\nZIP / manifest export"]
+```
+
+A few decisions that shaped the design:
+
+| Decision | Why |
+|----------|-----|
+| **Subprocess isolation** | Killing a worker is the only reliable way to hand FLUX's 13 GB back to the OS. In-process cache clearing left fragments that still ran the machine out of memory. |
+| **Deterministic style blocks** | The style description is assembled from a classified medium, measured palette and lighting, and majority votes over per-image reads. The vision model enriches but never subtracts, so a deck's look never drifts between analyses. |
+| **References as image tokens** | The style block says what to draw; the references, averaged and injected only into the early image blocks, carry palette and finish without copying their subjects. |
+| **Subject-locked prompts** | The card's own subject must dominate the frame: literal names show the literal thing, objects and places get no stray characters, and a cyclops gets one eye. |
+| **Durable queue** | Every queue change is snapshotted to disk. A restart restores pending work, and a job that was running re-queues first. |
+
+## Project layout
+
+```
+deck_studio.py              — Flask app: UI, API, queue and orchestration (single file)
+gpu_coord.py                — The GPU lock and worker watchdogs
+local_image_generator.py    — FLUX driver; spawns and controls the image worker
+flux_worker.py              — FLUX image-generation subprocess (mflux)
+mlx_worker.py               — Text and vision subprocess (mlx-lm, mlx-vlm)
+mlx_llm.py                  — Client for the MLX worker (chat and vision)
+prompt_generator.py         — Scene writing: subject lock, flavor grounding, backstops
+vision_analyzer.py          — Reference analysis, style distillation, render inspection
+card_frame_renderer.py      — SVG card frames and art compositing
+scryfall_client.py          — Scryfall lookups and decklist parsing
+extension/                  — EDH Play browser extension
+tests/                      — pytest suite (runs without MLX, so it passes anywhere)
+requirements.txt            — Base dependencies (any platform)
+requirements-mac.txt        — Apple Silicon MLX stack (mflux, mlx-lm, mlx-vlm)
+```
+
+Runtime data lives in `decks/` (one folder per deck: cards, prompts, art, versions) and `shared/` (Scryfall art, fonts, mana pips). Model weights are cached by Hugging Face under `~/.cache/huggingface/`.
+
+## Development
+
+```bash
+pytest tests/                                  # the suite runs in a few seconds, no GPU needed
+git config core.hooksPath .githooks            # run the tests before every commit
+python3 deck_studio.py --port 5001             # dev server; restart after editing deck_studio.py
+python3 deck_studio.py --host 0.0.0.0          # reachable on your LAN (debug mode off)
+```
+
+The worker subprocesses are spawned on demand, so edits to `flux_worker.py` and `mlx_worker.py` take effect on the next job without a restart.
+
+**Contributing:** fork, branch, enable the pre-commit hook, keep `pytest tests/` green, and test UI changes in a real browser. Issues and pull requests are welcome.
+
+## License
+
+The source code is licensed under the [GNU Affero General Public License v3.0](LICENSE): free to use, modify and share for personal and non-commercial purposes. If you are a business interested in using Deck Art Studio, get in touch.
+
+**Fan content.** Deck Art Studio is unofficial Fan Content permitted under the [Fan Content Policy](https://company.wizards.com/en/legal/fancontentpolicy). Not approved or endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. &copy; Wizards of the Coast LLC. The tool generates original artwork; it does not reproduce or distribute official card art. Magic: The Gathering is a trademark of Wizards of the Coast LLC.
+
+**Credits.** Card frames are composited from the open-source [CardConjurer](https://github.com/ImKyle4815/cardconjurer) project (&copy; Kyle Burton and contributors, GPL-3.0) via the [maintained fork](https://github.com/Investigamer/cardconjurer). Mana symbols are from [Mana](https://github.com/andrewgioia/mana) by Andrew Gioia. See [NOTICE](NOTICE) for full third-party attributions.
+
+**Support.** Deck Art Studio is free and open source. If it made you a deck you love, consider buying me a coffee:
+
+[![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/drewvalentine)

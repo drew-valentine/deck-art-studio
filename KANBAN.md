@@ -310,6 +310,10 @@
 
 ## Done
 
+- [x] README showcase gallery and rewrite | Priority: P2 | Completed: 2026-09-21 | Owner: drew-valentine
+  - README rebuilt for a new reader: one-sentence pitch, two-step start, a gallery of four decks in four styles (eight-card hero, one five-card strip per style, light and dark variants), why it works, using the studio, the extension in three paragraphs, one architecture diagram. History of earlier backends removed.
+  - Every featured card audited against its name and type at raw-art resolution: a two-eyed cyclops, a thumbed Krark, a winged zombie snake, a legged wurm, a firebird efreet and a gramophone "vehicle" were all swapped out.
+  - Branch docs/readme-showcase, PR #50.
 - [x] Five-deck regression sweep for the non-drawn-media stack | Priority: P0 | Started: 2026-09-12 | Completed: 2026-09-13 | Owner: drew-valentine
   - Branch: `feat/night-composition`.
   - Gate for the six In Review items: the medium, palette, register, world, lighting and lettering changes all touch shared distillation and writer code, so every deck had to be re-checked, not only the one that forced the fixes.
