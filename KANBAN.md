@@ -2,6 +2,19 @@
 
 ## Backlog
 
+- [ ] Creature drawn as the wrong kind — inspector has no kind check for creatures | Priority: P1 | Created: 2026-09-12 | Owner: unassigned
+  - Found during the Animated Army deck (director-named live-action film stills) rounds: a Snake Shaman rendered twice as a human woman and passed every check.
+  - The inspector's open naming question (`_names_object`) runs for ARTIFACTS only. Creatures get the subject-present check (is anything living named), the body check and the wing/limb counts, none of which notice that the living thing is the wrong animal.
+  - Proposed: for a creature whose subtypes include a non-Human animal kind, ask the same open naming question about the creature ("what animal do you see") and require the subtype noun or a model-derived synonym; a miss re-rolls, with a category second opinion before it counts, as the artifact check does.
+  - Acceptance: Given a creature card with a non-Human animal subtype, when the render shows a different kind, then the inspector flags "wrong kind" and re-rolls once; and given a correct render across a mixed slice, then the check produces no false positives.
+  - Measure the false-positive rate on a slice before promoting it from advisory, the way `_names_object`, the body check and the centre-text probe were promoted.
+
+- [ ] H81 — revisit the flat-media light ban on ink/comic decks | Priority: P2 | Created: 2026-09-07 | Owner: unassigned
+  - PARKED 2026-09-08 on the H78 verdict: the strips are not where the composition loss is, so the gate this item was waiting on came back negative. Kept here in case a later experiment points at the light ban again.
+  - The flat-media path strips light vocabulary, and the strip-then-rewrite passes are the largest single source of prompt shortening. Ink and comic decks lose drama words the render could have used.
+  - Method if unparked: like-for-like fixed-seed A/B on one ink deck and one comic deck, with the ban relaxed from "no light words" to "no rendered light gradients".
+  - Acceptance: Given a flat-media deck, when the relaxed ban is used, then scenes keep the flat register (no drift to smooth digital paint) and the blind judge does not prefer the fully-banned version.
+
 - [ ] BUG: Planeswalker frame style drops adventure/split half rules text | Priority: P3 | Found: 2026-07-06 | Owner: unassigned
   - Found during the split-header full-style review. Pre-existing on main (verified by rendering Murderous Rider // Swift End in the planeswalker style from main — only the creature half's Lifelink/dies text renders in the loyalty-style ability bands; the Swift End adventure half is silently omitted).
   - Root cause area: the planeswalker style's text renderer (`_create_pw_frame_text_svg` in `card_frame_renderer.py`) renders `card.oracle_text` into loyalty-style ability bands and never checks `card.split_faces`, unlike the other styles which route through `_render_split_rules_svg`.
@@ -80,9 +93,74 @@
 
 ## Ready
 
+- [ ] (empty — H80 folded into H79, H81 parked to Backlog on the H78 verdict)
+
 ## In Progress
 
+- [ ] (empty — the five-deck regression sweep closed 2026-09-13; the branch now waits on the owner's merge call)
+
 ## In Review
+
+- [ ] Non-drawn media get drawing vocabulary | Priority: P0 | Started: 2026-09-12 | Review Started: 2026-09-12 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, committed as d67a9c1 and pushed.
+  - Reported on the Animated Army deck (director-named live-action film stills): the deck rendered as line art. The medium bucket was right — photograph — and everything downstream still spoke about drawing.
+  - Three causes, all in code that assumed the medium was drawn:
+    - The colour-coverage clause said things like "fills" and "no bare white paper", which describe paper and ink.
+    - Descriptors naming lines, ink, brush or paper survived into the block and into the stored idiom, because nothing filtered them by medium.
+    - The figure-idiom clause always said "drawn with", so a film still was told it was a drawing.
+  - Three fixes, keyed on the medium rather than on the deck: `vision_analyzer.is_non_drawn_medium` gates a photographic coverage clause ("full colour, soft muted tones") for the photograph and 3D-render buckets; `vision_analyzer.drawing_vocabulary` drops line/ink/brush/paper descriptors from the block and the stored idiom for those buckets; `deck_studio._idiom_verb` picks the verb from the medium (staged / rendered / painted / drawn with).
+  - Validated on the deck itself, round 1: 7 cards re-rendered after re-analysis, all photographic, none in line art.
+  - Held for the five-deck sweep — the coverage clause and the descriptor filter are shared by every drawn deck too.
+
+- [ ] Palette: pastel pink lost | Priority: P1 | Started: 2026-09-12 | Review Started: 2026-09-12 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, committed as d67a9c1 and pushed.
+  - The Animated Army deck's pink interiors came back as "red" in the measured palette and vanished from the block, so renders lost the one hue the references share.
+  - Two fixes: `_hue_name` names a low-saturation light red "dusty pink" (the pastel-red/coral naming from the 2026-09-09 sweep, extended to the pink end); and a hue that at least half the per-image reads agree on joins the palette even when the pixel measurement disagrees (`_read_majority_hues`, capped at 2 so the reads cannot flood the clause).
+  - Validated on the deck: the block leads with dusty pink and the renders carry it.
+
+- [ ] Posed register | Priority: P1 | Started: 2026-09-12 | Review Started: 2026-09-12 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, committed as d67a9c1 and pushed.
+  - The references stage their figures symmetrically, frontally and deadpan; the film-still grammar drove every creature into a decisive action at a dramatic angle, so the renders were plausible cinema and the wrong cinema.
+  - `prompt_generator._posed_register` reads the register out of the style's own staging and idiom (symmetrical / frontal / tableau / deadpan) — derived, not a per-deck table. When it fires: the creature grammar opens on a posed still facing the camera, the static-opening moment rewrite is skipped (a posed opening is the point, not a defect), `_scene_score` stops rewarding action verbs and penalising static ones, and a new `Composition (REQUIRED)` writer line is built from the idiom's composition items.
+  - Validated on the deck: frontal, centred staging across the round-7/8 renders.
+  - Watch in the sweep: every deck without the register must keep the film-still grammar unchanged.
+
+- [ ] Style world for every card type | Priority: P0 | Started: 2026-09-12 | Review Started: 2026-09-12 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, committed as d67a9c1 and pushed.
+  - Lands, enchantments and spells were built from generic terrain instead of the style's own world, and the earlier staging read could not fix it.
+  - Shipped: `vision_analyzer.style_world_seen` reads up to 6 references in category words only, `merge_world_reads` takes a per-category majority (built or natural, indoors or out, materials, colours, era, designed or not), the result is stored as `deck.json.style_world`, and the writer's Setting line becomes "the place is one of this style's own — …".
+  - Three earlier merge designs failed and are recorded so they are not retried: an LLM merge hedged into uselessness; a full-sentence read pasted one picture's lighthouse onto every card; a single representative read carried one picture's colours across the deck. Category words plus a per-category majority is the design that held — the same lesson as the composition-only staging merge (H87).
+  - Validated on the deck: rounds 7 and 8 show symmetrical frontal staging on pink surfaces, the references' own world rather than a generic room.
+  - Sweep gate: check the four other decks for the deck-wide sameness that H60 caused — one shared backdrop on every land is the failure mode this class of change produces.
+  - Follow-up 2026-09-13: the Setting line is a writer instruction, so a scene that stayed thin ignored it. A raccoon card with a one-sentence scene rendered as a cartoon on the new stack (12:54). `_world_sentence` now appends the merged world deterministically once both thin-scene growth passes have failed — with that sentence the same card rendered as a deadpan frontal photographic figure.
+  - Also 2026-09-13: cartoon words (wobbly, cartoonish, caricature) are dropped from photographic blocks.
+  - Round 9 after both fixes: 7 of 8 cards on style.
+
+- [ ] Lighting key | Priority: P1 | Started: 2026-09-12 | Review Started: 2026-09-12 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, committed as d67a9c1 and pushed.
+  - `vision_analyzer.lighting_key` takes a majority of the per-image Shading/Lighting lines. An "even" key on a non-flat medium adds "flat even diffused lighting, no strong shadows" to the block and switches the writer's light line to even shadowless light — previously only flat media could ask for flat light, so an evenly lit photographic deck kept being given a named dramatic light source.
+  - Validated on the deck.
+
+- [ ] Slogans, graffiti and signage are lettering | Priority: P1 | Started: 2026-09-12 | Review Started: 2026-09-12 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, committed as d67a9c1 and pushed.
+  - A scene naming a slogan, graffiti or signage renders it as words in the art, the same way quoted slogans and rune clauses did (H71). Both sides now cover it: the writer strips the clause, and the render guard states it.
+  - Validated on the deck.
+
+- [ ] H79 — scenes keep their setting | Priority: P0 | Started: 2026-09-07 | Review Started: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, committed 831a073.
+  - Shipped in that commit: a required Setting line (category words only, and it yields to a user steer); the user message's closing instruction now matches the scene grammar (it asked for "two short sentences" while the grammar asked for three of about sixty words); rewrites ask for full length instead of "the same length"; stub and restarted sentences are dropped; and a scene under 35 words or of a single sentence gets a growth pass (SCENE_FLOOR=0 mutes it, SCENE_MIN_WORDS sets the floor).
+  - Validated once, 2026-09-08, mixed: the Setting line and the word floor gave whole-figure and landscape cards a real environment (Krark, Kardur, Arid Mesa), but the blind judge still preferred the previous short render 7:1 with 4 undecided, because 4 of 12 prompts came out broken — the subject lost from the opening, and light-strip fragments. Those four are H83.
+  - Also absorbed H80: the Setting line covers "objects in a place", so no separate Object-line change was needed.
+  - Ship decision now rides on V24, taken together with H83, H87 and H88 — the four are one stack and stand or fall on the same 21-card sheet.
+  - V24 ran the stack over 21 fresh cards and the two failure classes it exposed are fixed (b5d16c0), with 5 of the 6 corrected on re-render (V6). Stays In Review: the ship decision is the owner's, on the V24b sheet.
+  - V24b closed 2026-09-08: the stack is complete and measured — 6 inspector defects against 10 on the current art, and the first run where the vision judge tilts to the new stack (6 new, 4 current, 11 undecided). Nothing further is queued behind it; the branch awaits the owner's ship decision.
+  - Night run closed 2026-09-08 05:25 — 15 commits on `feat/night-composition`, all pushed; every experimented card is back on its pre-night art; the owner decides the merge on the V24b sheet.
+  - Reopened for the day's composition work: the owner judged v1.49.0's compositions more cohesive than today's, so the branch now also carries H90, H91, H92 and H93.
+  - Not shipping yet by the owner's instruction: defects first, wow second. Rounds 3–5 on `feat/night-composition`; the remaining misses are per-roll variance, addressed by the two-scene take + inspection pick and a literal-thing retry for place/object drafts.
+  - State 2026-09-08 20:30: 40+ commits on `feat/night-composition`, 554 tests, docs current. Across the day's runs the new writer sits at roughly half the current art's inspector defect count on fresh cards, two-scene batches deliver 18 of 19 clean finals, and objects and places no longer grow onlookers. Awaiting the owner's read of the latest sheets.
+  - State 2026-09-09 02:00: ~60 commits on `feat/night-composition`, 564 tests, docs current; the Koma vibe transfers; the regression sweep is clean. Awaiting the owner's merge call.
+  - State 2026-09-12: the branch now also carries the six In Review items above (non-drawn media, palette, posed register, style world, lighting key, lettering), uncommitted. 583 tests passing, `tests/test_non_drawn_media.py` added. The deck's own validation renders are done; the five-deck regression sweep in In Progress is the last gate. This item still holds the whole branch — the merge call is the owner's.
+  - State 2026-09-13: those six are now committed as d67a9c1 and pushed. 586 tests passing. The five-deck sweep closed clean (see Done), so the last gate is off. Every item on the branch stays In Review because the whole branch still awaits the owner's merge call.
 
 - [ ] Redux style reference — restore image conditioning | Priority: P1 | Started: 2026-09-02 | Review Started: 2026-09-02 | Owner: drew-valentine
   - PR #47 (https://github.com/drew-valentine/deck-art-studio/pull/47) opened 2026-09-02 from branch `feat/redux-style-reference` — In Review, awaiting the owner's ship decision.
@@ -92,15 +170,58 @@
   - Prototype done: FLUX Redux on schnell via mflux 0.19.1 with reference-token pooling (729 → 81 tokens) holds style and subject together at 57 s/card, faster than the text-only path (~65 s). Weights are ungated (Runware/FLUX.1-Redux-dev mirror).
   - Implemented: `Flux1Redux` wired into `flux_worker` with reference-token pooling and a per-`(path, mtime, tokens)` embedding cache. The resident Redux model also serves reference-less decks (mflux `[]` → `None` fix), so there is no second model to swap in.
   - Implemented: per-deck `style_reference` setting, `/api/decks/<id>/style-reference`, and a "Reference strength" dial. The dial shipped Off → Clone and was capped during the overnight pass (see below).
-  - Validated live: Egyptian deck 60 s; Seuss deck with 4 references 76 s and unmistakably Seuss; no-reference deck 53 s.
+  - Validated live: Egyptian deck 60 s; picture-book deck with 4 references 76 s and unmistakably the picture-book style; no-reference deck 53 s.
   - Overnight iteration, 2026-09-02 into 2026-09-03:
     - Shipped on the PR branch — reference-token averaging across all of a deck's inspiration images: the pooled Redux tokens are combined element-wise into a mean, so per-image content cancels and the style the images share survives. Cleaner and leak-free next to conditioning on a single reference or concatenating several.
     - Shipped on the PR branch — the dial is capped at Balanced (Off · Palette · Subtle · Balanced). 81 tokens is the ceiling, Subtle at 25 tokens is the default, and any positive token budget re-enables references. 408 tests green.
     - Rejected after side-by-side runs on the same prompts and seed across 3 decks: late-step conditioning; texture crops; guidance amplification (adds artifacts); 8-step schedules; strided token subsampling (more content leak); two-pass compose→restyle (a no-op at 0.5); token noise (content comes back); averaged references at 169 and 729 tokens (the layout the references share leaks through); FLUX.2 klein-4B reference-edit mode (perfect subject, no style transfer).
     - Per-deck LoRA is out: mflux 0.19 dropped FLUX.1 LoRA training, and the owner has ruled the approach out regardless.
-    - FLUX.1-dev + Redux (ungated mirror, 14 steps, ~215 s/card) transfers line character markedly better — visible across the Seuss row — but the subject drifts off the card. Candidate for an opt-in hi-fi render, not a default. Decision pending owner.
+    - FLUX.1-dev + Redux (ungated mirror, 14 steps, ~215 s/card) transfers line character markedly better — visible across the picture-book row — but the subject drifts off the card. Candidate for an opt-in hi-fi render, not a default. Decision pending owner.
     - Leak matrix: at 81 tokens with 4 references, reference content leaked on 3 of the 4 validation decks. At Subtle with averaged references, the subjects hold.
     - Verdict: the target — style that screams without copying, subject preserved — is not reachable with zero-training reference conditioning on 4-step models. The shipped default is the honest best of what was tried.
+  - Progress, 2026-09-03 (supersedes the verdict above: the remaining gap was on the text side, and moving it moved the renders):
+    - Hypothesis ledger shipped. H4 (soft per-block reference scaling) REJECTED — it leaks the reference's cast even at 30%. The hard mask on DOUBLE blocks 0-9 stays the definition of "Strong".
+    - Text-side idiom work shipped, all committed on the branch: named-style idiom recall (8B Llama when cached) plus a vision read of the reference to say whose work it is, palette excluded; staging and tonal register recalled for the scene writer (`deck.json.style_staging`) — settings, props, camera and tone only, never the cast; the writer hint no longer carries the block's hue list; the scene writer defaults to the 8B model (7.6 s/card vs 4.4 s); composition backstops (one subject in the foreground, two sentences, 45-word whole-sentence cap, stub-sentence drop); an enchantment's name always sets the scene; rules text reaches the writer only for creatures and planeswalkers (game zones like "library" were becoming scenery); artifacts state their object in plain words.
+    - Result: Temur Roar (animated-series references) went from generic off-style cartoon to show-plausible on 3 of 4 representative cards, with sensible composition on 4 of 4 in the latest completed round.
+    - Open before ship: cross-deck regression matrix (Marchesa, Heads-I-Win, Glissa (picture-book), Alela — legendary creature, land, artifact and enchantment each) under the new block builder, running now; creature faces (Keiga) still lean generic; ring-as-object clarity.
+    - Finishing bar (Drew): every fresh sheet must SCREAM the inspiration aesthetic AND compose sensibly for the card. Generic medium is a fail.
+  - Progress, 2026-09-03 (afternoon) — regression matrix run, and the fixes it forced:
+    - Matrices m2/m3 ran across five decks (Temur Roar, Marchesa, Heads-I-Win, Glissa (picture-book), demo-alela), one legendary creature, land, artifact and enchantment each. m3 style-plausibility verdict: 4/4 on Temur Roar, Heads-I-Win, Glissa and Alela; 3/4 on Marchesa.
+    - Regressions the matrix caught and fixed: colour loss when the idiom sat ahead of the palette clause (the palette clause now comes first and the block is capped at 72 words); a colour-coverage evidence axis; declared-source medium now resolves declaration → stored evidence → model (Alela's hieroglyphs had been turning into "cinematic photograph"); a "painted illustration" medium bucket.
+    - Deck-agnostic gates, per Drew's standing rule against per-deck special cases: source kind (franchise / artist / movement) is recalled with an UNKNOWN escape, replacing the keyword table (now fallback only); production-lineage recall supplies the de-named render lead; staging is read from the reference first with name recall as fallback only; reference reads run for unnamed decks too.
+    - Scene-writer fixes: rules text withheld for non-creatures (game zones were becoming scenery); enchantment names read literally with dictionary compound splitting (Dragonstorm → dragon, storm); an opening-rule check with one strict retry; an empty prompt is never persisted; the figure idiom moved into the user message for creatures; two-faced cards hand the writer the front face only (Aclazotz had been staged inside its own back-face temple for three rounds).
+    - Render: the FLUX prompt order is now lead + medium anchors + colour coverage + palette, then the subject sentence, then idiom/motifs/reference read, then the rest of the scene — style-first buried the subject, subject-early lost the colour. "no signature" added to the guard. The MLX worker retries once after a Metal GPU hang.
+    - m4 (subject-early) confirmed subjects recover (Arcane Signet, Glissa) but colour drops; m5 on the new default order is running as the deciding evidence.
+    - Open before ship: the m5 verdict; Blast Zone showed the reference's iconic striped hat — image-channel prop bleed, on the watch list.
+    - m5/m6 prompt-order verdict: subject-early kept subjects but dropped colour on ink decks; medium-first kept colour but lost a picture-book elf; default is now lead + colour-coverage clause, subject sentence, full block, rest of scene. Differences between orders on the picture-book deck were within single-roll variance; block content and writer output matter more. The picture-book references are white-paper art with sparse fills, so pale renders are partly faithful.
+    - Correction: "Aclazotz renders as a skull gate" was the BACK face (Temple of the Dead) picked by the sheet builder; the front face is a fine bat god. Sheet builder fixed; front-face writer unit fix (front name only) kept.
+  - Progress, 2026-09-03 (evening) — fixed-seed hypothesis round:
+    - Tooling: POST `/api/generate` accepts a seed (stamped in the art's `.meta.json`); every A/B below is like-for-like at a fixed seed. Sheet builder now excludes back faces.
+    - H22 (deterministic figure-idiom clause on the creature sentence): near-zero effect at seed 1234 — text barely moves creature design on schnell. Kept, low value.
+    - H24 (artist name vs de-named lineage lead, seed 4321, picture-book deck): signatures appear with both, so they come from the model's prior for signed picture-book art, not the name; lineage lead loses picture-book colour. Rejected; artist names stay.
+    - H28 (crop the reference token grid's border rings): signatures persist, 2 rings harms the subject. Rejected; plumbing kept off.
+    - H27 (style-block window): CONFIRMED and shipped — creatures/planeswalkers see the references in double blocks 0-14 (Keiga becomes the show's star-eyed noodle serpent, Glissa a grinning picture-book creature, Krark a comic goblin, Aclazotz a bat, Alela a papyrus figure); object/place cards keep 0-9 because at 0-14 they grow people (crowd around the signet, attendants at the tower). Verified on all five decks (m7).
+    - H21 shipped: scene checklist judged by the model with one lower-temperature re-roll (any hand/onlooker on object cards is a failure).
+    - H23 shipped: character-heavy references (vision yes/no per image) default the deck to Medium unless the user set the dial.
+    - H26 shipped: colour coverage measured from reference pixels (paper fraction, saturation); the picture-book deck reads "coloured figures on open white paper".
+    - H25 (pick-of-two with a judge) parked: a vision judge cannot co-reside with FLUX; in-worker similarity rewards copying.
+    - Running: ab5 ("unsigned artwork" wording), then m8 = final five-deck validation on the shipped defaults.
+    - m8 (five decks, shipped defaults, fresh rolls): style plausibility Heads-I-Win 4/4, Alela 4/4, Marchesa 3/4, Temur 2/4, Glissa 2/4 (a weak roll; m7 at the same settings was 4/4). Defects found at full size: a three-armed Krark, a two-headed Keiga, fake signatures including a declared artist's real name, pseudo-hieroglyph text, clock numerals, Sol Ring as a chalice.
+    - Drew's third scoring question added: defect-free (no extra fingers, mirrored hands, doubled heads, duplicated creatures). Judging procedure: count limbs at full resolution; never pass from a thumbnail.
+    - H29 shipped: end-of-batch render inspection (vision model, defect checklist, verdict in `.meta.json`, one auto re-roll, final record-only pass; POST `/api/decks/<id>/inspect`). Trial on the m8 renders running.
+    - "Two takes per card" batch option shipped (each take archived as a version; user picks).
+    - Signatures escalated from cosmetic to public-materials: the model printed the declared reference artist's real name on a card. Text/lead/crop mitigations all failed; the inspection pass treats any text or signature as a defect.
+    - Drew's fourth bar added: WOW. The two-sentence composition rule fixed clutter but flattened the drama (correct subject, centred, candle-lit). Replaced by a scene grammar with one subject: subject at a moment; deliberate camera and scale plus one named light; one atmospheric detail; three sentences, about sixty words (cap 64, whole sentences). Fixed-seed A/B on the picture-book deck (seed 4321): 3 of 3 improved (hourglass on a mound became a rainbow clockwork castle; Glissa a close-up figure in gnarled branches). Four more decks (seed 2026): 5-6 of 8 with real drama (Keiga on a wave, Krark in a shaft of light, vine-choked ruins, crystalline mesa, consuls under a beam). Shipped as the default (e869715).
+    - Krark's Thumb: "a detached thumb" renders a whole hand; the artifact guidance now says a body-part object is one part, detached at its base, no hand, presented as a kept relic (strung, mounted, on a cloth). Fixed-seed test: digit / talisman phrasings work, jar grew a fist. (143762d)
+    - Inspector refined to a count protocol with edge-strip confirmation; end-to-end loop verified on a real batch (Krark flagged → auto re-roll → final pass). Writer drafts are now logged before backstops (one subject-less draft slipped through with no retry logged — open).
+    - Judging procedure: count limbs at full resolution before any pass; name the face shown for two-faced cards.
+  - Progress, 2026-09-03 (late night) — keep going:
+    - H31 root cause found: the franchise-sentence stripper was fed the whole style block on unnamed/artist decks, so every block word ("smoke", "bold", "deep", "hand") became a forbidden cast token and scene sentences containing them were deleted (Krark's coins-only prompt, an empty Arcane Signet prompt). Fixed: tokens only from a source the recalled kind/table says is a franchise. Verified on four Heads-I-Win prompts.
+    - H32: light described in the medium's terms — minor gain. H33 shipped: two takes pick their own winner by inspection. H34 shipped: unpaintable abstractions ("a testament to", "as if") cut from prompts.
+    - Writer hygiene: token budget 220 for three sentences, dangling-tail fix ("...a warm light that."), invented single-eye fix (a faerie had gained "a single, piercing emerald eye").
+    - H36 (flat media, no light vocabulary — drama from pose/scale/silhouette/colour/pattern; rewrite-then-strip of light words): Alela went from 1/4 papyrus (cinematic light pulled it to smooth digital) to 4/4 flat and in register with the drama intact.
+    - H37: writing words (glyph/symbol/lettering/text/script) filtered from the idiom; needs per-deck re-distill (Alela running).
+    - Coexistence: experiments hijacked Drew's live UI deck twice; scripts now run only on his active deck and abort on change. Cross-deck validation (m9) and the object-window test wait for a GPU window.
   - Scope:
     - [x] Wire `Flux1Redux` into `flux_worker` with a token-pooling hook
     - [x] Pass each deck's inspiration images as references
@@ -110,19 +231,317 @@
     - [x] Guard against reference figures and glyph text leaking into card art — the guard is the capped dial plus token averaging, not a separate filter
     - [x] Validate across the validation decks — leak matrix run at 81 tokens × 4 references, and the Subtle/averaged default re-run on top of it
     - [x] PR
+    - [x] Hypothesis ledger for the image channel — H4 (soft per-block reference scaling) run and rejected
+    - [x] Text-side idiom recall: named-style idiom + vision read, staging and tonal register, composition backstops, type-aware rules-text gating
+    - [x] Cross-deck regression matrix under the new block builder (m2/m3 across Temur Roar, Marchesa, Heads-I-Win, Glissa (picture-book), Alela × 4 card types)
+    - [x] Deck-agnostic source classification (source kind + production lineage recalled with an UNKNOWN escape; keyword table demoted to fallback)
+    - [x] m5 prompt-order verdict (style-first vs subject-early) — settled: lead + colour coverage, subject sentence, full block; order differences within roll variance
+    - [x] Creature faces on Marchesa — the "skull gate" was the back face; front face renders correctly, sheet builder fixed
+    - [x] Creature design — per-type style-block window (creatures 0-14) makes creatures read as the source's own on all five decks (m7)
+    - [x] m8 final validation on shipped defaults — see verdict; criterion stays open
+    - [x] Inspection trial catches the three-armed Krark / signatures — count protocol + edge-strip confirmation: 6/16 flagged, all true positives (Krark hands, Keiga doubled head, four signatures/text); 10 clean cards silent
+    - [x] Scene grammar (wow) validated on five decks at fixed seeds
+    - [ ] Fake signatures on artist-named ink decks — PUBLIC-MATERIALS issue (a real artist name was rendered); text/lead/crop mitigations failed; the inspection pass flags them. UPDATE: H73 removes them at generation time (0/8 measured); the inspection zoom remains the backstop. Owner to confirm on a full-deck rerun before closing.
+    - [x] Writer backstop miss: subject-less draft with no opening-retry log (diagnose with the new draft log) — root cause H31 (stripper fed the style block), fixed
+    - [x] Flat-media grammar validated on Alela (4/4 flat, in register, dramatic)
+    - [x] Full five-deck validation on the final grammar — the overnight m9 run (2026-09-03/04): five decks, two takes per card plus end-of-batch inspection, every sheet judged at full size; findings shipped in commit e02b9c3
+    - [x] Object-card style-block window 0-9 vs 0-12 — answered by H47 below: no difference
+    - [x] H38 — final inspection hides an edge signature/stray mark on an otherwise sound render by setting the card's frame art_zoom to 1.10 and recompositing (undo in Frame Designer) instead of re-rolling; commits 0bae70c (code + test, 468 passing) and 9871a91 (docs)
+    - [x] Verify H38 end to end in the browser on the active deck — the final inspection zoomed Sol Ring and Anointed Procession to 1.10 and recomposited; verified
+    - [x] H39 — scene-writer fixes, commit 3b946ac: the flat-media instruction's example nouns ("a red cushion, a gold ring") were being parroted into unrelated cards and are gone (guarded by test); the light-word rewrite names the offending words and retries before any sentence is dropped, so flat-media prompts keep two full sentences; a deterministic person-word check runs on artifact/land scenes before the LLM checklist; enchantment names never become characters. Verified on the Egyptian demo deck: Command Tower, Anointed Procession and Sol Ring all render flat and on-style, Sol Ring no longer drifts to smooth digital paint.
+    - [x] Cross-deck validation of the H38/H39 behaviour — five-deck baseline run overnight 2026-09-03/04 with two takes per card plus end-of-batch inspection; every sheet judged at full size. Findings below (H41-H48) shipped in commit e02b9c3.
+    - [x] H41 — two takes that tie on defects are decided by the vision model on style: the reference and both takes go on one sheet, and it is asked twice with the takes swapped. Verified live.
+    - [x] H43 — composition / face / subject-present answers are recorded as `inspection.advisory` (`INSPECT_COMPOSITION=advisory|enforce|off`). Measured on 22 cards: 0 fires, 0 false positives. Stays advisory.
+    - [x] H44/H48 — lands and enchantments get a World line in the writer's user message, built from the style's staging; the same rule in the system message did nothing. The Temur land went from an Earth forest to a crystal-arch lagoon. The relic-presentation list is out of the artifact guidance (it was parroted as a floating cord), and handless creatures are no longer flagged for hands.
+    - [x] H45 — creature Body line: the first subtype names what the body is. A Bat God now renders as a bat.
+    - [x] H46 — coloured flat media: a scene naming no colour word gets one rewrite. The picture-book deck's cards went from bare line art to coloured.
+    - [x] Backstops — markdown markers, writer notes, headings and lettering clauses are stripped, and every strip runs once more after the last model call.
+    - [x] H42 rejected — LAB palette transfer only greys renders.
+    - [x] H47 rejected — object style-block window 0-9 vs 0-12 makes no difference.
+    - [x] H51 rejected — idiom phrases on object cards are marginal: slightly bolder outlines on Sol Ring, otherwise unchanged. `FIGURE_IDIOM_ALL` stays an off-by-default hook.
+    - [x] H52 kept — the analyst's Medium phrase after the bucket anchor adds papyrus context to Sol Ring renders, though the metal object still reads smooth. Object smoothness is not a text-block lever; two takes plus the style pick is the mitigation. Commit e02b9c3.
+    - [x] H53 — per-type Framing line in the writer's user message (creatures: face visible, full figure; artifacts: the whole object; lands: an establishing view). Krark went from a fist close-up to a whole goblin with his face showing, and Keiga from a wing crop to a whole dragon; inline "Scene:" labels are stripped. Commit fbdfe71.
+    - [x] m10 — final five-deck matrix on the finished code: two takes per card plus inspection. 16 of 20 cards on-style with sensible composition, judged at full size (Temur 2.5/4, Marchesa 4/4, Krark 4/4, picture-book 2/4, Egyptian 3.5/4); creatures and lands consistently strong; object cards (signets, Sol Ring) are the weak class. Sheets m10-<deck>.jpg.
+    - [x] H54/H56/H57 — artifact renders are checked for the literal object: the inspector lists the objects it sees and requires the card's literal noun ("ring"); yes/no confirmation passed a goblet, a single "main object" answer was fooled by a companion prop; the list form measured 4 of 5 with zero false positives, so a miss is now a real defect that re-rolls (INSPECT_SUBJECT=0 mutes). Commit f733e29.
+    - [x] H55 — colour rewrite triggers on the subject sentence (figure itself coloured on the picture-book deck); instruction labels, parroted framing phrases, stranded fragments stripped; abstraction strip takes any adjective. Commit f733e29.
+    - [x] H59 — artifacts get an Object line with a model-derived plain gloss of the literal object ("a signet ring — a finger ring with a flat engraved top"), memoised per phrase, no object tables; five of five object cards across the five decks now render as real rings in their deck's style (before: two of five were a goblet or a jewelled box). Object cards are no longer the weak class. Commit 6742381.
+    - [x] H58 — when the inspector's object check fails, the re-roll leads the scene with the literal object instead of only changing the seed. Commit 6742381.
+    - [x] H60 — world features from the staging recall lead a land's render prompt. A seed A/B on the cartoon deck put crystal shards into both seeds where the base pair was a generic lake. On by default, person nouns filtered, WORLD_LEAD=0 mutes. Commit 328941a. REGRESSION found by the owner on a full picture-book deck rerun: every land shared one backdrop (abstract buildings, red flags) because the render-side lead put the same staging features at the head of every non-figure prompt and the writer's World line demanded a signature feature every time. Fixed in faa9cca: the render-side lead is off by default (WORLD_LEAD=1 re-enables), bare adjectives are not features, and the World line asks for at most one fitting feature, keeps a forest a forest and forbids repeating the backdrop. Lesson recorded: a lever proven on one card must be checked for deck-wide sameness before it is on by default.
+    - [x] m11 — fine-line ink deck, 24-card slice, two takes + inspection: about 21 of 24 on-style with sensible composition, eight or more WOW-level. Three final "text" verdicts (signatures, handled by the art zoom); one floating-head miss led to a new body-visible advisory (measurement queued).
+    - [x] m12 — cartoon deck, 17-card slice, two takes + inspection: zero final defects; about 15 of 17 read as the reference's world (acid yellows and magentas, crystal caves, green portals, wobbly-eyed figures), about seven WOW-level; the one miss is an instant that rendered as a generic forest ape. Sheet m12-temur-roar.jpg.
+    - [x] H61 — moment rewrite: a creature whose first sentence is a static posture gets one rewrite asking for a decisive action; on the cartoon deck's 18-card slice it correctly stayed idle because every creature opening already moved (MOMENT_REWRITE=0 mutes). Same commit: prompt erosion on flat media fixed (one more light-word naming pass before any sentence strip; single-sentence prompts lose the light phrase, not the sentence — the 18-card slice has no prompt under 28 words), a body-visible advisory for floating-head renders, invented proper names stripped by a dictionary check, one more parroted phrase stripped. Commit 006bde6.
+    - [x] H62 — body-visible check measured six of six on the fine-line deck (the floating winged head fired, five whole figures passed), so for creatures a miss is now a real defect that re-rolls (INSPECT_BODY=0 mutes); same commit gives instants and sorceries the writer's World line and the world lead in the render prompt. Commit eccd540.
+    - [x] m13 — picture-book deck, 18-card slice (almost all lands by deck order), two takes + inspection: 18 of 18 coloured and in the reference's whimsical register (leaning towers, curly trees, striped tubes), most WOW-level; five final "text" verdicts are signature-like marks handled by the art zoom. The deck scored 2 of 4 in the earlier matrix. Sheet m13-glissa-the-traitor-2.jpg.
+    - [x] m14 — comic-ink deck, 17-card slice, two takes + inspection: 17 of 17 on-style with zero final defects, one consistent hand (bold ink, teal/red/pink palette, swirling smoke); both one-eyed legends rendered correctly one-eyed; several lands WOW-level. Sheet m14-heads-i-win-tails-you-lose-2.jpg. Running slice tally: m11 21/24, m12 15/17, m13 18/18, m14 17/17.
+    - [x] m15 — fine-line deck cards 25-48 (22 cards, enchantments and artifacts), two takes + inspection: about 19 of 22 on-style with the same hand throughout; all three ring artifacts rendered as rings; two talismans rendered as engraved medallions were mis-flagged by the object check (literal noun not in the vision model's list) — synonym fix in progress; one enchantment has mid-image shop lettering (known edge-only text-check gap). Sheet m15-queen-marchesa-b3-v2.jpg.
+    - [x] c5b956f — the flat-media light strip can no longer erase the subject sentence (a 74-word scene had shrunk to one line); sentences are dropped only when the subject survives and 60% of words remain, otherwise light clauses are cut.
+    - [x] m16 — cartoon deck cards 19-36 (16 cards), two takes + inspection: zero final defects, about 14 of 16 in the reference's world (crystal-strewn acid-yellow scenes, wobbly-eyed dragons); misses: a stone artifact rendered as a red loop, lettering on one building. Sheet m16-temur-roar.jpg. Six-slice tally: about 104 of 121 cards on-style with sensible composition.
+    - [x] 3dbe7ab — a leaked "Bold framing:" label is stripped.
+    - [x] 87941cd — the object check accepts the gloss's own nouns as synonyms (a talisman drawn as a medallion passes); check in flight.
+    - [x] m17 — Egyptian demo deck, all six cards, two takes + inspection: 6 of 6 in the papyrus register with zero final defects (the sun-ring artifact remains the smoothest object but sits framed by hieroglyph columns). Sheet m17-demo-alela.jpg.
+    - [x] d637de3 — literal-object vocabulary widened to common artifact nouns (stone, cloak, boots, tome, …); a stone artifact with no entry had rendered as a red loop.
+    - [x] 3a34ff2 — object-check synonyms now come from a memoised model list (medallion, amulet, pendant) rather than the descriptive gloss; re-check in flight.
+    - [x] H66 — lettering inside the art (shop signs, engraved words) is caught by a transcription probe over the central 70% of the render; measured on eight cards (two lettered caught, six clean quiet) and promoted to a re-rolling defect (INSPECT_CENTRE_TEXT=0 mutes). Commit 156a041.
+    - [x] 156a041 — object check: when the noun list misses, a multiple-choice category question gives a second opinion, because the model's synonyms for a talisman never said "medallion"; re-check in flight (h67).
+    - [x] h64 — stone artifact re-render with the widened vocabulary: renders as a grey stone on a stump in the cartoon deck's palette (was a red loop before the vocabulary widening).
+    - [x] h67 — object-check re-check: the category second opinion passes one talisman drawn as a medallion; the other (a framed ornament between two skulls) still fails, a defensible miss. Commit 2525b9d also strips "a stillness that belies…" abstractions.
+    - [x] m18 — the original 20-card five-deck matrix re-run on the finished code: 18.5 of 20 on-style with sensible composition (was 16 of 20 before the night's work): cartoon deck 2.5→4, picture-book 2→3.5, fine-line 4, comic-ink 3.5, Egyptian 3.5 — the Egyptian sun-ring finally rendered flat; the one partial is the Egyptian faerie drawn bird-legged. Sheets m18-<deck>.jpg and m18-all-decks.jpg.
+    - [x] m19 — comic-ink deck cards 19-36 (17 cards), two takes + inspection: 17 of 17 on-style with zero final defects. Seven-slice tally about 121 of 138 cards on-style with sensible composition.
+    - [x] H68 — creature Body line carries a model-derived gloss of the type's build (memoised, no creature tables); the Egyptian faerie that rendered bird-legged now renders as a winged faerie lunging over a canal in the deck's register. Sheet h68-alela.jpg. Commit f755b7c.
+    - [x] m20 — the owner's own comic-styled deck, the two cards with no art rendered additively (skip-existing): both leaked cast-like figures onto non-figure cards, which led to H69.
+    - [x] H69 — the franchise render lead is card-type aware: creatures keep "original character designs", artifacts and lands get "no people, no characters" plus a guard line, enchantments and spells get "original unnamed figures only"; quoted slogans, camera directions and doubled punctuation are stripped from prompts. Re-rendered on the owner's deck: the goblin's thumb is a single detached thumb on a cord (a long-standing complaint), the saga a gear city with unnamed workers. Sheet h69-heads-i-win.jpg. Commit 39345c6.
+    - [x] H70 — regression check of the card-type-aware lead on the cartoon deck's non-figure cards: crystal-meadow landscape and dragon both WOW-level, ring correct.
+    - [x] H71 — rune, glyph, sigil and symbol clauses count as lettering and are stripped (a signet's seal face had been lettered from "etched with intricate runes"); "casting a warm, golden tone" joins the flat-media light words; the re-rendered signet is a clean ring on a crystal pedestal. Sheet h71-signet.jpg. Commit 027fa23.
+    - [x] H73 — signature bleed: local renders are 8% taller and the bottom band is cropped before saving; measured on eight lands of the artist-named picture-book deck: 0 of 8 signed versus about 40% on the owner's rerun, compositions intact; on by default (SIGNATURE_BLEED=0 disables). The first signature mitigation that measured clean (H24 lead and H28 token-crop had failed). Commit 1d98552. Sheet h73-bleed.jpg.
+    - [x] REGRESSION (owner-reported): "Steer & render" ignored the user's direction — the Body line added with H45/H68 was a REQUIRED user-message line and outranked the steer, and the first subtype "Phyrexian" glossed as a winged skull monster; three rewrites also dropped the steer's words. Fixed: the steer is now the first user-message line and every line yields to it; Body line and figure idiom dropped on a steered card; moment rewrite skipped; a deterministic check re-injects the steer's own words; the steer is persisted on the card so the render side omits idiom phrases; body glosses use the whole subtype phrase. Verified: "a beautiful zombie elf" renders a hooded elf with a pretty face and zombie skin in the picture-book ink. Lesson recorded: test a steered card before shipping any new writer or render line. Commit de1cd01.
+    - [x] Queue panel labels inspection jobs "Inspect" (they fell through to "Flavor"); commit c5bc146.
+    - [x] H74 (owner-reported) — "Blast Zone" rendered a calm mesa because the prompt narrated the past and a threat ("stood tall… threatening to unleash another blast"). A threat, an "about to", or a past-tense opening now triggers one present-instant rewrite; lands named for an event or force are told to show it at its peak and their framing makes the event itself fill the frame. Verified: a red fissure splitting the rock with lava pouring into the forest. Commit d4604fd.
+    - [x] Code review (owner-launched), six confirmed findings fixed in 66d3d5d: steer looked up in the active deck before the job's deck (cross-deck leak); two-faced cards' unsplit type line in the inspection hint; object check took the wrong head noun ("a pendant on a cord" → cord); hint_without_palette over-stripped idiom phrases after the palette; a recognised-only style source with no recalled kind reached the image model verbatim (now de-named as a franchise); Redux load failure now falls back to txt2img instead of failing every generation. The remaining eleven were verified by hand and fixed in 7d2f1db and bce0aae: stop-batch now cancels the batch's inspection job; a saved reference strength of 0.0 is honoured; a non-dict inspiration entry no longer crashes the reference settings; the person-word check skips hyphenated compounds; the invented-name strip recognises inflections and never drops the subject clause; the light strip protects card-name words; README no longer names a reference artist; reference-token pooling averages the whole grid (Medium had been a top-left crop covering about a third of the reference); the colour-coverage phrase judges the ink's saturation rather than the paper's; deck registry saves de-duplicate by id; a back-face-only signature no longer zooms the front; the archived take in a two-take comparison is inspected with the same hints. One hypothesis (skipped cards entering the take comparison) did not reproduce.
+    - [x] H75 (owner-reported) — a Fox with no flying was written with "retractable yellow wings", and a Human Shaman with a correct prompt rendered as a serpent-dragon that the yes/no subject check passed. Now: the Body line states wings only when the rules text says flying, wing and flight clauses are stripped from a flightless creature's prompt, the inspector counts wings and flags a winged flightless creature, and creatures get the open-list plus category identity check that already guarded artifacts. Verified: a wingless fox with a yarn ball and a human shaman in purple robes, zero defects. Commit 8455fba.
+    - [x] H76 — the cartoon deck's four matrix cards re-rendered after the review fixes: 4 of 4 on-style with zero defects and the closest palette match yet (orange-red alien plants, cyan crystals). Attribution corrected: that deck runs at Strong, where pooling is identity, so this is variance plus the week's fixes; the pooling crop only affected decks with non-divisor token counts (the owner's own comic deck at 25 tokens). Sheet h76-temur-pooling.jpg.
+    - [x] H77 — the pooling fix tested on the one deck it affected (the owner's comic-styled deck at 25 reference tokens): the two cards re-rendered are a giant bound thumb among scattered coins and a bearded inventor in a gear workshop, both on-card, in style, zero defects, no cast lookalikes. Not a like-for-like A/B (prompts regenerated), so the pooling contribution is unproven; the renders stand on their own. Sheet h77-heads-i-win-pooling.jpg.
   - Acceptance criteria (Given/When/Then):
     - [x] Given a deck with inspiration images, when a card is generated, then those images condition the render through Redux rather than through text descriptors alone.
     - [x] Given the token budget is raised or lowered on a deck, when cards are generated, then style adherence tracks the setting and the card's own subject still renders. — met at Subtle with averaged references; above the Balanced cap the subject gives way, which is why the dial now stops there.
     - [x] Given a deck whose references contain figures or lettering, when cards are generated, then neither the reference figures nor their glyph text appear in the card art. — met by design: token averaging cancels per-image content and the dial cannot be pushed past 81 tokens. At 81 × 4 references the matrix leaked on 3 of 4 decks, so the ceiling is doing the work.
-    - [ ] Given the four validation decks (Seuss, Moebius, cartoon, Egyptian), when a card from each is rendered, then the result reads as that deck's source style — the demo-alela v1 bar. — NOT met. Zero-training reference conditioning on a 4-step model gets closer than text-only but does not scream. FLUX.1-dev + Redux does transfer the line character; it costs ~215 s/card and drifts the subject.
+    - [ ] Given the four validation decks (the picture-book deck, the fine-line ink deck, cartoon, Egyptian), when a card from each is rendered, then the result reads as that deck's source style — the demo-alela v1 bar. — Evidence now in: six deck slices plus a full six-card deck on the finished code (m11–m17) came in at about 104 of 121 cards reading as their deck's style with sensible composition; the last three slices and the full Egyptian deck had zero final anatomy defects; object cards, lands, instants and creatures each have a dedicated fix validated on renders. m18 landed: 18.5 of 20 (was 16 of 20). Awaiting the owner's verdict.
     - [x] Given a batch run, when per-card time is measured, then it stays at or under the current text-only path. — met at the Subtle default: 57–78 s/card against the ~65 s text-only baseline.
+  - Note: the owner's own decks have not been re-distilled under the current pipeline (one has no style block at all); re-distilling them is the owner's call.
 
 ## Done
+
+- [x] Five-deck regression sweep for the non-drawn-media stack | Priority: P0 | Started: 2026-09-12 | Completed: 2026-09-13 | Owner: drew-valentine
+  - Branch: `feat/night-composition`.
+  - Gate for the six In Review items: the medium, palette, register, world, lighting and lettering changes all touch shared distillation and writer code, so every deck had to be re-checked, not only the one that forced the fixes.
+  - Method: five decks re-distilled from their stored references (ink, comic, painterly, fine-line, film stills), then 10 cards each rendered at seed 1001. Two sweeps were run, tagged `reg` and `reg2`.
+  - Result: no deck lost its medium, its palette or its composition. Two decks improved — the ink deck's uncoloured stub came back a coloured snake, and the film deck gained its film look.
+  - The one difference worth recording: the painterly cosmic serpent varied between sweeps (a sunset in one, a moonlit beach in the other). Judged writer variance rather than the new Setting line — the same card takes a different scene on a re-draft regardless of the Setting work.
+  - Acceptance met: medium bucket, palette hues and register held on all five decks, and the defect count stayed inside the 3–8 noise band of the earlier sweeps.
+
+- [x] A deck of 1970s film stills was filed as '3D render' — declared medium now wins in the block AND in the per-image text | Priority: P0 | Completed: 2026-09-12 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits 053308e, 000b15c, c4a7f1e and 3814522.
+  - Reported: the Alela B3 deck (declared source "70's kung fu movie", six film stills) showed a block of '3D render, digital 3d modeling' and per-image reads of 'Digitally rendered action scene / Medium: Digital painting'.
+  - Five causes:
+    - The vision model calls grainy continuous-tone stills 'digital rendering' even when told the declaration overrides it.
+    - 'movie' was not a photograph keyword, so the declaration never decided the medium.
+    - The keyword vote then ran over the wrong reads and won.
+    - The block cleaner de-named the declaration inside its own descriptors ('fu').
+    - Reads ran at temperature 0.7, so every re-analysis was a fresh roll.
+  - Five fixes, all generic:
+    - film / movie / footage / stills / cinema hit the photograph bucket at the name stage.
+    - A declaration that names a medium *is* the medium phrase, and is not de-named.
+    - The evidence phrase prefers the declaration's own words.
+    - Camera-movement, choreography and editing idioms are undrawable and are filtered from both the block and the stored idiom.
+    - Per-image reads whose Art Style / Medium lines contradict the declared medium are rewritten from the declaration; reads run at temperature 0.3.
+  - Result after re-analysis: block = 'cinematic photograph, 70's kung fu movie, photographic lighting, shallow depth of field, …, palette of dark red, brown, maroon, orange, slate blue, light gray, mood of dramatic, intense, action, …'; all six per-image reads say photograph / film stills, with no 'digital' anywhere.
+  - The owner's deck was backed up before re-analysis: `deck_backups/alela-b3.deck.json`.
+
+- [x] A steer keeps the kind's negative anatomy; limbless kinds get a no-legs guard; the inspector counts legs | Priority: P0 | Completed: 2026-09-11 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit b105b21.
+  - Reported: a steered Koma ("the long, writhing, coiling serpent") rendered with four legs.
+  - Three causes:
+    - With a user direction the whole Body line yielded, so "no limbs, no wings" from the serpent's model-derived body gloss never reached the writer.
+    - The deck's three references are limbed humanoid figures at Strong, so the image channel grows legs unless the text forbids them.
+    - A single steer-and-render skips the end-of-batch inspection, so nothing caught it.
+  - Three fixes:
+    - The kind's "no X" facts survive a steer as an Anatomy line; appearance still yields to the steer.
+    - A limbless kind's scene ends deterministically with "no legs and no arms, a limbless body from head to tail".
+    - The inspector counts legs and flags "limbs on a limbless creature" the way it flags wings on a flightless one.
+  - Validated: the prompt regenerated through the writer with the owner's steer and without it, both rendered at seed 1001 — no legs on either. Sheet: koma-limbless2.jpg.
+  - For the record: a first validation reused the card's stored prompt, because the same steer was already recorded on the card, so it never exercised the writer. Validate steers by regenerating.
+
+- [x] Regression sweeps after the Koma fixes | Priority: P0 | Completed: 2026-09-09 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits d3c361e, fad2e33 and 36f0d6a.
+  - Sweep 1 (re-analyze three decks, then 21 fresh cards) caught read variance rather than a code regression: the comic deck re-analysed as painterly — 'Medium: Digital painting' is the vision model's answer for any digital art — and the pastel deck's palette came back 'deep red, vibrant purple'.
+  - Holistic fix, no per-deck rules: measured edge hardness (comic 0.19, ink 0.15, fine-line 0.17, soft painting 0.08) overrides a painted vote with whichever flat bucket the reads mention (comic > cel > ink) and decides painterly against flat; the palette leads with the hues the reads and the pixels agree on and then adds the measured hues; pastel reds and oranges are named pink and coral.
+  - Sweep 2 stopped early — 'linework' had let ink outrank comic.
+  - Sweep 3 on the fixes: the comic deck is back to 'comic book art, bold ink outlines'; 21 cards against each card's current art — defects 4 against 10, subject missing 3 against 5, text 1 against 6, judge 4 new / 6 current / 11 undecided. By eye: no homogenized backdrops, correct subjects, colours kept. Within the noise band of rounds 4–5 (3–8 defects).
+  - Sheets: regress-cur-round5-new.jpg, regress3-cur-round5-new.jpg.
+  - Note: the three experiment decks now carry re-analysed blocks; the owner's own decks keep their stored blocks until re-analysed.
+
+- [x] Cosmic-painting references now transfer (Koma deck vibe gap) | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits b07848c and 2bfd404.
+  - Reported gap: the cosmos-serpent deck's dark painterly references — figures whose bodies are a starfield, oppressive skies, a glow at the horizon — rendered flat, pastel and winged.
+  - Six generic causes found and fixed:
+    - The 'painted illustration' bucket's anchor said 'flat opaque paint' for every painted deck, so the writer stripped all light. Painterly against flat is now decided from the evidence (gradients and glow against flat and opaque), with anchors 'painterly digital painting, soft blended brushwork, luminous highlights and deep shadows, atmospheric depth'.
+    - No tonal key reached the prompt. The coverage clause now carries a measured luminance key — 'dark low-key palette, deep shadows with small bright highlights' or 'bright high-key'.
+    - Unnamed sources got no idiom read at all. The reference idiom read now runs without a name.
+    - Subject nouns and props from the reference read ('winged creature', 'dynamic pose', 'flowing wings', 'intricate chains') sat in the block and the idiom and grew wings on a flightless serpent. Filtered by a category rule.
+    - A legacy stored reference count of 1 on a multi-reference deck sent one reference at Strong. It now averages the default unless the user set it.
+    - A worker crash fell back to mana-colour filler ('dense foliage, rich earth, deep water, cool mist'). The writer retries once, then uses a minimal subject-true scene.
+  - Also shipped: a majority read across the references of the signature surface treatment inside the figures' silhouettes (`style_surface_device`, e.g. 'starfield'), appended to the block and given to the writer as a Surface line for creatures.
+  - Validated on the deck after re-analysis: the block reads painterly and dark low-key; the serpent renders dark and painterly with a galaxy inside its coils at both seeds, no wings. The card back is ornamental — the averaged references still lend it wing shapes.
+  - Sheets: koma-after.jpg, koma-after2.jpg.
+  - Rounds 3–6, 2026-09-08/09 (commits 024ab04, b369a71, b7cd9e0, fed1677, e09c64d): the owner judged rounds 1–2 short of the references. Six further fixes:
+    - The Setting line now stages every scene the way the references do — staging composition applies to creatures and objects too, not only to places.
+    - The surface device is guaranteed in the creature's opening clause. The writer had put the starfield 'around' the serpent four runs running instead of inside it.
+    - The block carries the reads' majority mood and a composition clause.
+    - The writer's anchor no longer carries mana-colour filler, and the REQUIRED lines close the user message. The serpent went to a forest floor three times because 'dense foliage, rich earth, deep water, cool mist' sat last in the message.
+    - The medium is a majority of the reads. A single '3D modeling' phrase had flipped a painting deck to '3D render'.
+    - A measured sky-vs-subject key (quiet on this deck).
+  - Round 6 result: block = painterly, dark low-key, the mood, figures filled with starfield, composition clause; renders = a star-filled body, low horizon, moon glow, no wings.
+  - Sheets: koma-after3.jpg, koma-after4.jpg, koma-after5.jpg, koma-after6.jpg.
+
+- [x] H94 — the no-people clause rides in the prompt head for objects, places and card backs | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit ce55564.
+  - Validated on the 10 object and place cards at seed 1001 against each card's current art: inspector defects 1 against 5, subject missing 1 against 3, text 0 against 3, composition judge 3 new / 1 current / 6 undecided.
+  - No onlookers on any render — the thumb hangs alone in a dark room, the chasm holds no figure.
+  - Sheet: h94-objects-places.jpg.
+
+- [x] Two-scene takes through the real batch path | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits d7cc230, bbb67b5 and ca66183.
+  - Three in-app batches with takes=2 and end-of-batch inspection: picture-book 6 cards, 6 of 6 finals clean; picture-book again, 5 of 6 (a Human Shaman drawn as a pointy-eared elder, correctly flagged); comic 7 cards, 7 of 7 finals clean against 3 of 7 of the current art flagged.
+  - The scene-score tie-break decided the ties — Junk Diver's earlier take won on score. The literal-thing retry gave Command Tower a real lighthouse-tower on a coast.
+  - Sheets: twotake2-cur-vs-final.jpg, twotake3-cur-vs-final.jpg.
+
+- [x] Two takes are two scenes | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit d7cc230, tie-break landed in bbb67b5.
+  - Shipped: with `takes>1` each later take is preceded by a fresh prompt job, so the two takes are two different scenes rather than the same scene at a second seed; inspection then keeps the cleaner one.
+  - Validated in the app, real batch on 6 cards: 18 jobs, all six finals at 0 defects, cards restored afterwards.
+  - The VLM style pick was undecided on all 6 of the 6 defect ties, so a deterministic scene-score tie-break was added on top of it.
+
+- [x] Round 5 — script and handwriting clauses cut, blank-pages guard for document scenes | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits ea0a315, a96ce17 and 4a528c5.
+  - Shipped: script, handwriting and fine-print clauses are stripped from prompts (a contract's "fine script" was drawing a written page), no double full stop is left behind by the strip, and scenes containing documents get a blank-pages render guard.
+  - On the 21 fresh cards against each card's current art: defects 8 against 10, subject missing 4 against 5, text 4 against 6, judge 8 new / 4 current / 9 undecided — the first run where the composition judge clearly favours the new renders.
+  - The defect swing from 3 in round 4 to 8 here is per-run noise on 21 cards: the two runs differ by one strip and by fresh prompts.
+
+- [x] Round 4 — a creature is missing only when nothing living is named, objects large in frame | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit c07efb5.
+  - Shipped: the inspector calls a creature missing only when nothing living is named at all (humans stay strict), and objects are held large in the frame.
+  - On the 21 fresh cards: defects 3 against 10, subject missing 1 against 5, text 2 against 6, judge 5 new / 5 current / 11 undecided.
+  - Remaining flags: a written contract, a text mark, an angel drawn as a bird.
+
+- [x] Round 3 — compound literal objects, humans as persons in the inspector, creatures large in frame, dramatic camera for places | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit d151686.
+  - Shipped: compound literal objects are named as one thing, humans count as persons in the inspector, creatures are held large in the frame, and place cards get a dramatic camera.
+  - On the 21 fresh cards: defects 6 against 11, subject missing 6 against 8, judge 4 new / 4 current / 13 undecided.
+  - Fixed by the round: Command Tower renders a tower, Talisman a talisman, Shadowspear a spear, and Okaun is large in the frame.
+
+- [x] H93 — hybrid grammar: film-still staging for every type, a decisive moment for creatures | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits c85ff7e and b6146f0, on by default.
+  - Follows H92: the film-still writer gave places and objects the environments they were missing but cost creatures their subject more often than the moment grammar did (8 of 21 against 5 of 21).
+  - Shipped: composition and setting sentences on every card type, with creatures and planeswalkers opening at a decisive moment instead of a still pose.
+  - Validated on the 21 fresh cards at seed 1001 against each card's current art, same judge as the other runs. Three grammars on the same cards: moment (last night) — defects 6 against 10, subject missing 5 against 8, judge 6 / 4 / 11; film-still — defects 10 against 9, subject missing 8 against 8, judge 4 / 5 / 12; hybrid — defects 7 against 10, subject missing 6 against 8, text 1 against 6, judge hybrid 6 / current 5 / undecided 10.
+  - By eye, about 16 of 21 are both cohesive and correct: a serpent rising from a frozen lake, a soldier on a ship's bow, an angel over dunes, a cyclops among coins, a crater with red spined trees.
+  - Two misses — a tower drawn as a tree, a talisman as a box — came from the second-draft pick taking a drifted draft. Fixed in b6146f0: on place and object cards a second draft that no longer names the thing cannot replace one that does. Test-covered, not render-validated.
+  - Sheet: hybrid-cur-v4-film-hybrid.jpg.
+
+- [x] H92 — the film-still writer, restored from v1.49.0 | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit 6e026ec.
+  - v1.49.0's writer asked for "a calm, artful film still" built from composition, posture, objects and lighting. Restored behind SCENE_MODE, then made the default, with cards named for an event keeping the event at full force.
+  - On the 12 tuning cards at seed 1001: 9 of 12 put the subject back inside a place with depth.
+  - On the 21 fresh cards against each card's current art: inspector defects 10 against 9, subject missing 8 against 8, vision judge 4 new / 5 current / 12 undecided.
+  - Verdict: places and objects gained cohesive environments; creatures lost their subject more often than under the moment grammar, which carried 5 of 21. Split the difference — H93.
+
+- [x] H91 — prompt order is not the composition lever | Priority: P1 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`.
+  - v1.49.0 assembled the style block and then the whole scene contiguously; the current assembly splits the scene around the block.
+  - Rendered contiguously at Strong and at Medium on the 12 tuning cards at seed 1001: no visible difference either way.
+  - Verdict: order is not the lever. Assembly left as it is.
+
+- [x] H90 — reference strength is not the composition lever | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`. The owner judged v1.49.0's compositions more cohesive than today's even though style transfer is better now, so the first question was whether the image channel is what changed the layouts.
+  - Method: the archived v1.49.0 prompts and the current prompts, each rendered at reference Off / Medium (256) / Strong (729) on the 12 tuning cards at seed 1001.
+  - Measured: the layout is identical across all three strengths. The image channel moves palette and finish, and Strong sometimes distorts the figure — the old executioner prompt is an orc at Off and Medium and a white yeti at Strong.
+  - Also measured: Medium keeps nearly all of Strong's palette with less figure distortion. Noted only; the default is unchanged.
+  - Verdict: composition lives in the scene text, which sent the investigation to H91 and H92.
+
+- [x] Card back / single-reference leak | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit 3df5273.
+  - Cause: a deck conditioned on one reference at Strong leaked that image's two figures into every render, the card back included — averaging has nothing to cancel against when there is only one reference.
+  - Shipped: the deck's reference count raised to 4 and averaged; the card back gets the no-people render guard and a deterministic ornamental description instead of a written scene; "single arm" no longer renders a one-armed figure.
+
+- [x] H89 — an artifact's setting is where the thing is found or used, never a display stand | Priority: P1 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit a347cbb.
+  - Cause: the writer's default for any object was a soft stand on a pedestal — a stone on a cushion, a talisman on velvet. The last remaining miss from V24b.
+  - Shipped: the artifact Setting line asks for the place such a thing is found or used and forbids presentation for display, category words only.
+  - Validated on 9 artifact cards across the three decks at seed 1001: 9 of 9 left the cushion and sit in a place — a spear leaning on a cracked wall, a talisman half-buried in leaf litter, plate armour on a castle wall, a thumb hung on a doorpost. One render grew a stray onlooker. Cards restored afterwards.
+
+- [x] V24b — final 21-card run on the finished branch, sheet + judge, for the ship decision | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, the branch as it stands after b5d16c0 — 21 fresh cards at seed 1001, rendered end to end and set against each card's current art.
+  - Defects, inspector: 6 on the new renders against 10 on the current art — subject missing 5 against 8, text 1 against 6.
+  - Vision judge on composition: new 6, current 4, undecided 11. The first run where the judge tilts to the new stack.
+  - By the owner's-eye proxy: about 11 better, 5 worse, 5 ties.
+  - Remaining misses: writer drift on two cards (a crater written as a tree, a cyclops as a furry beast) and the "object on a cushion" default for stones.
+  - Sheet: scratchpad v24b-cur-vs-v4.jpg.
+
+- [x] Restore the 33 cards left one take behind by the experiment reverts | Priority: P1 | Completed: 2026-09-08 | Owner: drew-valentine
+  - The overnight experiment reverts left 33 cards one take behind the owner's art — the current render is not written to `art_versions/` until it is replaced, so rolling back an experiment rolled past the art the owner had.
+  - All 33 restored by checksum to their pre-night art, 21 of 21 spot-checked and verified.
+  - Lesson saved to memory: snapshot the current render before an experiment revert, not only on replacement.
+
+- [x] V24 — fresh 21-card validation of the whole night stack vs each card's current art | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`. 21 cards that were not used to tune H83, H86b, H87 or H88, rendered at seed 1001 and set against each card's current art.
+  - Defects, inspector: 7 on the new renders against 9 on the current art — subject missing 7 against 8, text 1 against 2.
+  - Vision judge on composition: current art 6, new 3, undecided 12. About even, and its rubric rewards close-ups, so the owner's eye decides.
+  - By the owner's-eye proxy the new renders won about 11 and lost 6. The losses: a junk-diving bird in a junkyard, a cobra lunging, a stone on a boulder in a forest, a thumb on a post, a lava rift, an angel with a body instead of a floating head, a charging cyclops.
+  - The six losses were two failure classes. Artifacts with no literal object were rendered as "signet rings" parroted from the artifact guidance's own examples (Shadowspear, Crawlspace) — the example-noun lesson again. Human creatures were drawn with claws, tails and pointed ears (Esper Sentinel, Grand Abolisher, Plaguecrafter).
+  - Both fixed in commit b5d16c0: no example nouns in the artifact guidance, and a Human first subtype gets a "human being with a human face and body, no animal features" Body line.
+
+- [x] V6 — the six V24 failures re-rendered on the fixed writer | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, on b5d16c0.
+  - Result: a spear for Shadowspear, an access panel for Crawlspace, and humans for Esper Sentinel, Grand Abolisher and Plaguecrafter. 5 of 6 corrected.
+  - Talisman of Hierarchy is the exception — its current art remains the better one.
+
+- [x] H83 — fix the four broken prompts H79's validation exposed | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits 1041bd5 and e6dee3f.
+  - Cause: 4 of 12 H79 prompts came out broken — the subject was lost from the opening, and the light strip left fragments behind.
+  - Shipped: the opening check counts only the literal object's head noun ("stone" had let "sits atop a pedestal of weathered stone" pass for Phyrexian Altar, which then rendered a goblet); `_ensure_subject_opening` runs for every card type, not some; light cuts take whole noun phrases and the leading tails that produced fragments like "the soft of afternoon"; abstraction similes and waiting idioms are cut; "anticipation" triggers the present-moment rewrite; the growth pass tries twice.
+  - Validated: the 12-card prompts came out coherent — no fragments, subjects present.
+
+- [x] H86b — writer drafts two scenes and the more striking one is picked | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commits 30c4a92, ecc2b3f, 91a0843.
+  - Follows H86: seed variance is not the lever, so the variation has to come from the scene text.
+  - Correction to what H86b first shipped: the blind A-or-B ask picked the first draft 12 of 12 (the 8B answers "A" whichever order it is given), and an independent 1-10 score then rated every draft a 9, tying 12 of 12. The pick is now a deterministic score — action verbs and colours up, static verbs, abstractions and a buried subject down — at the cost of one extra chat per card.
+  - Lesson recorded in memory: score candidates alone, never A/B, and log the raw answers.
+
+- [x] H87 — staging reads describe composition, not props | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit 160af59.
+  - Shipped: the staging read is composition-only (camera, frame fill, horizon, density, weather, tone), forbids naming props, and merges up to four reference reads down to what they share. The three experiment decks were re-analyzed; the new staging texts carry no props.
+  - Validated on the 12 cards at seed 1001: by eye, the first variant to beat the baseline on most cards (demon, orc, erupting volcano, shield in a ruined courtyard, a massacre scene). Defects level, 3 against 2.
+  - The vision judge still preferred the earlier short renders 5:1 with 6 undecided. Its rubric asks for "one clear focal subject", which rewards close-ups over scenes, so the owner's eye decides this one.
+
+- [x] H88 — the Figure idiom line carries only figure terms | Priority: P1 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, commit ecc2b3f.
+  - Kardur renders as a demon again.
+
+- [x] H78 — long v1.49 prose vs current short prompt, fixed seed 1001, blind judge | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`. Both arms rendered on the current pipeline (Redux references, style block, render lead, guards) at the same seed, differing only in the scene prose — the archived v1.49.0 prompt against today's — over 12 cards across three decks, then judged blind on paired sheets with the arms swapped.
+  - Result: the old 90-word prose won the composition judge 5:3 with 4 undecided, but carried "subject missing" on 5 of 12 against 2 of 12 for the short prompt — an orc rendered as a blue yeti, a crowd instead of a talisman, a pirate instead of coins, plus lettering and onlookers.
+  - Verdict: the strips earned their keep on subjects. Restore the drama through setting, not by restoring long prose. H79 is the right aim; H81 stays parked.
+  - Also found: the old prompts pushed the assembled FLUX prompt past the T5 window, which opened H82.
+
+- [x] H82 — assembled FLUX prompts were overrunning the T5 window | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`, committed 73f101d.
+  - Measured: 14 of 31 assembled prompts sat over the 256-token T5 window (mean 251), and on 6 of them the guard fell entirely outside it. mflux truncates silently, so the tail was being dropped with no warning.
+  - Fix: `_fit_flux_prompt` trims the style block's tail items first, then the scene's last sentences, down to FLUX_TOKEN_BUDGET=250. The lead, the subject sentence and the guard are never cut.
+
+- [x] H86 — seed variance is not the composition lever | Priority: P0 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Branch: `feat/night-composition`.
+  - Measured: the same prompt at seeds 1001 and 2002 renders near-identical pictures under averaged Redux references, 12 of 12; pick_take was undecided on 7 of 12.
+  - Verdict: variation has to come from the scene text, not from rolling seeds. Follow-up H86b (two drafts, judge picks) is In Progress.
+
+- [x] H80 — objects in a place | Priority: P1 | Completed: 2026-09-08 | Owner: drew-valentine
+  - Closed by folding into H79's Setting line — that line already puts an object in a place with its surroundings, so no separate Object-line change was written. No code of its own.
+
+- [x] Measured verdict vs v1.49.0 — style and subject better, composition regressed | Priority: P1 | Completed: 2026-09-07 | Owner: drew-valentine
+  - Current art measured against v1.49.0 (the text-only style pipeline, tagged 2026-09-02 just before the Redux merge) on the same decks and cards.
+  - Better now: palette distance to the references fell on both measured decks (Glissa 0.73 → 0.53, Heads-I-Win 0.86 → 0.72); artifact subject-missing went from 4 of 11 to 1 of 11; text and signature flags went from 35% to 15% after the signature bleed.
+  - Worse now: scene prompts halved, about 90 words down to about 45, with 10 of 149 under 25 words. A blind vision judge asked which render was the more striking and better composed picked the older one 30 to 3, with 27 undecided.
+  - Verdict: the image channel and the defect guards hold up; the writer's output shrank under the strip-and-rewrite backstops. Composition is the open front — H78 and H79 follow, H80 and H81 queued behind them.
+
+- [x] README gallery refresh — replace the sample images with the best recent renders | Priority: P2 | Completed: 2026-09-07 | Owner: drew-valentine
+  - Branch: `docs/readme-gallery-refresh`
+  - Hero is now `docs/images/hero-gallery.jpg`, an eight-card montage with two cards from each of four decks.
+  - Four style strips replaced, five cards each: `samples-fineline.jpg`, `samples-picturebook.jpg`, `samples-dragons.jpg`, `samples-comic.jpg`. Removed `app-hero.jpg`, `samples-cartoon.jpg`, `samples-synthwave.jpg`, `samples-inkwash.jpg`.
+  - Every featured card was checked at full size for anatomy defects and visible signatures.
+  - Public-materials check: no reference-artist names appear in any image or caption. The app screenshot was rejected as the hero because the style panel shows those names on screen.
 
 - [x] Style authority: the user's declared style source outranks the model's interpretation | Priority: P1 | Completed: 2026-09-02 | Owner: drew-valentine
   - Shipped as v1.49.0 (minor, released 2026-09-02) — four squash-merged PRs: #41 (commit 321ca79), #42 (ca9dcbc), #43 + #45 (merged as #45, commit 146953c), and #44 (f888827).
   - Principle: when a user declares a style source, that declaration wins over whatever the vision model inferred, in every model-facing prompt.
-  - #41 — the declared source overrides the model's interpretation everywhere a prompt is built. Root case: the Dr. Seuss deck, declared "hand drawn", kept being described to FLUX as digital/vector art.
+  - #41 — the declared source overrides the model's interpretation everywhere a prompt is built. Root case: the picture-book deck, declared "hand drawn", kept being described to FLUX as digital/vector art.
   - #42 — Steer & Render overrides the reference anchor, appearance included. Root case: a Glissa steer was silently discarded because the reference anchor outranked it.
   - #43 — evidence-derived ink axes: line weight, line character, and density are decoupled instead of moving together; the source-name stripper no longer eats medium words along with the franchise name.
   - #45 — per-deck analysis progress (switching decks no longer leaves a stale entry behind) and an evidence-derived medium for decks with no declared source. Root case: demo-alela showed stuck progress and a palette-only style block.

@@ -1,3 +1,5 @@
+import os
+import re
 #!/usr/bin/env python3
 """
 Vision-based style analysis for inspiration images.
@@ -371,13 +373,53 @@ def analyze_inspiration_style(image_path: str | Path, openai_client=None,
             prompt=prompt,
             model=local_model,
             max_tokens=400,
-            temperature=0.7,
+            temperature=0.3,            # 0.7 made every re-analysis a different read
         )
+        description = _reconcile_read_with_declaration(description, style_source)
         print(f"[vision] Style analysis complete: {description[:80]}...")
         return description
     except Exception as e:
         print(f"[vision] Style analysis failed: {e}")
         return ""
+
+
+def _reconcile_read_with_declaration(text: str, style_source: str) -> str:
+    """The vision model writes 'Medium: Digital painting' for grainy 1970s
+    film stills no matter what the prompt says. When the user's declaration
+    names a medium the keyword map recognises (film, movie, watercolor,
+    comic…) and the read's Art Style / Medium lines vote a different bucket,
+    those lines are rewritten from the declaration — the user's word is the
+    evidence, and it must not be contradicted in the text the user sees."""
+    if not text or not style_source:
+        return text
+    declared = _classify_style_medium(style_source, '', img_desc='')
+    if not declared:
+        return text
+    lines = text.splitlines()
+    medium_lines = [ln for ln in lines if re.match(r'\s*[-*\s]*(art style|medium)\s*:', ln, re.IGNORECASE)]
+    read = _majority_medium(medium_lines) if medium_lines else ''
+    conflict = bool(read) and read != declared
+    if not conflict and declared == 'photograph':
+        conflict = any(re.search(r'\b(?:digital|render\w*|3d|painting|painted|illustration|cgi)\b', ln, re.IGNORECASE)
+                       for ln in medium_lines)
+    if not conflict:
+        return text
+    anchors = _medium_anchors(declared)
+    head = anchors[0] if anchors else declared
+    src = style_source.strip().replace('&', 'and')
+    out = []
+    for ln in lines:
+        m = re.match(r'(\s*[-*\s]*)(art style|medium)(\s*:\s*)', ln, re.IGNORECASE)
+        if not m:
+            out.append(ln)
+            continue
+        label = m.group(2).lower()
+        if label == 'art style':
+            out.append(f"{m.group(1)}Art Style: {src} ({head})")
+        else:
+            out.append(f"{m.group(1)}Medium: {', '.join(anchors[:3]) if anchors else head}")
+    print(f"  [vision] read said '{read or 'digital'}' against the declared '{src}' ({declared}); medium lines rewritten")
+    return '\n'.join(out)
 
 
 def merge_style_descriptions(descriptions: list[str]) -> str:
@@ -1386,6 +1428,8 @@ _MEDIUM_ANCHORS = {
                          'flat color', 'dense intricate detail'],
     'watercolor': ['watercolor painting', 'soft washes', 'visible pigment texture'],
     'oil painting': ['oil painting', 'visible brushstrokes', 'painterly texture'],
+    'painted illustration': ['painted illustration', 'flat opaque paint',
+                             'hand-painted texture'],
     '3d render': ['3D render', 'volumetric lighting', 'detailed surface texture'],
     'photograph': ['cinematic photograph', 'photographic lighting',
                    'shallow depth of field'],
@@ -1411,12 +1455,17 @@ _MEDIUM_KEYWORD_MAP = {
     '3d render': frozenset({'pixar', 'dreamworks', '3d', 'cgi', 'render',
                             'octane', 'unreal'}),
     'photograph': frozenset({'photo', 'photograph', 'photography', 'cinematic',
-                             'noir', 'film'}),
+                             'noir', 'film', 'films', 'movie', 'movies', 'footage', 'still', 'stills',
+                             'cinema', 'cinematography', 'live-action', 'vhs', 'celluloid'}),
     'watercolor': frozenset({'watercolor', 'watercolour', 'gouache'}),
     'oil painting': frozenset({'oil', 'impressionist', 'baroque', 'rembrandt',
                                'renaissance'}),
     'comic book': frozenset({'comic', 'manga', 'graphic-novel'}),
     'pixel art': frozenset({'pixel', '8-bit', '16-bit'}),
+    # painted media that are neither oil nor watercolor: digital painting,
+    # tempera, acrylic, wall painting on plaster or papyrus
+    'painted illustration': frozenset({'painting', 'painted', 'papyrus', 'parchment',
+                                       'fresco', 'mural', 'tempera', 'acrylic'}),
 }
 
 
@@ -1441,6 +1490,8 @@ def _classify_style_medium(style_source: str, text_model: str,
         if src_tokens & keys or any(' ' in k and k in src_lower for k in keys):
             return medium
 
+    if img_desc == '':
+        return ''            # name-map-only pass (caller supplies evidence next)
     labels = list(_MEDIUM_ANCHORS.keys())
     # '&' derails the small model's name recognition; normalize it.
     src = style_source.replace('&', 'and')
@@ -1485,6 +1536,58 @@ def _classify_style_medium(style_source: str, text_model: str,
     return ''
 
 
+def recognized_style_source(descriptions) -> str:
+    """The style source the analyst recognized in the references, when the
+    user declared none: the most common non-'Original' value of the
+    per-image 'Source:' lines ('' when nothing was recognized). The user's
+    declaration always outranks this; it is the fallback, not a competitor."""
+    import re as _re
+    from collections import Counter
+    votes = Counter()
+    for desc in (descriptions or []):
+        for ln in (desc or '').splitlines():
+            m = _re.match(r'\s*[-*\s]*source\s*:\s*(.+?)\s*$', ln, _re.IGNORECASE)
+            if m:
+                val = m.group(1).strip().strip('*').strip()
+                if val and not _re.match(r'^(original|unknown|n/?a|none)$', val, _re.IGNORECASE):
+                    votes[val] += 1
+    return votes.most_common(1)[0][0] if votes else ''
+
+
+def _majority_medium(lines) -> str:
+    """Each Art Style / Medium / Source line votes once for the bucket it hits
+    hardest; the bucket with most lines wins (ties by map order). A pooled
+    token set let ONE read that said '3D render' outvote two that said
+    'digital painting', because that bucket has more distinct keywords."""
+    import re as _re
+    tally = {}
+    for ln in lines:
+        toks = set(_re.findall(r'[a-z0-9-]+', ln.lower()))
+        hits = {m: len(toks & keys) for m, keys in _MEDIUM_KEYWORD_MAP.items()}
+        best = max(hits.values()) if hits else 0
+        if not best:
+            continue
+        m = next(k for k, v in hits.items() if v == best)
+        tally[m] = tally.get(m, 0) + 1
+    if not tally:
+        return ''
+    top = max(tally.values())
+    return next(m for m in _MEDIUM_KEYWORD_MAP if tally.get(m, 0) == top)
+
+
+def _evidence_medium_vote(stored_descriptions: str) -> str:
+    """Deterministic medium vote over the stored analyses' own Art Style /
+    Medium / Source lines (no model in the loop). '' when no keyword hits."""
+    import re as _re
+    text = stored_descriptions or ''
+    lines = [ln for ln in text.splitlines()
+             if _re.match(r'\s*[-*\s]*(art style|medium|source)\s*:', ln, _re.IGNORECASE)
+             and not _re.search(r'source\s*:\s*(original|unknown|n/?a)\s*$', ln, _re.IGNORECASE)]
+    if not lines:
+        return ''
+    return _majority_medium(lines)
+
+
 def _classify_medium_from_evidence(stored_descriptions: str, prose: str,
                                    text_model: str) -> str:
     """Medium for a deck with NO declared style source: a deterministic
@@ -1494,9 +1597,19 @@ def _classify_medium_from_evidence(stored_descriptions: str, prose: str,
     _MEDIUM_ANCHORS key or ''."""
     import re as _re
     text = stored_descriptions or ''
+    # The analyst's own 'Source:' line counts as evidence too: with no user
+    # declaration, a recognized franchise/artist ("Source: Rick and Morty") is
+    # the strongest medium signal there is — a screenshot deck whose analyses
+    # said "typical of the show" was classified PIXEL ART because the vote
+    # only read the Art Style/Medium lines and the LLM fallback guessed.
     lines = [ln for ln in text.splitlines()
-             if _re.match(r'\s*[-*\s]*(art style|medium)\s*:', ln, _re.IGNORECASE)]
-    evidence = ' '.join(lines) if lines else (text or prose or '')
+             if _re.match(r'\s*[-*\s]*(art style|medium|source)\s*:', ln, _re.IGNORECASE)
+             and not _re.search(r'source\s*:\s*(original|unknown|n/?a)\s*$', ln, _re.IGNORECASE)]
+    if lines:
+        voted = _majority_medium(lines)
+        if voted:
+            return voted
+    evidence = text or prose or ''
     tokens = set(_re.findall(r'[a-z0-9-]+', evidence.lower()))
     if tokens:
         votes = {m: len(tokens & keys) for m, keys in _MEDIUM_KEYWORD_MAP.items()}
@@ -1510,20 +1623,1299 @@ def _classify_medium_from_evidence(stored_descriptions: str, prose: str,
                                   text_model, img_desc=(prose or text)[:400])
 
 
+_IDIOM_SYSTEM = (
+    "You are an art director. Given the name of an art style, artist, show or "
+    "movement, list the VISUAL DRAWING IDIOM that makes it recognizable: line "
+    "quality, how eyes/faces/anatomy are drawn, shading method, recurring "
+    "textures or motifs. Output ONLY a comma-separated list of 6-8 short "
+    "concrete phrases. NEVER name characters, people, places or the style itself. "
+    "If you do not actually know this style or artist, output exactly UNKNOWN — "
+    "never guess.")
+_IDIOM_FEWSHOT = [
+    {'role': 'user', 'content': "Style: Moebius"},
+    {'role': 'assistant', 'content':
+        "thin precise pen line, elongated faces with sparse features, flat "
+        "shaded forms, stiff elegant poses, recurring spirals and curves, "
+        "vast empty desert spaces"},
+]
+_IDIOM_PALETTE_WORDS = ('palette', 'color', 'colour', 'tones', 'hues')
+# writing is never a drawing idiom to reproduce: a block carrying "hieroglyphic
+# symbols" or "calligraphic lettering" fills cards with glyph columns and
+# gibberish text (a defect by the inspector's own checklist)
+_IDIOM_WRITING_WORDS = ('glyph', 'hieroglyph', 'symbol', 'letter', 'text', 'calligraph',
+                        'inscription', 'writing', 'script', 'typograph', 'caption', 'label')
+_IDIOM_MAX_WORDS = 40
+
+
+def _preferred_idiom_model(text_model: str) -> str:
+    """Idiom recall is knowledge work: the 3B model answers 'exaggerated,
+    angular, metallic textures' for a show it half-knows, the 8B model gets
+    the line, faces and motifs right. It runs once per distillation, so use
+    the larger model whenever its weights are already on disk."""
+    try:
+        from pathlib import Path
+        hub = Path.home() / '.cache' / 'huggingface' / 'hub'
+        if (hub / 'models--mlx-community--Llama-3.1-8B-Instruct-4bit').exists():
+            return 'llama3.1:8b'
+    except Exception:
+        pass
+    return text_model
+
+
+def _idiom_phrases(text: str, style_source: str, max_words: int) -> list:
+    """Split a comma list into idiom phrases, dropping leaks (Capitalized
+    tokens, words from the source name) and palette phrases (palette comes
+    from the evidence pass, not from recall — recall gets it wrong)."""
+    src_words = {w.lower() for w in re.findall(r'[A-Za-z]{3,}', style_source or '')} - {'and', 'the', 'von', 'van', 'der'}
+    out, seen, count = [], set(), 0
+    raw = [re.sub(r'^(and|or)\s+', '', p.strip().strip('.;:"\'')).strip()
+           for p in re.split(r'[,\n]+', (text or '').strip().split('\n')[0])]
+    # a lone adjective is a comma inside a phrase ("exaggerated, distorted
+    # body proportions") — rejoin it with what follows
+    merged, pending = [], []
+    for p in raw:
+        if not p:
+            continue
+        if len(p.split()) == 1:
+            pending.append(p)          # "exaggerated, distorted, irregular body proportions"
+            continue
+        merged.append(' '.join(pending + [p])); pending = []
+    if pending:
+        merged.append(' '.join(pending))
+    for phrase in merged:
+        toks = phrase.split()
+        if not toks or len(toks) > 8:
+            continue
+        low = [t.lower().strip('.,') for t in toks]
+        if any(t[:1].isupper() for t in toks) or any(t in src_words for t in low):
+            continue
+        if any(t.startswith(w) for t in low for w in _IDIOM_PALETTE_WORDS):
+            continue
+        if any(w in t for t in low for w in _IDIOM_WRITING_WORDS):
+            continue
+        key = ' '.join(low)
+        if key in seen or count + len(toks) > max_words:
+            continue
+        seen.add(key); out.append(phrase); count += len(toks)
+    return out
+
+
+_IDIOM_RECALL_CACHE = {}
+
+
+def style_idiom_recall(style_source: str, text_model: str,
+                       max_words: int = _IDIOM_MAX_WORDS) -> list:
+    """What the language model KNOWS about a named style's drawing idiom
+    (line, faces, anatomy, shading, motifs). Deterministic (temperature 0),
+    so it belongs to the block's foundation. Never palette, never names."""
+    src = (style_source or '').strip().replace('&', 'and')
+    if not src:
+        return []
+    key = (src.lower(), text_model, max_words)
+    if key in _IDIOM_RECALL_CACHE:           # deterministic; distillation asks twice
+        return list(_IDIOM_RECALL_CACHE[key])
+    try:
+        import mlx_llm
+        reply = mlx_llm.chat(
+            messages=[{'role': 'system', 'content': _IDIOM_SYSTEM}] + _IDIOM_FEWSHOT
+                     + [{'role': 'user', 'content': f"Style: {src}"}],
+            model=_preferred_idiom_model(text_model), max_tokens=90, temperature=0.0)
+    except Exception as e:
+        print(f"  [style] idiom recall failed: {e}")
+        return []
+    if 'unknown' in (reply or '').strip().lower()[:12]:
+        print(f"  [style] idiom recall: model does not know '{src}' — using the reference read only")
+        _IDIOM_RECALL_CACHE[key] = []
+        return []
+    phrases = _idiom_phrases(reply, src, max_words)
+    if phrases:
+        print(f"  [style] idiom recalled for '{src}': {', '.join(phrases)}")
+        _IDIOM_RECALL_CACHE[key] = list(phrases)
+    return phrases
+
+
+_SUBJECT_ITEM_RE = re.compile(
+    r"\b(?:creatures?|winged|wings?|deit(?:y|ies)|masses|characters?|people|crowds?|poses?|monsters?|beasts?|"
+    r"figures? (?:in|of|with)|warriors?|soldiers?|heroes|hero|villains?|"
+    # props and anatomy of the reference's subject ('intricate chains', 'flowing wings')
+    # became content on every card — a chained winged orb for a card back
+    r"chains?|weapons?|swords?|staffs?|staves|spears?|armou?r|cloaks?|robes?|horns?|tails?|claws?|"
+    r"skulls?|crowns?|helmets?|masks?)\b", re.IGNORECASE)
+
+
+_UNDRAWABLE_ITEM_RE = re.compile(
+    r"\b(?:camera (?:movements?|work|pans?|tracking)|sweeping camera|choreograph\w*|editing|cuts?|montage|"
+    r"soundtrack|pacing|slow[- ]motion|zoom(?:s|ing)?|footage|frame rate|dialogue|narration)\b", re.IGNORECASE)
+
+
+def style_surface_device_seen(image_paths, vision_model: str) -> str:
+    """The signature SURFACE treatment applied to the figures themselves — a
+    starfield inside the silhouette, cracked stone skin, a woven pattern —
+    read per reference and kept only when a majority agree. The idiom read
+    files it under 'starry background' and the stars end up in the sky; this
+    is the device that defines a cosmic-figure style. '' when none."""
+    paths = [p for p in (image_paths or []) if p][:4]
+    if not paths or not vision_model:
+        return ''
+    reads = []
+    for p in paths:
+        try:
+            import mlx_llm
+            r = mlx_llm.vision(
+                str(p),
+                "Look only at the main figure's BODY SURFACE. Is there a texture or pattern filling "
+                "the inside of its silhouette (a starfield or galaxy, cracked stone, glowing veins, "
+                "a woven pattern, scales of light) that is part of the picture's style rather than "
+                "its subject? Answer with ONE short noun phrase naming that surface treatment, "
+                "or exactly 'none'.",
+                model=vision_model, max_tokens=24, temperature=0.0)
+        except Exception as e:
+            print(f"  [style] surface device read failed: {e}")
+            continue
+        r = ' '.join((r or '').split()).strip().strip('."\'').lower()
+        if r and r != 'none' and len(r.split()) <= 8 and not _SUBJECT_ITEM_RE.search(r):
+            reads.append(r)
+    if not reads:
+        return ''
+    # majority by shared content words (two reads that both say 'starfield' agree)
+    import collections
+    words = collections.Counter(w for r in reads for w in set(re.findall(r'[a-z]{4,}', r)))
+    best = max(reads, key=lambda r: sum(words[w] for w in set(re.findall(r'[a-z]{4,}', r))))
+    agree = sum(1 for r in reads if set(re.findall(r'[a-z]{4,}', r)) & set(re.findall(r'[a-z]{4,}', best)))
+    if agree * 2 < len(paths):
+        print(f"  [style] surface device: no majority ({reads})")
+        return ''
+    print(f"  [style] surface device on the figures: {best}")
+    return best
+
+
+def _world_read_one(image_path, vision_model: str) -> str:
+    try:
+        import mlx_llm
+        r = mlx_llm.vision(
+            str(image_path),
+            # CATEGORY words only. Asked for a full sentence, the read named
+            # one picture's lighthouse and red railing and every card got a
+            # lighthouse (the H87 staging leak again)
+            "Describe the KIND of place this picture shows as a comma-separated list of category "
+            "words only, in this order: built or natural; indoors or outdoors; what the walls, "
+            "floor or ground and sky are made of; their colours; the era; how designed or "
+            "artificial it looks. Never name any specific object, building type, person, animal, "
+            "vehicle or prop — categories and materials only.",
+            model=vision_model, max_tokens=60, temperature=0.0)
+    except Exception as e:
+        print(f"  [style] world read failed: {e}")
+        return ''
+    r = ' '.join((r or '').split()).strip()
+    print(f"  [style] world read: {r}")
+    return r if 4 <= len(r.split()) <= 60 else ''
+
+
+_WORLD_BUILT_RE = re.compile(r"\b(built|natural|man-?made|constructed|urban|wild)\b", re.IGNORECASE)
+_WORLD_IN_OUT_RE = re.compile(r"\b(indoors?|interiors?|inside|outdoors?|exteriors?|outside|open[- ]air)\b", re.IGNORECASE)
+_WORLD_ERA_RE = re.compile(r"\b(\d{2,4}s|\d{1,2}(?:st|nd|rd|th) century|modern|contemporary|victorian|vintage|retro|"
+                           r"medieval|ancient|futuristic|mid-century|edwardian|baroque|gothic|art deco|prehistoric|"
+                           r"timeless|classical|industrial)\b", re.IGNORECASE)
+_WORLD_DESIGN_RE = re.compile(r"\b(artificial|designed|highly designed|staged|stylized|stylised|deliberate|"
+                              r"manicured|theatrical|set-like|pristine|natural-looking)\b", re.IGNORECASE)
+
+
+def merge_world_reads(reads, non_drawn: bool = True) -> str:
+    """Merge per-reference world reads (comma-separated category lists) by
+    MAJORITY per category — built/natural, indoors/outdoors, materials,
+    colours, era, how designed — into one category list. Deterministic:
+    a language-model merge hedged ('built or natural, outdoors or indoors')
+    and a single representative read carried one picture's colours only."""
+    # a read of the MEDIUM ('walls made of paper', 'hand-drawn') is not a
+    # read of the place
+    reads = [r for r in (reads or []) if r and r.strip()
+             and not re.search(r'\b(?:paper|canvas|hand-?drawn|parchment|vellum)\b', r, re.IGNORECASE)]
+    if not reads:
+        return ''
+    n = len(reads)
+    votes = {'built': {}, 'inout': {}, 'era': {}, 'design': {}, 'colour': {}}
+    materials = {}
+    for r in reads:
+        seen = {k: set() for k in votes}
+        seen_m = set()
+        for item in [x.strip().lower().strip('.') for x in r.split(',') if x.strip()]:
+            classified = False
+            for key, rx in (('built', _WORLD_BUILT_RE), ('inout', _WORLD_IN_OUT_RE),
+                            ('era', _WORLD_ERA_RE), ('design', _WORLD_DESIGN_RE)):
+                for m in rx.findall(item):
+                    w = m.lower().rstrip('s') if key == 'inout' else m.lower()
+                    w = {'interior': 'indoor', 'inside': 'indoor', 'exterior': 'outdoor', 'outside': 'outdoor',
+                         'open-air': 'outdoor', 'open air': 'outdoor', 'man-made': 'built', 'manmade': 'built',
+                         'constructed': 'built', 'urban': 'built', 'wild': 'natural'}.get(w, w)
+                    if key == 'design':
+                        w = 'designed'
+                    seen[key].add(w); classified = True
+            cols = {w for w in re.findall(r'[a-z-]+', item) if w in _COLOR_WORDS}
+            if cols:
+                seen['colour'] |= cols; classified = True
+            if not classified:
+                words = [w for w in re.findall(r'[a-z-]+', item) if w not in ('and', 'or', 'of', 'the', 'with', 'made', 'walls', 'wall', 'floor', 'floors', 'ground', 'sky', 'a', 'an')]
+                if 1 <= len(words) <= 4:
+                    seen_m.add(' '.join(words))
+        for key, ws in seen.items():
+            for w in ws:
+                votes[key][w] = votes[key].get(w, 0) + 1
+        for m in seen_m:
+            materials[m] = materials.get(m, 0) + 1
+
+    def _top(d, need, cap):
+        ranked = sorted(d.items(), key=lambda kv: (-kv[1], kv[0]))
+        keep = [w for w, c in ranked if c >= need][:cap]
+        return keep or [w for w, _ in ranked[:cap]]
+    need = (n // 2 + 1) if n >= 2 else 1          # a strict majority; a 2-of-4 'indoors' put a whole deck inside
+    def _strict(d, cap):
+        return [w for w, c in sorted(d.items(), key=lambda kv: (-kv[1], kv[0])) if c >= need][:cap]
+    parts = []
+    b = _strict(votes['built'], 1)
+    if b: parts.append(b[0])
+    io = _strict(votes['inout'], 1)
+    if io: parts.append(io[0] + 's')
+    # materials only by real majority (two reads out of six said 'metal' and
+    # a dinosaur got a machine room); colours may fall back to the top two
+    mats = [w for w, c in sorted(materials.items(), key=lambda kv: (-kv[1], kv[0])) if c >= need][:3]
+    if mats: parts.append('surfaces made of ' + ', '.join(mats))
+    cols = _top(votes['colour'], 2, 3) if n >= 2 else _top(votes['colour'], 1, 3)
+    if cols: parts.append('in ' + ', '.join(cols))
+    # 'modern' / 'contemporary' is the reader's word for anything designed and
+    # sent the writer to a high-tech control room; only a specific era counts
+    era = [w for w, c in sorted(votes['era'].items(), key=lambda kv: (-kv[1], kv[0]))
+           if c >= need and w not in ('modern', 'contemporary')][:1]
+    if era: parts.append(era[0])
+    if non_drawn and sum(votes['design'].values()) >= need:
+        # 'artificial / designed' is a fact about a photographed set; the
+        # reader says it of every drawing too, where it means nothing. One
+        # binary category: any design word is a vote for it
+        parts.append('designed and artificial')
+    return ', '.join(parts)
+
+
+def style_world_seen(image_paths, vision_model: str, text_model: str = '', medium: str = '') -> str:
+    """The KIND of place the references show — built or natural, indoors or
+    out, the surfaces and their colours, the era — read per reference and
+    merged to what they share. The staging read is composition only (H87),
+    so the scene writer had no idea what a place in this style looks like
+    and put every creature of a pastel built-set film style in a dry
+    wilderness. Category words only; a specific prop would be parroted."""
+    paths = [p for p in (image_paths or []) if p][:6]
+    if not paths or not vision_model:
+        return ''
+    reads = [r for r in (_world_read_one(p, vision_model) for p in paths) if r]
+    if not reads:
+        return ''
+    out = merge_world_reads(reads, non_drawn=is_non_drawn_medium(medium))
+    out = re.sub(r'^\s*(?:this picture shows|the picture shows|the image shows|the place is)\s*', '', out, flags=re.IGNORECASE)
+    print(f"  [style] world seen in {len(reads)} reference(s): {out}")
+    return out
+
+
+_EVEN_LIGHT_RE = re.compile(r"\b(?:flat|even|diffuse[d]?|soft|uniform|minimal shad\w*|no strong shadows?|"
+                            r"overcast|shadowless|ambient)\b", re.IGNORECASE)
+_HARD_LIGHT_RE = re.compile(r"\b(?:dramatic|hard|harsh|chiaroscuro|rim[- ]l\w*|strong shadows?|deep shadows?|"
+                            r"high[- ]contrast|directional|backlit|spotlight|stark)\b", re.IGNORECASE)
+
+
+def is_flat_medium_name(medium: str) -> bool:
+    low = (medium or '').lower()
+    return any(w in low for w in ('ink', 'cel', 'comic', 'pixel', 'woodblock', 'papyrus', 'fresco',
+                                  'hieroglyph', 'flat', 'manga', 'lino', 'screen print', 'etching'))
+
+
+def lighting_key(stored_descriptions: str) -> str:
+    """How the references are lit, by majority of the per-image Shading/
+    Lighting lines: 'even' (flat, diffused, no strong shadows) or 'dramatic'
+    (hard, directional, deep shadows); '' when the reads disagree or say
+    nothing. A flat-lit film style rendered golden-hour rim light on every
+    card because nothing carried the references' light to the block or the
+    writer."""
+    even = hard = n = 0
+    for ln in (stored_descriptions or '').splitlines():
+        if not re.match(r'\s*[-*\s]*(?:shading|lighting|shading\s*/\s*lighting|light)\s*:', ln, re.IGNORECASE):
+            continue
+        n += 1
+        e, h = len(_EVEN_LIGHT_RE.findall(ln)), len(_HARD_LIGHT_RE.findall(ln))
+        if e > h:
+            even += 1
+        elif h > e:
+            hard += 1
+    if n == 0:
+        return ''
+    if even * 2 > n and even > hard:
+        return 'even'
+    if hard * 2 > n and hard > even:
+        return 'dramatic'
+    return ''
+
+
+def _extract_vibe(stored_descriptions: str, cap: int = 3) -> list:
+    """Mood words from the per-image 'Vibe:' lines, kept when at least two
+    reads agree (or all we have is one read). The block carried hues and
+    medium but no register, and a sinister cosmic deck rendered cheerful."""
+    votes = {}
+    n_reads = 0
+    for ln in (stored_descriptions or '').splitlines():
+        m = re.match(r'\s*[-*\s]*vibe\s*:\s*(.+)$', ln, re.IGNORECASE)
+        if not m:
+            continue
+        n_reads += 1
+        for w in {x.strip().lower() for x in re.split(r'[,;/]| and ', m.group(1)) if x.strip()}:
+            w = re.sub(r'[^a-z -]', '', w).strip()
+            if 2 <= len(w) <= 24 and not _SUBJECT_ITEM_RE.search(w):
+                votes[w] = votes.get(w, 0) + 1
+    if not votes:
+        return []
+    need = 2 if n_reads >= 2 else 1
+    ranked = sorted(votes.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [w for w, c in ranked if c >= need][:cap]
+
+
+def style_idiom_seen(image_path, style_source: str, vision_model: str,
+                     exclude=(), max_words: int = _IDIOM_MAX_WORDS) -> list:
+    """What the vision model SEES of the idiom in a reference when told whose
+    work it is. An enrichment (a VLM read), so it goes after the foundation.
+    Phrases already in ``exclude`` are dropped."""
+    src = (style_source or '').strip().replace('&', 'and')
+    if image_path is None or not vision_model:
+        return []
+    lead = f"This image is from the work of {src}. " if src else "This is a reference illustration. "
+    try:
+        import mlx_llm
+        seen = mlx_llm.vision(
+            str(image_path),
+            lead + "Describe the DRAWING IDIOM that "
+            "makes this style recognizable, as visible in this image: line quality "
+            "(weight, wobble, cleanliness), how eyes, faces and anatomy are drawn, "
+            "shading method, recurring textures or motifs, and any signature surface treatment "
+            "applied to the figures themselves (a texture or pattern filling their silhouette). "
+            "Output ONLY a comma-"
+            "separated list of 6-8 short concrete phrases. Never name characters, "
+            "people, places or the creator.",
+            model=vision_model, max_tokens=120, temperature=0.0)
+    except Exception as e:
+        print(f"  [style] idiom reading failed: {e}")
+        return []
+    have = {p.lower() for p in exclude}
+    budget = max_words - sum(len(p.split()) for p in exclude)
+    out = [p for p in _idiom_phrases(seen, src, max(budget, 0)) if p.lower() not in have]
+    if out:
+        print(f"  [style] idiom seen in reference: {', '.join(out)}")
+    return out
+
+
+_KIND_CACHE = {}
+
+
+def style_source_kind(style_source: str, text_model: str) -> str:
+    """Classify a declared/recognized style source: 'franchise' (a show, film,
+    game or comic with a recurring cast — its NAME summons that cast at
+    render time and must be de-named), 'artist', 'movement' (a medium, era or
+    school), or '' when unknown. Recalled once at distillation so a brand-new
+    source classifies itself with no code change; the keyword table in
+    prompt_generator is only the offline fallback."""
+    src = (style_source or '').strip().replace('&', 'and')
+    if not src:
+        return ''
+    key = (src.lower(), text_model)
+    if key in _KIND_CACHE:
+        return _KIND_CACHE[key]
+    try:
+        import mlx_llm
+        reply = mlx_llm.chat(
+            messages=[
+                {'role': 'system', 'content':
+                    "Classify the style source a user typed for card art. Answer with ONE "
+                    "word: FRANCHISE (a show, film, game, comic or book series with "
+                    "recurring named characters), ARTIST (a person or studio's personal "
+                    "style), MOVEMENT (a medium, era, school or genre such as 'ukiyo-e' "
+                    "or 'hand drawn illustration'), or UNKNOWN."},
+                {'role': 'user', 'content': "Source: The Simpsons"},
+                {'role': 'assistant', 'content': "FRANCHISE"},
+                {'role': 'user', 'content': "Source: Moebius"},
+                {'role': 'assistant', 'content': "ARTIST"},
+                {'role': 'user', 'content': "Source: Art Nouveau poster"},
+                {'role': 'assistant', 'content': "MOVEMENT"},
+                {'role': 'user', 'content': f"Source: {src}"},
+            ],
+            model=_preferred_idiom_model(text_model), max_tokens=5, temperature=0.0)
+    except Exception as e:
+        print(f"  [style] source-kind recall failed: {e}")
+        return ''
+    word = re.sub(r'[^a-z]', '', (reply or '').strip().lower().split()[0] if (reply or '').strip() else '')
+    kind = word if word in ('franchise', 'artist', 'movement') else ''
+    print(f"  [style] source kind for '{src}': {kind or 'unknown'}")
+    _KIND_CACHE[key] = kind
+    return kind
+
+
+_LINEAGE_CACHE = {}
+
+
+def style_lineage_recall(style_source: str, text_model: str) -> str:
+    """The PRODUCTION LINEAGE of a named franchise as a short de-named phrase
+    the image model knows better than a generic genre label: the network,
+    studio, movement or era ('late-night adult animation on a cable comedy
+    network', 'mid-century children's picture book', 'French bande dessinée
+    of the Métal Hurlant era'). The render lead has to avoid the franchise
+    NAME (it summons the cast) and the hand-written genre phrase is weak;
+    the lineage is the strongest de-named handle. '' when unknown."""
+    src = (style_source or '').strip().replace('&', 'and')
+    if not src:
+        return ''
+    key = (src.lower(), text_model)
+    if key in _LINEAGE_CACHE:
+        return _LINEAGE_CACHE[key]
+    try:
+        import mlx_llm
+        reply = mlx_llm.chat(
+            messages=[
+                {'role': 'system', 'content':
+                    "You are an art historian. Given the name of a show, film, artist "
+                    "or art style, answer with ONE short phrase (under 12 words) naming "
+                    "its production lineage: the network or studio type, movement, "
+                    "medium and era — the kind of phrase an image model recognizes. "
+                    "NEVER name characters or people. If unsure, answer exactly UNKNOWN."},
+                {'role': 'user', 'content': "Style: The Simpsons"},
+                {'role': 'assistant', 'content': "1990s prime-time American animated sitcom"},
+                {'role': 'user', 'content': "Style: Moebius"},
+                {'role': 'assistant', 'content': "1970s French bande dessinée of the Métal Hurlant era"},
+                {'role': 'user', 'content': f"Style: {src}"},
+            ],
+            model=_preferred_idiom_model(text_model), max_tokens=40, temperature=0.0)
+    except Exception as e:
+        print(f"  [style] lineage recall failed: {e}")
+        return ''
+    text = ' '.join((reply or '').split()).strip().strip('."\'')
+    src_words = {w.lower() for w in re.findall(r'[A-Za-z]{3,}', src)} - {'and', 'the'}
+    toks = text.split()
+    if (not text or 'unknown' in text.lower()[:12] or len(toks) > 14
+            or any(t.lower().strip('.,') in src_words for t in toks)):
+        _LINEAGE_CACHE[key] = ''
+        return ''
+    print(f"  [style] lineage for '{src}': {text}")
+    _LINEAGE_CACHE[key] = text
+    return text
+
+
+def reference_has_prominent_character(image_path, vision_model: str):
+    """True when a person or creature dominates the reference (a screenshot
+    of the cast, a portrait), False for scenery / pattern / object studies,
+    None when unreadable. Character-heavy references leak their cast and
+    iconic props through the image channel above Medium strength, so the
+    deck's default reference strength depends on this."""
+    if image_path is None or not vision_model:
+        return None
+    try:
+        import mlx_llm
+        reply = mlx_llm.vision(
+            str(image_path),
+            "Is a person, character or creature the dominant subject of this image "
+            "(large, central, in focus)? Answer exactly YES or NO.",
+            model=vision_model, max_tokens=4, temperature=0.0)
+    except Exception as e:
+        print(f"  [style] character read failed: {e}")
+        return None
+    word = (reply or '').strip().upper()[:3]
+    if word.startswith('YES'):
+        return True
+    if word.startswith('NO'):
+        return False
+    return None
+
+
+_DEFECT_KEYS = ('extra limbs', 'doubled head', 'duplicated subject', 'text', 'signature',
+                'subject missing', 'malformed hands')
+
+
+def _parse_counts(text: str) -> dict:
+    """Parse 'heads=1; arms=2; hands=2; copies=1; text=no; signature=no;
+    subject=yes; hands_ok=yes' (order-free, tolerant of prose around it)."""
+    import re as _re
+    out = {}
+    for key in ('heads', 'arms', 'hands', 'copies', 'wings', 'legs'):
+        m = _re.search(key + r'\s*[=:]\s*(\d+)', text, _re.IGNORECASE)
+        if m:
+            out[key] = int(m.group(1))
+    for key in ('text', 'signature', 'subject', 'hands_ok', 'composition', 'face', 'body'):
+        m = _re.search(key + r'\s*[=:]\s*(yes|no)', text, _re.IGNORECASE)
+        if m:
+            out[key] = m.group(1).lower() == 'yes'
+    return out
+
+
+def inspect_render(image_path, card_name: str, card_type: str, vision_model: str,
+                   advisory: dict | None = None, subject_hint: str = '', flies: bool | None = None,
+                   limbless: bool | None = None) -> list:
+    """Defect checklist over a finished render, by the vision model. Asking
+    the model to LIST defects made it echo the whole label list; asking it to
+    COUNT (heads, arms, hands, copies of the subject) and answer yes/no
+    (text, signature, subject present, hands look natural) is far more
+    reliable. Defects are derived from the counts. Returns a list of defect
+    labels ([] = clean, None = unreadable)."""
+    if image_path is None or not vision_model:
+        return None
+    figure = card_type in ('creature', 'planeswalker')
+    # the card NAME means nothing to the vision model ("Arcane Signet" passed
+    # on a goblet); the literal subject — "a signet ring", "a dragon spirit" —
+    # is what it can actually check for
+    subj = (subject_hint or '').strip() or ('a creature or character' if figure else 'an object, place or scene')
+    try:
+        import mlx_llm
+        reply = mlx_llm.vision(
+            str(image_path),
+            f"This is card art for '{card_name}', whose subject is {subj}. Answer with "
+            "EXACTLY this format and nothing else:\n"
+            "heads=<number of heads on the main figure, 0 if no figure>; "
+            "arms=<number of arms on the main figure>; hands=<number of hands>; "
+            "legs=<number of legs on the main figure, 0 if none>; "
+            "wings=<number of wings on the main figure, 0 if none>; "
+            "copies=<how many times the main subject appears>; "
+            "text=<yes/no: any letters, words, numerals, handwriting or logo>; "
+            "signature=<yes/no: an artist signature or copyright mark>; "
+            f"subject=<yes/no: {subj} is clearly present and recognisable>; "
+            "hands_ok=<yes/no: every visible hand looks natural with five fingers>; "
+            "composition=<yes/no: the picture reads as ONE clear scene with the named "
+            "subject as the obvious focus, not a confusing jumble>; "
+            "face=<yes/no: the main figure's face is visible, 'no' if there is no figure "
+            "or the picture is only a hand, a limb or a back>; "
+            "body=<yes/no: the main figure's body — torso and at least some limbs — is "
+            "visible, 'no' if it is only a floating head or face>",
+            model=vision_model, max_tokens=120, temperature=0.0)
+    except Exception as e:
+        print(f"  [inspect] vision read failed: {e}")
+        return None
+    c = _parse_counts(reply or '')
+    if not c:
+        return None
+    defects = []
+    if figure:
+        if c.get('heads', 1) > 1:
+            defects.append('doubled head')
+        if c.get('arms', 2) > 2 or c.get('hands', 2) > 2:
+            defects.append('extra limbs')
+        if c.get('hands_ok', True) is False and c.get('hands', 1) > 0:
+            # "every visible hand looks natural" is answered no for a creature
+            # with NO hands (a winged dragon spirit was re-rolled twice for it)
+            defects.append('malformed hands')
+        if c.get('subject', True) is False:
+            defects.append('subject missing')
+        if c.get('copies', 1) > 1:        # a procession or a crowd is a scene, not a defect
+            defects.append('duplicated subject')
+        if limbless and (c.get('arms', 0) > 0 or c.get('legs', 0) > 0) and os.environ.get('INSPECT_LIMBS', '1') != '0':
+            # the kind has no limbs (serpent, fish, worm): a legged render is
+            # the wrong creature, like wings on a flightless one
+            defects.append('limbs on a limbless creature')
+        if flies is False and c.get('wings', 0) > 0 and os.environ.get('INSPECT_WINGS', '1') != '0':
+            # the rules text has no flying: a winged render is the wrong creature
+            defects.append('wings on a flightless creature')
+        if subject_hint and os.environ.get('INSPECT_SUBJECT', '1') != '0' and c.get('subject', True) is not False:
+            # yes/no said the subject is present; a dragon passed as a human
+            # shaman that way. The open list + category second opinion that
+            # already guards artifacts now guards creatures too.
+            # The open list is weak on fantasy nouns: a red cyclops, a dark-winged
+            # angel and a homunculus were all flagged missing while yes/no said
+            # present, and a batch then re-rolled good renders into worse ones.
+            # A creature is MISSING when nothing living is named at all (ruins
+            # for a soldier, a landscape for a dragon); a naming gap is not a
+            # defect. Category words, no creature tables.
+            alts = _object_alternates(subject_hint) + _PERSON_NOUNS
+            if 'human' not in subject_hint.lower():
+                # a Human stays strict (a dragon drawn for a Human Shaman is
+                # the defect the owner reported); other kinds accept any
+                # living thing, since the list rarely says 'homunculus'
+                alts = alts + _CREATURE_NOUNS
+            if not _names_object(image_path, subject_hint, vision_model, alternates=alts) \
+                    and not _object_category_matches(image_path, subject_hint, vision_model):
+                defects.append('subject missing')
+    # Text / signature: the whole-image yes/no fires on almost every card.
+    # Confirm on the edge strips where marks actually sit — a crop with real
+    # letters in it is an easy yes, a crop without is an easy no.
+    if c.get('text') is True or c.get('signature') is True:
+        if _edge_marks_present(image_path, vision_model):
+            defects.append('text' if c.get('text') is True else 'signature')
+        elif c.get('text') is True and os.environ.get('INSPECT_CENTRE_TEXT', '1') != '0':
+            # lettering INSIDE the art (shop signs, a word on a ring) never
+            # reaches the edge strips; a transcription probe over the middle
+            # measured 8/8 (two lettered cards caught, six clean cards quiet),
+            # so it is a real DEFECT — a re-roll, since the zoom cannot hide it
+            if _centre_text_present(image_path, vision_model):
+                defects.append('text in art')
+    # Composition (H43): a confusing picture, or an object/place card whose
+    # named subject is not there, is recorded as ADVISORY by default so the
+    # false-positive rate can be measured on real batches before it is allowed
+    # to trigger re-rolls (INSPECT_COMPOSITION=enforce) or muted (=off).
+    mode = os.environ.get('INSPECT_COMPOSITION', 'advisory')
+    notes = []
+    if not figure and c.get('subject', True) is False:
+        notes.append('subject missing')
+    elif card_type == 'artifact' and subject_hint and os.environ.get('INSPECT_SUBJECT', '1') != '0':
+        # yes/no is answered yes for a goblet labelled "a signet ring"; an
+        # open LIST question is not. Measured on five object renders: both
+        # wrong objects caught or one missed, no true ring ever flagged — so
+        # this one is a real DEFECT (re-roll), not an advisory.
+        if not _names_object(image_path, subject_hint, vision_model, alternates=_object_alternates(subject_hint)) \
+                and not _object_category_matches(image_path, subject_hint, vision_model):
+            defects.append('subject missing')
+    if c.get('composition', True) is False:
+        notes.append('confusing composition')
+    if figure and c.get('face', True) is False and c.get('heads', 1) >= 1:
+        # a Krark render was a giant fist with no face: readable, on-style,
+        # and not the card
+        notes.append('face not visible')
+    if figure and c.get('body', True) is False and c.get('heads', 1) >= 1 \
+            and os.environ.get('INSPECT_BODY', '1') != '0':
+        # a floating winged head over a city passed every other check; measured
+        # on six creature renders (the head fired, five whole figures passed),
+        # so this is a real DEFECT that re-rolls (INSPECT_BODY=0 mutes)
+        defects.append('body not visible')
+    if notes and mode != 'off':
+        if mode == 'enforce':
+            defects.extend(notes)
+        elif advisory is not None:
+            advisory['composition'] = notes
+    return defects
+
+
+_PERSON_NOUNS = ['man', 'woman', 'person', 'people', 'figure', 'human', 'soldier', 'knight', 'warrior',
+                 'cleric', 'priest', 'monk', 'wizard', 'mage', 'sorcerer', 'guard', 'sailor', 'rider',
+                 'archer', 'hunter', 'scholar', 'shaman', 'druid', 'merchant', 'lady', 'lord', 'king',
+                 'queen', 'child', 'boy', 'girl', 'elder', 'face', 'character']
+
+
+_CREATURE_NOUNS = ['creature', 'monster', 'beast', 'animal', 'dragon', 'demon', 'angel', 'bird', 'snake',
+                   'serpent', 'fish', 'insect', 'spider', 'wolf', 'cat', 'dog', 'horse', 'bear', 'lizard',
+                   'frog', 'goblin', 'elf', 'dwarf', 'orc', 'giant', 'troll', 'ogre', 'ghost', 'spirit',
+                   'skeleton', 'zombie', 'robot', 'golem', 'alien', 'fairy', 'faerie', 'imp', 'cyclops',
+                   'minotaur', 'centaur', 'griffin', 'phoenix', 'wyrm', 'hydra', 'kraken', 'bat', 'rat',
+                   'ape', 'gorilla', 'boar', 'deer', 'stag', 'elephant', 'crab', 'octopus', 'squid', 'worm']
+
+
+def _object_alternates(subject_hint: str) -> list:
+    """Nouns the object may equally be called, from the writer's memoised
+    plain gloss of the term ("a talisman" -> "a small engraved medallion worn
+    for luck" -> medallion). Two talismans rendered as medallions were flagged
+    missing because only the literal noun counted. No synonym tables."""
+    import re as _re
+    try:
+        from prompt_generator import _OBJECT_GLOSS, _OBJECT_SYNONYMS
+    except Exception:
+        return []
+    key = (subject_hint or '').strip().lower()
+    syns = list(_OBJECT_SYNONYMS.get(key, []))
+    gloss = _OBJECT_GLOSS.get(key, '')
+    stop = {'a', 'an', 'the', 'of', 'on', 'in', 'with', 'for', 'and', 'or', 'small', 'large', 'flat',
+            'round', 'worn', 'used', 'held', 'top', 'side', 'made', 'from', 'that', 'this', 'its'}
+    return syns + [w for w in _re.findall(r'[a-z]+', gloss.lower()) if len(w) > 3 and w not in stop]
+
+
+def _object_category_matches(image_path, subject_hint: str, vision_model: str) -> bool:
+    """Second opinion when the object list misses: a multiple-choice question
+    (the literal object vs. person / animal / building / landscape / some other
+    object). Less yes-biased than yes/no and not dependent on the model's
+    synonym vocabulary — a talisman drawn as a medallion picks (a); a goblet
+    labelled a signet ring picks 'some other object'. True on a read failure."""
+    try:
+        import mlx_llm
+        reply = mlx_llm.vision(
+            str(image_path),
+            f"Which ONE best describes the main thing in this picture? (a) {subject_hint} "
+            "(b) a person or creature (c) a building or structure (d) a landscape or place "
+            "(e) some other object. Answer with the letter only.",
+            model=vision_model, max_tokens=5, temperature=0.0)
+    except Exception as e:
+        print(f"  [inspect] object category read failed: {e}")
+        return True
+    ans = (reply or '').strip().lower()
+    return ans.startswith('a') or ans.startswith('(a')
+
+
+def _names_object(image_path, subject_hint: str, vision_model: str, alternates=()) -> bool:
+    """Ask the model to LIST the objects it sees (open recall, not yes/no)
+    and check the literal noun of the expected subject ('ring' for 'a signet
+    ring') is among them. A single-answer "main object" question was fooled
+    by a companion prop (a feather beside a ring). True on any read failure
+    (never punish on a broken read)."""
+    import re as _re
+    # the HEAD noun: the last word before the first preposition ("a pendant
+    # on a cord" -> pendant, "an engine of brass and iron" -> engine)
+    head = _re.split(r'\b(?:on|of|with|in|from|for|around|over|under|at|by)\b', (subject_hint or '').lower(), 1)[0]
+    words = [w for w in _re.findall(r'[a-z]+', head) if w not in ('a', 'an', 'the')]
+    if not words:
+        return True
+    noun = words[-1]
+    try:
+        import mlx_llm
+        reply = mlx_llm.vision(
+            str(image_path),
+            "List the objects you can see in this picture, largest first, up to five, as a "
+            "comma-separated list of plain nouns. Nothing else.",
+            model=vision_model, max_tokens=40, temperature=0.0)
+    except Exception as e:
+        print(f"  [inspect] object naming failed: {e}")
+        return True
+    ans = (reply or '').lower()
+    wanted = [noun] + [a for a in (alternates or []) if a]
+    for w in wanted:
+        stem = w[:-1] if w.endswith('s') else w
+        if len(stem) >= 3 and stem in ans:
+            return True
+    return False
+
+
+def pick_take(ref_paths, a_path, b_path, card_name: str, vision_model: str):
+    """H41: when two takes tie on defects, ask the vision model which better
+    matches the reference style and is the more striking card art. The
+    three images (reference, take A, take B) go in as ONE side-by-side sheet
+    because the worker reads a single image. Asked twice with the takes
+    swapped to cancel position bias; returns 'a', 'b', or None when the two
+    answers disagree or the read fails."""
+    if not vision_model or not ref_paths:
+        return None
+    try:
+        from PIL import Image, ImageDraw
+        import tempfile, os as _os
+        import mlx_llm
+        ref = Image.open(ref_paths[0]).convert('RGB')
+        votes = []
+        for order in (('a', 'b'), ('b', 'a')):
+            paths = {'a': a_path, 'b': b_path}
+            tiles = [ref] + [Image.open(paths[k]).convert('RGB') for k in order]
+            h = 512
+            tiles = [t.resize((max(1, int(t.width * h / t.height)), h)) for t in tiles]
+            sheet = Image.new('RGB', (sum(t.width for t in tiles) + 40, h + 28), (255, 255, 255))
+            x = 0
+            for t, label in zip(tiles, ('REFERENCE', 'LEFT', 'RIGHT')):
+                sheet.paste(t, (x, 28))
+                ImageDraw.Draw(sheet).text((x + 6, 6), label, fill=(0, 0, 0))
+                x += t.width + 20
+            fd, path = tempfile.mkstemp(suffix='.png', prefix='pick_take_')
+            _os.close(fd)
+            try:
+                sheet.save(path)
+                reply = mlx_llm.vision(
+                    path,
+                    f"The first panel is a style REFERENCE. LEFT and RIGHT are two candidate "
+                    f"card illustrations for '{card_name}'. Which candidate looks more like it "
+                    "was made by the reference's artist AND is the more striking, readable "
+                    "picture? Answer with exactly one word: LEFT or RIGHT.",
+                    model=vision_model, max_tokens=5, temperature=0.0)
+            finally:
+                try:
+                    _os.unlink(path)
+                except OSError:
+                    pass
+            word = (reply or '').strip().upper()
+            if 'LEFT' in word and 'RIGHT' not in word:
+                votes.append(order[0])
+            elif 'RIGHT' in word and 'LEFT' not in word:
+                votes.append(order[1])
+            else:
+                return None
+        return votes[0] if votes[0] == votes[1] else None
+    except Exception as e:
+        print(f"  [inspect] take comparison failed: {e}")
+        return None
+
+
+def _centre_text_present(image_path, vision_model: str) -> bool:
+    """Open question over the central 70% of the image: transcribe any
+    readable letters or words. A transcription with two or more letters
+    counts; 'none' does not. Open recall, not yes/no confirmation."""
+    try:
+        from PIL import Image
+        import tempfile, os as _os, re as _re
+        import mlx_llm
+        im = Image.open(image_path).convert('RGB')
+        w, h = im.size
+        crop = im.crop((int(w * 0.15), int(h * 0.15), int(w * 0.85), int(h * 0.85)))
+        fd, path = tempfile.mkstemp(suffix='.png', prefix='inspect_centre_')
+        _os.close(fd)
+        try:
+            crop.save(path)
+            reply = mlx_llm.vision(
+                path,
+                "Transcribe any readable letters, words or numerals painted inside this picture "
+                "(signs, labels, engraved words). If there are none, answer exactly: none",
+                model=vision_model, max_tokens=30, temperature=0.0)
+        finally:
+            try:
+                _os.unlink(path)
+            except OSError:
+                pass
+        ans = (reply or '').strip().lower()
+        if not ans or ans.startswith('none') or 'no readable' in ans or 'no text' in ans:
+            return False
+        return bool(_re.search(r'[a-z0-9]{2,}', ans))
+    except Exception as e:
+        print(f"  [inspect] centre text read failed: {e}")
+        return False
+
+
+def _edge_marks_present(image_path, vision_model: str) -> bool:
+    """Crop the bottom and top strips of the render and ask, per strip,
+    whether letters, numerals, handwriting or a signature are visible.
+    Any yes confirms the whole-image flag."""
+    try:
+        from PIL import Image
+        import tempfile, os as _os
+        import mlx_llm
+        im = Image.open(image_path).convert('RGB')
+        w, h = im.size
+        strips = [im.crop((0, int(h * 0.86), w, h)), im.crop((0, 0, w, int(h * 0.14)))]
+        for strip in strips:
+            fd, path = tempfile.mkstemp(suffix='.png', prefix='inspect_strip_')
+            _os.close(fd)
+            try:
+                strip.save(path)
+                reply = mlx_llm.vision(
+                    path,
+                    "Look only at this strip. Are there any letters, words, numerals, "
+                    "handwriting, a signature or a copyright mark visible? Answer "
+                    "exactly marks=yes or marks=no.",
+                    model=vision_model, max_tokens=8, temperature=0.0)
+            finally:
+                try:
+                    _os.remove(path)
+                except OSError:
+                    pass
+            if 'marks=yes' in (reply or '').lower().replace(' ', ''):
+                return True
+        return False
+    except Exception as e:
+        print(f"  [inspect] edge check failed: {e}")
+        return True          # keep the whole-image flag when the check cannot run
+
+
+_STAGING_READ_PROMPT = (
+    "Write exactly two sentences about how this picture STAGES its scene, stated as "
+    "fact (no 'appears to be', no 'possibly'). Sentence 1 begins 'Scenes are staged' "
+    "and gives ONLY composition: the camera distance, how much of the frame the main "
+    "subject fills, where the horizon or ground line sits, how dense the detail is, "
+    "and the weather or air. Sentence 2 begins 'The tone is' and names the mood in two "
+    "or three plain words. Do NOT name any object, prop, plant, animal, furniture, "
+    "building or place shown in the picture, and never describe or name the people "
+    "or creatures in it.")
+
+
+def _staging_read_one(image_path, vision_model: str) -> str:
+    try:
+        import mlx_llm
+        reply = mlx_llm.vision(str(image_path), _STAGING_READ_PROMPT,
+                               model=vision_model, max_tokens=120, temperature=0.0)
+    except Exception as e:
+        print(f"  [style] staging read failed: {e}")
+        return ''
+    text = ' '.join((reply or '').split())
+    text = re.sub(r'\b(appears?|seems?) to be\b', 'is', text)
+    text = re.sub(r'\b(possibly|perhaps|likely|probably)\s+', '', text)
+    sents = [x.strip() for x in re.split(r'(?<=[.!?])\s+', text) if x.strip()]
+    return ' '.join(sents[:2])
+
+
+def style_staging_seen(image_path, vision_model: str, reference_paths=(), text_model: str = '') -> str:
+    """Staging + register READ from the references: how the pictures stage
+    their scenes (camera, fill, horizon, density, weather) and their tone.
+    H87: the read is COMPOSITION only and, with several references, merged
+    down to what they share — a single read of one picture described that
+    picture's contents ('a rustic indoor garden with hanging plants', 'a
+    table with a raven and a book') and the scene writer pasted those props
+    into every unrelated card. Content differs per reference and cancels;
+    the staging stays — the same averaging idea as the image channel."""
+    paths = []
+    for p in [image_path] + list(reference_paths or []):
+        if p is not None and str(p) not in {str(x) for x in paths}:
+            paths.append(p)
+    paths = paths[:4]
+    if not paths or not vision_model:
+        return ''
+    reads = [r for r in (_staging_read_one(p, vision_model) for p in paths) if r]
+    if not reads:
+        return ''
+    out = reads[0]
+    if len(reads) > 1 and text_model:
+        try:
+            import mlx_llm
+            joined = '\n'.join(f"- {r}" for r in reads)
+            reply = mlx_llm.chat(
+                messages=[
+                    {'role': 'system', 'content':
+                        "You summarise how an artist stages scenes. Answer with exactly two sentences."},
+                    {'role': 'user', 'content':
+                        f"These describe {len(reads)} different pictures by the same artist:\n{joined}\n\n"
+                        "Write exactly two sentences about how this artist stages scenes IN GENERAL, "
+                        "keeping only what the descriptions share. Sentence 1 begins 'Scenes are "
+                        "staged' and covers camera distance, how much of the frame the subject "
+                        "fills, horizon, density of detail and weather or air. Sentence 2 begins "
+                        "'The tone is'. Never mention a specific object, prop, plant, animal, "
+                        "building, place or figure from any one picture."},
+                ],
+                model=_preferred_idiom_model(text_model), max_tokens=120, temperature=0.0)
+            merged = ' '.join((reply or '').split())
+            sents = [x.strip() for x in re.split(r'(?<=[.!?])\s+', merged) if x.strip()]
+            if sents and sents[0].lower().startswith('scenes are staged'):
+                out = ' '.join(sents[:2])
+        except Exception as e:
+            print(f"  [style] staging merge failed: {e}")
+    if out:
+        print(f"  [style] staging seen in {len(reads)} reference(s): {out}")
+    return out
+
+
+def style_staging_recall(style_source: str, text_model: str,
+                         image_path=None, vision_model: str = '', reference_paths=()) -> str:
+    """How a NAMED style STAGES a scene and its tonal register — for the
+    scene writer, not the image model. The drawing idiom says how lines and
+    faces look; this says what the artist would put in the frame around the
+    card's subject (settings, props, how figures act and pose) and in what
+    tone (deadpan absurd / whimsical / grim). Two sentences, temperature 0,
+    stored with the block at distillation. Never names anyone. '' on failure."""
+    src = (style_source or '').strip().replace('&', 'and')
+    # The reference is ground truth for staging: the user chose these images
+    # for what they show. A name recall guesses ("grim gothic ruins" for a
+    # serene line artist paired with an obscure name), so it is the fallback
+    # when no reference can be read.
+    seen = style_staging_seen(image_path, vision_model, reference_paths=reference_paths, text_model=text_model)
+    if seen or not src:
+        return seen
+    try:
+        import mlx_llm
+        reply = mlx_llm.chat(
+            messages=[
+                {'role': 'system', 'content':
+                    "You are an art director. Given the name of an art style, artist, "
+                    "show or movement, write exactly two sentences. Sentence 1: how it "
+                    "STAGES a scene — typical settings, props, lighting and camera "
+                    "distance. Do NOT describe its recurring cast or any character "
+                    "types (the subject of each picture is supplied separately). "
+                    "If you do not actually know this style or artist, output exactly "
+                    "UNKNOWN — never guess. "
+                    "Sentence 2: its TONAL REGISTER (for example "
+                    "deadpan absurd, gentle whimsy, grim gothic, serene wonder). Plain "
+                    "concrete language. Describe props and settings GENERICALLY (a ray "
+                    "gun, a garage workbench), never a trademark item. NEVER name "
+                    "characters, people, places or the style itself."},
+                {'role': 'user', 'content': "Style: Moebius"},
+                {'role': 'assistant', 'content':
+                    "Scenes are staged in vast empty deserts or crystalline cities under "
+                    "a pale flat sky, with odd vehicles and towering rock forms, seen "
+                    "from a distance so the landscape dwarfs whatever stands in it. The "
+                    "register is serene, dreamlike wonder — quiet, unhurried, slightly "
+                    "mystical."},
+                {'role': 'user', 'content': f"Style: {src}"},
+            ],
+            model=_preferred_idiom_model(text_model), max_tokens=120, temperature=0.0)
+    except Exception as e:
+        print(f"  [style] staging recall failed: {e}")
+        return ''
+    if 'unknown' in (reply or '').strip().lower()[:12]:
+        print(f"  [style] staging recall: model does not know '{src}'")
+        return ''
+    text = ' '.join((reply or '').split())
+    src_words = {w.lower() for w in re.findall(r'[A-Za-z]{3,}', src)} - {'and', 'the', 'von', 'van', 'der'}
+    keep = []
+    for sent in re.split(r'(?<=[.!?])\s+', text):
+        toks = sent.split()
+        if not toks:
+            continue
+        low = [t.lower().strip('.,;:') for t in toks]
+        # a Capitalized word after the first token is a name leaking through
+        if any(t[:1].isupper() for t in toks[1:]) or any(t in src_words for t in low):
+            continue
+        keep.append(sent.strip())
+    out = ' '.join(keep[:2])
+    if out:
+        print(f"  [style] staging for '{src}': {out}")
+    return out
+
+
+def style_idiom_descriptors(style_source: str, text_model: str,
+                            image_path=None, vision_model: str = '',
+                            max_words: int = _IDIOM_MAX_WORDS) -> list:
+    """Recall + seen, merged and capped (see the two helpers). Medium anchors
+    are generic by design ('cel animation, cartoonish'); the idiom is what
+    makes a named style recognizable, and the render lead may not carry the
+    name (franchises are de-named to keep their cast out)."""
+    recall = style_idiom_recall(style_source, text_model, max_words)
+    return recall + style_idiom_seen(image_path, style_source, vision_model,
+                                     exclude=recall, max_words=max_words)
+
+
+# ---- H26: palette and colour coverage from the reference PIXELS ------------
+# The VLM's palette prose ("dusty coral") is a read; pixel statistics are a
+# measurement. Names come from a generic colour vocabulary (nearest named hue),
+# never from any deck.
+_NAMED_COLOURS = [
+    ('black', (20, 20, 20)), ('white', (245, 245, 245)), ('grey', (128, 128, 128)),
+    ('dark grey', (70, 70, 70)), ('light grey', (190, 190, 190)),
+    ('red', (200, 30, 30)), ('dark red', (120, 15, 20)), ('crimson', (170, 20, 60)),
+    ('coral', (240, 110, 90)), ('salmon pink', (240, 150, 140)), ('pink', (235, 140, 190)),
+    ('magenta', (200, 40, 160)), ('purple', (120, 50, 160)), ('violet', (150, 100, 220)),
+    ('lavender', (190, 170, 230)), ('indigo', (60, 40, 140)), ('navy', (25, 35, 90)),
+    ('blue', (40, 80, 200)), ('sky blue', (120, 180, 240)), ('teal', (30, 130, 130)),
+    ('turquoise', (60, 200, 200)), ('cyan', (80, 220, 240)), ('green', (40, 150, 60)),
+    ('dark green', (20, 80, 40)), ('olive', (110, 120, 40)), ('lime', (160, 220, 60)),
+    ('mint', (170, 230, 190)), ('yellow', (240, 220, 40)), ('gold', (215, 170, 40)),
+    ('mustard', (200, 170, 60)), ('orange', (240, 140, 30)), ('amber', (240, 180, 60)),
+    ('brown', (120, 75, 40)), ('tan', (200, 170, 120)), ('beige', (225, 205, 170)),
+    ('cream', (245, 235, 205)), ('peach', (245, 200, 160)), ('rust', (170, 80, 30)),
+    ('maroon', (100, 30, 40)), ('sepia', (140, 100, 60)),
+]
+
+
+_HUE_NAMES = [  # (upper bound in degrees, name) — generic colour vocabulary
+    (15, 'red'), (40, 'orange'), (65, 'yellow'), (90, 'yellow-green'), (150, 'green'),
+    (185, 'teal'), (200, 'cyan'), (250, 'blue'), (275, 'indigo'), (300, 'purple'),
+    (335, 'magenta'), (360, 'red')]
+
+
+def _hue_name(h_deg: float, sat: float, val: float) -> str:
+    base = next(n for ub, n in _HUE_NAMES if h_deg < ub)
+    if base in ('orange', 'yellow') and val < 0.6:
+        return 'brown'
+    if base == 'red' and val < 0.45:
+        return 'maroon'
+    # pastels: a light, unsaturated red or magenta is pink, a light orange is
+    # coral/peach — 'dusty red' for a pink sky skewed a pastel deck's palette
+    if base in ('red', 'magenta') and val > 0.75 and sat < 0.55:
+        return 'pale pink' if sat < 0.3 else 'pink'
+    if base == 'orange' and val > 0.8 and sat < 0.55:
+        return 'peach' if sat < 0.3 else 'coral'
+    if sat < 0.4:
+        if base == 'red' and val >= 0.6:
+            # a light, unsaturated red is rose: pink film sets measured 'dusty
+            # red' and the block lost the one hue that names the style
+            return 'dusty pink'
+        return {'red': 'dusty red', 'orange': 'peach', 'yellow': 'sand', 'green': 'sage',
+                'teal': 'muted teal', 'blue': 'slate blue', 'purple': 'mauve',
+                'magenta': 'dusty pink'}.get(base, 'muted ' + base)
+    if val > 0.85 and sat < 0.6:
+        return 'pale ' + base
+    return base
+
+
+def pixel_palette(image_path, n_bins: int = 12):
+    """Measure a reference: dominant hues by pixel share among SATURATED pixels
+    (hue-angle bins, named from a generic vocabulary), the white-paper
+    fraction, and mean saturation. {'hues': [...], 'paper': 0..1,
+    'saturation': 0..1} or None."""
+    try:
+        from PIL import Image
+        import colorsys
+        im = Image.open(image_path).convert('RGB')
+        im.thumbnail((192, 192))
+        px = list(im.get_flattened_data()) if hasattr(im, 'get_flattened_data') else list(im.getdata())
+        total = float(len(px)) or 1.0
+        bins = {}
+        sat_sum = 0.0
+        paper_n = 0
+        for r, g, b in px:
+            h, sv, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+            sat_sum += sv
+            if sv < 0.14 and v > 0.78:      # paper: bright and unsaturated (scans are cream, not pure white)
+                paper_n += 1
+            if sv < 0.25 or v < 0.2:
+                continue
+            key = int((h * 360) // (360 / n_bins))
+            acc = bins.setdefault(key, [0, 0.0, 0.0, 0.0])
+            acc[0] += 1; acc[1] += h * 360; acc[2] += sv; acc[3] += v
+        paper = paper_n / total
+        lum = sum(0.299 * r + 0.587 * g + 0.114 * b for r, g, b in px) / (255.0 * total)
+        w, hgt = im.size
+        def _band_lum(y0, y1, x0=0, x1=None):
+            x1 = w if x1 is None else x1
+            rows = [px[y * w + x] for y in range(int(hgt * y0), int(hgt * y1)) for x in range(int(x0), int(x1))]
+            return sum(0.299 * r + 0.587 * g + 0.114 * b for r, g, b in rows) / (255.0 * max(1, len(rows)))
+        lum_top = _band_lum(0.0, 0.35)
+        lum_mid = _band_lum(0.3, 0.75, w * 0.25, w * 0.75)
+        ranked = sorted(bins.items(), key=lambda kv: -kv[1][0])
+        hues = []
+        for _, (n, hs, ss, vs) in ranked:
+            if n / total < 0.02:
+                break
+            name = _hue_name(hs / n, ss / n, vs / n)
+            if name not in hues:
+                hues.append(name)
+            if len(hues) >= 5:
+                break
+        return {'hues': hues, 'paper': round(paper, 3), 'saturation': round(sat_sum / total, 3),
+                'luminance': round(lum, 3), 'lum_top': round(lum_top, 3), 'lum_mid': round(lum_mid, 3)}
+    except Exception as e:
+        print(f"  [style] pixel palette failed: {e}")
+        return None
+
+
+# Media that are not drawn or painted: their block must never carry drawing
+# vocabulary. "fills, no bare white paper" in the lead and "drawn with ...
+# ruler-straight lines" on a film-still deck rendered every card as line art.
+NON_DRAWN_MEDIA = frozenset({'photograph', '3d render'})
+_DRAWING_VOCAB_RE = re.compile(
+    r"(?<!horizon )(?<!ground )(?<!eye )(?<!sight )(?<!skyline )(?<!water)"
+    r"\b(?:lines?|linework|line art|outlines?|outlined|hatching|cross-?hatch\w*|brush\w*|inks?|inked|"
+    r"inking|drawn|drawing|sketch\w*|pencil\w*|pen-and-ink|paper|colou?r fills|cel-shad\w*|flat colou?r|"
+    r"wobbly|cartoon\w*|caricature\w*|doodle\w*|squiggl\w*|scribbl\w*)\b",
+    re.IGNORECASE)
+
+
+def is_non_drawn_medium(medium: str) -> bool:
+    """True for a medium bucket (or anchor phrase) that is photographed or
+    rendered rather than drawn or painted."""
+    low = (medium or '').lower()
+    return any(m in low for m in NON_DRAWN_MEDIA) or any(
+        w in low.split(',')[0] for w in ('photograph', 'photo', 'film still', 'cinematic'))
+
+
+def drawing_vocabulary(item: str) -> bool:
+    """Does a descriptor name lines, ink, brushes or paper?"""
+    return bool(_DRAWING_VOCAB_RE.search(item or ''))
+
+
+def pixel_coverage_phrase(stats, medium: str = '') -> str:
+    """Colour-coverage clause from measurements: how much paper shows and how
+    saturated the fills are. '' when no stats. A photographed or rendered
+    medium gets the same facts in photographic words (tones, not fills)."""
+    if not stats:
+        return ''
+    paper, sat = stats.get('paper', 0.0), stats.get('saturation', 0.0)
+    non_drawn = is_non_drawn_medium(medium)
+    # the mean saturation is over ALL pixels; on 75% white paper a coloured
+    # drawing averages below the monochrome line. Judge the ink, not the paper.
+    sat_ink = sat / (1.0 - paper) if paper < 0.95 else sat
+    if sat_ink < 0.12:
+        return 'monochrome black and white' if non_drawn else 'monochrome, uncoloured ink on white paper'
+    if paper >= 0.35:
+        return 'full colour against bright white' if non_drawn else 'coloured figures and objects on open white paper'
+    if sat >= 0.38:
+        base = ('full colour, rich saturated tones' if non_drawn
+                else 'fully coloured with saturated flat colour fills, no bare white paper')
+    else:
+        base = ('full colour, soft muted tones' if non_drawn
+                else 'fully coloured with soft muted fills, no bare white paper')
+    # tonal key, measured: dark references rendered as pastel skies until the
+    # block said so (a night-sky deck came out pink and powder blue)
+    lum = stats.get('luminance')
+    if lum is not None and lum < 0.38:
+        base += ', dark low-key palette, deep shadows with small bright highlights'
+    elif lum is not None and lum > 0.72:
+        base += ', bright high-key palette'
+    # sky-versus-subject key, measured: a dark figure silhouetted against a
+    # pale luminous sky is a composition fact the whole-image key cannot say
+    top, mid = stats.get('lum_top'), stats.get('lum_mid')
+    if top is not None and mid is not None:
+        if top - mid > 0.12:
+            base += ', a pale luminous sky behind a darker silhouetted subject'
+        elif mid - top > 0.12:
+            base += ', a bright subject against a dark ground'
+    return base
+
+
 def _medium_anchors(medium: str) -> list:
     """Canonical anchor descriptors for a classified medium ([] if unknown)."""
     return list(_MEDIUM_ANCHORS.get(medium, []))
+
+
+def _evidence_medium_phrase(stored_descriptions: str, medium: str, style_source: str = '') -> str:
+    """H52: the analyst's own short 'Medium:' phrase that best matches the
+    voted bucket ('papyrus parchment' for a papyrus deck the vote files under
+    'painted illustration'). The bucket anchor is generic; the phrase is the
+    specific surface the references show, and it goes right after the bucket
+    word so the image model reads it early. '' when none is usable."""
+    import re as _re
+    keys = _MEDIUM_KEYWORD_MAP.get(medium, frozenset())
+    # the declared source's own words outrank the analyst's: for a "70's kung
+    # fu movie" deck the phrase "70's kung fu movie footage" beats "digital
+    # still photography" (the analyst's 'digital' for grainy film stills)
+    src_words = {w for w in _re.findall(r"[a-z0-9']+", (style_source or '').lower()) if len(w) > 1}
+    best, best_score = '', 0
+    for ln in (stored_descriptions or '').splitlines():
+        m = _re.match(r'\s*[-*\s]*medium\s*:\s*(.+)$', ln, _re.IGNORECASE)
+        if not m:
+            continue
+        phrase = _re.split(r'[;(,.]| with | and ', m.group(1).strip())[0].strip().lower()
+        words = _re.findall(r"[a-z0-9'-]+", phrase)
+        if not 1 <= len(words) <= 5:
+            continue
+        score = len(set(w.strip("'") for w in words) & keys) + 2 * len(set(words) & src_words)
+        if score > best_score:
+            best, best_score = ' '.join(words), score
+    if not best or best == medium or set(best.split()) <= set(medium.split()):
+        return ''
+    return best
 
 
 # Color/palette detection for palette preservation (see build_flux_style_descriptors).
 
 
 
+def pixel_edge_hardness(image_path):
+    """Mean edge magnitude of a reference (0..1): hard line art and comic
+    fills sit around 0.15-0.20, soft painterly work around 0.07-0.10.
+    Measured on the decks: comic 0.19, ink-on-white 0.15, fine-line 0.17,
+    cosmic digital painting 0.08. Deterministic — the text reads called the
+    comic deck 'digital painting' on every image."""
+    try:
+        from PIL import Image, ImageFilter
+        im = Image.open(image_path).convert('L')
+        im.thumbnail((192, 192))
+        px = list(im.filter(ImageFilter.FIND_EDGES).getdata())
+        return sum(px) / (255.0 * max(1, len(px)))
+    except Exception as e:
+        print(f"  [style] edge hardness failed: {e}")
+        return None
+
+
+def _read_majority_hues(stored: str) -> list:
+    """Bare hue names carried by at least half of the per-image reads'
+    Colors lines (two reads minimum); neutrals excluded."""
+    lines = [ln for ln in (stored or '').splitlines()
+             if re.match(r'\s*[-*\s]*colou?rs?\s*:', ln, re.IGNORECASE)]
+    if len(lines) < 2:
+        return []
+    counts = {}
+    for ln in lines:
+        for w in set(re.findall(r'[a-z]+', ln.lower())):
+            if w in _COLOR_WORDS and w not in ('white', 'black', 'gray', 'grey'):
+                counts[w] = counts.get(w, 0) + 1
+    return [w for w, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])) if n * 2 >= len(lines)]
+
+
+def pixel_style_stats(image_path, reference_paths=None) -> dict:
+    """Pooled pixel evidence over the references: mean edge hardness and the
+    hue names ranked by how many references carry them."""
+    paths = [p for p in (reference_paths or [image_path]) if p][:6]
+    hard = [h for h in (pixel_edge_hardness(p) for p in paths) if h is not None]
+    counts = {}
+    for p in paths:
+        st = pixel_palette(p)
+        for i, h in enumerate((st or {}).get('hues') or []):
+            counts[h] = counts.get(h, 0) + (5 - min(i, 4))      # earlier = more coverage
+    hues = [h for h, _ in sorted(counts.items(), key=lambda kv: -kv[1])]
+    return {'hardness': (sum(hard) / len(hard)) if hard else None, 'hues': hues}
+
+
+def pixel_coverage_from_refs(image_path, reference_paths=None, medium: str = '') -> str:
+    """Colour-coverage clause measured over the deck's references (mean paper
+    fraction and saturation); '' when nothing is readable."""
+    paths = [p for p in (reference_paths or [image_path]) if p]
+    stats = [st for st in (pixel_palette(p) for p in paths) if st]
+    if not stats:
+        return ''
+    mean = {'paper': sum(x['paper'] for x in stats) / len(stats),
+            'saturation': sum(x['saturation'] for x in stats) / len(stats),
+            'luminance': sum(x.get('luminance', 0.5) for x in stats) / len(stats),
+            'lum_top': sum(x.get('lum_top', 0.5) for x in stats) / len(stats),
+            'lum_mid': sum(x.get('lum_mid', 0.5) for x in stats) / len(stats)}
+    return pixel_coverage_phrase(mean, medium)
+
+
 def build_flux_style_block(image_path, style_source: str = '',
                            vision_model: str = 'llava:7b',
                            text_model: str = 'llama3.1:8b',
-                           max_words: int = 40,
-                           stored_descriptions: str = '') -> str:
+                           max_words: int = 72,
+                           stored_descriptions: str = '',
+                           reference_paths=None) -> str:
     """Procedural style block: deterministic foundation, VLM as enrichment.
 
     The requirement is REPEATABLE style transfer from every fresh
@@ -1554,7 +2946,7 @@ def build_flux_style_block(image_path, style_source: str = '',
             "NOT its subject. Describe, in order: medium and overall look; "
             "linework character (weight, flow, density); how surfaces and "
             "shading are handled; the color palette with 4-6 SPECIFIC hue names "
-            "(say 'dusty coral', never just 'red'); recurring decorative motifs "
+            "(each a modifier plus a hue, never a bare primary colour name); recurring decorative motifs "
             "or texture patterns; art-historical influences if visible. Be "
             "concrete and technical. Never mention the subject. Output ONLY the "
             "description."
@@ -1588,12 +2980,78 @@ def build_flux_style_block(image_path, style_source: str = '',
     # anchors at all: a papyrus-hieroglyph deck whose analyses said "ink on
     # papyrus" rendered from a bare palette line and looked nothing like its
     # references. Evidence is the fallback authority, never silence.
-    medium = (_classify_style_medium(style_source, text_model,
-                                     img_desc=best_prose[:400])
-              if style_source
-              else _classify_medium_from_evidence(stored_descriptions,
-                                                  best_prose, text_model))
+    if style_source:
+        # Declaration first (deterministic name map), then the deck's own
+        # stored evidence, and only then the model's guess from a raw read: a
+        # deck declared "Ancient Egyptian Hieroglyphs" whose analyses said
+        # "papyrus illustration" was classified PHOTOGRAPH because the raw
+        # read described a photo of a painted wall.
+        # order: the declared NAME's keywords (film, movie, stills… now hit
+        # the photograph bucket — a '70s kung fu movie' deck had been filed
+        # as '3D render' because the vision model called grainy film stills
+        # 'digital rendering'), then the stored evidence vote, then the model
+        # with the reads as evidence (a raw read of a painted wall once made
+        # it say 'photograph' for a papyrus deck — evidence stays ahead of it)
+        medium = _classify_style_medium(style_source, text_model, img_desc='')
+        if not medium:
+            medium = _evidence_medium_vote(stored_descriptions)
+        if not medium:
+            ev_lines = ' '.join(ln.strip() for ln in (stored_descriptions or '').splitlines()
+                                if ln.strip().lower().lstrip('-* ').startswith(('art style', 'medium')))
+            medium = _classify_style_medium(style_source, text_model,
+                                            img_desc=(ev_lines or best_prose)[:400])
+    else:
+        medium = _classify_medium_from_evidence(stored_descriptions, best_prose, text_model)
+    pix = pixel_style_stats(image_path, reference_paths)
+    hardness = pix.get('hardness')
+    if medium == 'painted illustration' and hardness is not None and hardness >= 0.13:
+        # 'Digital painting' is the vision model's answer for ANY digital art;
+        # hard edges say line art or comic. Take the specific flat bucket the
+        # reads mention most (a comic deck re-analysed as painterly otherwise).
+        import re as _re
+        lines = [ln for ln in (stored_descriptions or '').splitlines()
+                 if _re.match(r'\s*[-*\s]*(art style|medium)\s*:', ln, _re.IGNORECASE)]
+        toks = set(_re.findall(r'[a-z0-9-]+', ' '.join(lines).lower()))
+        hits = {m: len(toks & _MEDIUM_KEYWORD_MAP[m]) for m in ('comic book', 'cel animation', 'ink illustration')}
+        # a 'comic' or 'cel' mention is a specific idiom claim; 'linework'
+        # is true of every flat medium, so ink only wins when nothing more
+        # specific was said (a comic deck came back 'fine-line ink')
+        best = None
+        for m in ('comic book', 'cel animation', 'ink illustration'):
+            if hits.get(m):
+                best = m
+                break
+        if best:
+            medium = best
+            print(f"  [style] hard edges ({hardness:.2f}) + '{medium}' in the reads override 'painted illustration'")
     anchors = _medium_anchors(medium)
+    if medium == 'painted illustration':
+        # the bucket's anchor said 'flat opaque paint' for EVERY painted deck,
+        # and the writer then stripped all light from the scene — for cosmic
+        # references built from glow and atmospheric depth that deleted the
+        # vibe. Soft edges (measured) mean painterly; hard edges mean flat;
+        # in between the text evidence decides.
+        ev_p = ((stored_descriptions or '') or evidence).lower()
+        _np = lambda words: sum(ev_p.count(w) for w in words)
+        painterly = _np(('gradient', 'soft transition', 'glow', 'luminous', 'atmospheric', 'airbrush',
+                         'blend', 'soft edge', 'diffused', 'gradation', 'highlight', 'rim light',
+                         'layered brushwork', 'volumetric'))
+        flat = _np(('flat', 'opaque', 'gouache', 'poster', 'cel-shaded', 'solid fill', 'block colour',
+                    'block color', 'matte'))
+        soft = (hardness is not None and hardness < 0.115) or (hardness is None and painterly > flat) \
+            or (hardness is not None and 0.115 <= hardness < 0.13 and painterly > flat)
+        if soft:
+            anchors = ['painterly digital painting', 'matte painting with visible brushwork and soft edges',
+                       'luminous highlights and deep shadows', 'atmospheric depth']
+    _ev_phrase = _evidence_medium_phrase(stored_descriptions, medium, style_source)
+    declaration_is_medium = bool(style_source) and _classify_style_medium(style_source, text_model, img_desc='') == medium
+    if declaration_is_medium:
+        # the declaration itself names the medium ("70's kung fu movie"): it is
+        # the phrase, not the analyst's ('digital photograph' for 1970s film
+        # stills — the reads say 'digital' for anything with continuous tone)
+        _ev_phrase = style_source.strip().replace('&', 'and')
+    if anchors and _ev_phrase and _ev_phrase not in ' '.join(anchors):
+        anchors.insert(1, _ev_phrase)
     if anchors and anchors[0] == 'ink illustration':
         # Ink variants are decided per-AXIS from textual evidence — line
         # weight, line character, and detail density are independent. The old
@@ -1630,6 +3088,29 @@ def build_flux_style_block(image_path, style_source: str = '',
         elif sparse > dense:
             anchors.append('sparse airy composition on open background')
 
+    # Colour COVERAGE is its own evidence axis, for every medium: a reference
+    # of saturated flat fills rendered as uncoloured ink once the block led
+    # with "ink illustration" and pale hue names. Stated explicitly, right
+    # after the medium, so the image model knows whether the paper is filled.
+    measured = pixel_coverage_from_refs(image_path, reference_paths, medium)
+    ev_all = ((stored_descriptions or '') or evidence).lower()
+    _c = lambda words: sum(ev_all.count(w) for w in words)
+    coloured = _c(('saturated', 'vibrant', 'vivid', 'bold color', 'bold colour',
+                   'flat color', 'flat colour', 'colorful', 'colourful',
+                   'bright color', 'bright colour', 'full color', 'full colour',
+                   'rich color', 'rich colour'))
+    mono = _c(('monochrome', 'black and white', 'black-and-white', 'grayscale',
+               'greyscale', 'uncolored', 'uncoloured', 'sepia', 'pen and ink only',
+               'no color', 'no colour'))
+    if measured:                      # a measurement outranks the word vote
+        anchors.append(measured)
+    elif coloured > mono and coloured > 0:
+        anchors.append('full colour, rich saturated tones' if is_non_drawn_medium(medium)
+                       else 'fully coloured with saturated flat colour fills, no bare white paper')
+    elif mono > coloured:
+        anchors.append('monochrome black and white' if is_non_drawn_medium(medium)
+                       else 'monochrome, uncoloured ink on white paper')
+
     # -- foundation + enrichment: hues/motifs/influence (stored data FIRST) -----
     hues, motifs, influence = [], [], ''
     for source in [stored_descriptions] + proses:
@@ -1646,14 +3127,61 @@ def build_flux_style_block(image_path, style_source: str = '',
     modified = [h for h in hues if ' ' in h]
     bare = [h for h in hues if ' ' not in h]
     hues = (modified + bare)[:6] if len(modified) < 3 else modified[:6]
-    motifs = motifs[:2]
+    # measured hues first: the reads' hue names changed with every re-analysis
+    # (a pastel deck came back 'deep red, vibrant purple'); pixels do not
+    measured_hues = list(pix.get('hues') or [])[:5]
+    if measured_hues:
+        # names the reads and the pixels AGREE on come first (the read's
+        # modifier kept: 'dusty pink' over 'pink'), then the measured hues
+        # the reads missed, then the reads' remaining modified hues
+        mbase = [h.split()[-1] for h in measured_hues]
+        agreed = [h for h in hues if h.split()[-1] in mbase]
+        agreed_base = {h.split()[-1] for h in agreed}
+        # a hue that at least half of the per-image reads name is a fact of
+        # the deck even when the pixel names differ (pink walls measured
+        # 'red' and the palette of a pastel deck carried no pink at all)
+        majority = [h for h in _read_majority_hues(stored_descriptions) if h not in agreed_base][:2]
+        agreed_base |= set(majority)
+        rest_measured = [h for h in measured_hues if h.split()[-1] not in agreed_base]
+        rest_read = [h for h in hues if h not in agreed and ' ' in h and h.split()[-1] not in agreed_base]
+        hues = (agreed + rest_measured + majority + rest_read)[:6]
+    # a motif that names a SUBJECT or a pose ('winged creature', 'dynamic pose',
+    # 'undead masses') is the reference's content, not its style — it grew
+    # wings on a flightless serpent
+    motifs = [m for m in motifs if not _SUBJECT_ITEM_RE.search(m)][:2]
 
     parts = list(anchors)
+    # named-style idiom (see style_idiom_descriptors) sits right after the
+    # medium anchors — the earliest, heaviest-weighted tokens after the lead
+    # Palette FIRST after the anchors: colour is the most visible property and
+    # the one the idiom words most easily override — with the idiom ahead of
+    # it a saturated fine-line reference rendered as uncoloured line art.
     if hues:
         parts.append('palette of ' + ', '.join(hues))
+    mood = _extract_vibe(stored_descriptions)
+    if mood:
+        parts.append('mood of ' + ', '.join(mood))    # the reads' own register, by majority
+    _lk = lighting_key(stored_descriptions)
+    if _lk == 'even' and not is_flat_medium_name(medium):
+        parts.append('flat even diffused lighting, no strong shadows')
+    elif _lk == 'dramatic':
+        parts.append('dramatic directional light, deep shadows')
+    recalled = style_idiom_recall(style_source, text_model) if style_source else []
+    recalled = [p for p in recalled if not _UNDRAWABLE_ITEM_RE.search(p)]   # 'sweeping camera movements' cannot be painted
+    parts.extend(recalled)            # deterministic knowledge: foundation
     parts.extend(motifs)
+    # a VLM read of the reference (needs no name): enrichment, after the foundation
+    parts.extend(p for p in style_idiom_seen(image_path, style_source, vision_model, exclude=recalled)
+                 if not _SUBJECT_ITEM_RE.search(p) and not _UNDRAWABLE_ITEM_RE.search(p))
     if influence:
         parts.append(influence)
+    if is_non_drawn_medium(medium):
+        # a photograph has no lines, ink or paper: 'clean lines, precise
+        # ruler-straight lines' recalled for a film director drew line art
+        dropped = [p for p in parts if drawing_vocabulary(p)]
+        if dropped:
+            print(f"  [style] {medium}: dropped drawing vocabulary {dropped}")
+        parts = [p for p in parts if not drawing_vocabulary(p)]
     out, count = [], 0
     for p in parts:
         n = len(p.split())
@@ -1661,6 +3189,8 @@ def build_flux_style_block(image_path, style_source: str = '',
             continue
         out.append(p)
         count += n
-    line = _clean_descriptors(', '.join(out), style_source,
+    # the cleaner de-names the source inside descriptors (an artist or a show);
+    # a declaration that IS the medium ("70's kung fu movie") must stay whole
+    line = _clean_descriptors(', '.join(out), '' if declaration_is_medium else style_source,
                               max_descriptors=24, reorder=False)
     return _ensure_medium_floor(line, style_source)

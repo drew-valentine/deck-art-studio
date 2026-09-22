@@ -63,6 +63,206 @@ decks/<deck-slug>/
   `MFLUX_SCHNELL_REPO` env var.
 - **LLM**: `mlx-lm` (Llama 3.1 8B / 3.2 3B, 4-bit) for prompt generation + style/subject distillation.
 - **Vision**: `mlx-vlm` (Qwen2.5-VL 7B, 4-bit) for inspiration style analysis.
+- **Style reference (Redux)**: `flux_worker.py` loads `Flux1Redux` (schnell + SigLIP + Redux projector)
+  and appends the deck's inspiration images as reference tokens — the IP-Adapter role the SDXL
+  pipeline had. Weights come from the ungated mirror `Runware/FLUX.1-Redux-dev` (override with
+  `MFLUX_REDUX_REPO`; mflux hardcodes the gated official repo, so the worker patches
+  `ModelConfig.dev_redux`). KEY MECHANISM: **block-selective injection** (`_install_block_mask`)
+  — reference tokens are masked out of attention in every FLUX block except the early DOUBLE
+  blocks (`STYLE_BLOCKS_DOUBLE` = 0-9): injected everywhere a reference is CLONED (its figures
+  replace the subject); in the style blocks only, it carries medium/palette/stroke and the card
+  keeps its subject at the full 729-token grid. `tokens` is then a pure strength dial
+  (81 light / 256 medium / 729 strong = default); `_pool_token_grid` pools the 27x27 grid. References with prominent characters leak
+  them above Subtle — the image channel bypasses the text-side franchise de-naming. Per-deck setting `deck.json.style_reference` {enabled, tokens,
+  strength, max_images, average}; API `/api/decks/<id>/style-reference`. References are AVERAGED
+  (element-wise mean of the pooled tokens across up to `STYLE_REFERENCE_MAX_IMAGES`=4 refs): content
+  differs per image and cancels, shared style stays — cleaner and leak-free vs any single reference
+  and vs concatenation (4 refs concatenated leaked figures). `average: false` = concatenate.
+- **Effective style source**: `_effective_style_source(meta)` = the user's declaration, else the source
+  the analyst recognized in the references (`vision_analyzer.recognized_style_source`, majority of the
+  per-image `Source:` lines, ignoring 'Original'). Used for the render lead, scene-writer hint,
+  medium classification and distillation — de-named like any declaration. Declaration always wins.
+- **Named-style idiom (text side)**: the image channel carries palette/finish, not drawing idiom.
+  At distillation `vision_analyzer.style_idiom_recall` (8B Llama when cached — the 3B half-knows
+  styles) + `style_idiom_seen` (VLM reads the reference, told whose work it is) put the idiom
+  phrases into the FLUX block (palette excluded — evidence does palette). `style_staging_recall`
+  stores how the style STAGES scenes + its tonal register in `deck.json.style_staging`; the scene
+  writer gets that plus the block minus hues (`prompt_generator.hint_without_palette`) — hues
+  in the writer's hint become scene content. Writer rules: one subject in the foreground, two
+  sentences of ~60 words (cap 64, whole sentences) following the scene grammar — subject at a moment, camera + scale + one named light, one atmospheric detail; rules-text zones (library/graveyard) are never scenery. Creatures also get a Body line
+  (`_body_line`: the FIRST subtype names what the body is — a Bat God is a bat — plus a model-derived
+  plain gloss of that kind's build, `_body_gloss`, memoised; wings only when the rules say flying —
+  `_card_flies`, `_strip_wings` in the final cleanup, and the inspector counts wings and flags a winged
+  flightless creature; creatures also get the open-list + category subject check, since a serpent-dragon
+  passed the yes/no as a Human Shaman) and every type a
+  Framing line (`_camera_line`: face visible / whole object / establishing view); artifacts get an
+  Object line with a model-derived plain gloss of the literal object (`_object_gloss`, memoised,
+  `OBJECT_GLOSS=0` mutes) and a 'subject missing' re-roll leads the scene with that object; lands, enchantments, instants and sorceries are built
+  from the style's world (its plants, skies, architecture), never a generic version of the terrain;
+  artifact guidance never lists relic presentations (a listed "strung on a cord" was parroted).
+  Also recalled at distillation, each with an UNKNOWN escape: `style_source_kind`
+  (franchise / artist / movement — the franchise gate for de-naming; the `_FRANCHISE_PHRASES`
+  table is only the offline fallback), `style_lineage` (a de-named production lineage for the
+  render lead), `style_idiom` (list; the writer puts it on creatures as a figure idiom).
+  The franchise render lead ends "original character designs" only for creatures/planeswalkers;
+  on other types it ends "no people, no characters", and the artifact/land guard adds "No people,
+  no characters, no hands" (a saga drew a lookalike boy in a garage, a relic drew two onlookers).
+  Render-side (deck_studio): `_style_block_window(card_type)` — creatures/planeswalkers show the
+  references to double blocks 0-14 (figure design), other types 0-9; `_assemble_flux_prompt` order =
+  lead + colour-coverage clause, subject sentence, full block, rest of scene; `/api/generate` takes
+  `seed` for like-for-like A/Bs (experiment hooks: FLUX_PROMPT_ORDER, STYLE_BLOCKS_DOUBLE,
+  FIGURE_IDIOM, FIGURE_IDIOM_ALL, WORLD_LEAD, SCENE_CHECK, REDUX_EDGE_CROP, FLUX_LEAD_OVERRIDE, FLUX_GUARD_EXTRA).
+  Block medium = declaration → stored-evidence keyword vote → LLM; the analyst's own short `Medium:`
+  phrase matching the voted bucket (`_evidence_medium_phrase`, e.g. 'papyrus parchment' filed under
+  'painted illustration') is inserted right after the bucket anchor. Colour coverage
+  is measured from reference pixels (`pixel_palette`); character-heavy references (VLM yes/no,
+  `prominent_character`) default the deck to Medium unless `style_reference.user_set`.
+  Signature bleed (H73): local renders are 8% taller and the bottom band is cropped before saving
+  (`SIGNATURE_BLEED`, default 0.08, 0 disables) — the only signature mitigation that measured clean
+  (0/8 on an artist-named deck vs ~40% signed); the inspector's edge zoom remains the backstop.
+  End-of-batch inspection (`INSPECT` job, `_execute_inspect_job`, `vision_analyzer.inspect_render`):
+  VLM defect checklist over the batch's renders, verdict in `.meta.json['inspection']`, one
+  automatic re-roll then a final record-only pass; `POST /api/decks/<id>/inspect`; RENDER_INSPECT=0.
+  Inspector = count protocol (heads/arms/hands/copies + yes/no) with text/signature confirmed on the
+  top/bottom strips; with `takes>1` the final pass keeps the cleaner take (`_pick_cleaner_take`);
+  a final-pass signature/text-only verdict sets `frame_overrides.art_zoom=1.10` and recomposites
+  (`_hide_edge_marks`) instead of re-rolling.
+  Ties on defects between takes are decided by `vision_analyzer.pick_take` (reference + both takes
+  on one sheet, asked twice with the takes swapped; only a consistent answer counts). The inspector
+  also answers `composition=yes/no`, `face=yes/no` (a creature render that is only a fist or a
+  back), `body=yes/no` (a floating head; measured 6/6 so for creatures a miss is a real defect that
+  re-rolls, `INSPECT_BODY=0` mutes) and, for object cards, subject presence via an OPEN naming question (`_names_object`: "what is
+  the objects you see" must contain the literal noun, since yes/no is answered yes for a goblet
+  labelled a signet ring; measured 4/5 with no false positives, so for ARTIFACTS a miss is a real
+  defect that re-rolls, `INSPECT_SUBJECT=0` to mute; a list miss gets a multiple-choice category
+  second opinion so a talisman drawn as a medallion is not a miss) and lettering INSIDE the art
+  (`_centre_text_present`: a transcription probe over the central 70%, 8/8 measured, a defect that
+  re-rolls, `INSPECT_CENTRE_TEXT=0` mutes) — the rest recorded as
+  `inspection.advisory` by default (`INSPECT_COMPOSITION=advisory|enforce|off`) until the
+  false-positive rate is known.
+  H79 (2026-09-07): every backstop only REMOVES words — measured against v1.49.0 the scene prompts had
+  halved (90 → 45 words) and the shortest rendered as a subject on nothing. The user message now carries a
+  `Setting (REQUIRED)` line (category words only, yields to a steer), the closing instruction matches the
+  grammar (three sentences, ~60 words — it used to say 'two short sentences'), rewrites ask for full length,
+  `_limit_scene_sentences` drops stub (<4 words) and restarted sentences, and `_is_thin_scene` (< SCENE_MIN_WORDS=35
+  or one sentence) triggers one growth pass through the same `_final_pass` (SCENE_FLOOR=0 mutes).
+  H82: `_assemble_flux_prompt` fits the prompt to the T5 window via `_fit_flux_prompt` (FLUX_TOKEN_BUDGET=250;
+  `_t5_token_count` uses the cached T5 tokenizer offline, else a calibrated estimate): block tail items go
+  first, then the scene's last sentences; lead, subject sentence and guard never. Before this 14/31 prompts
+  overflowed 256 tokens and mflux truncated the guard silently.
+  H83: `_opens_with_subject` counts only the literal object's HEAD noun; `_ensure_subject_opening` prepends the
+  name (and literal object) for every type when a strip removed the opening; `_cut_light_phrases` removes whole
+  'the <adj> <light> of <noun> [through …]' phrases and leading descriptive tails; `_UNPAINTABLE_RE` also cuts
+  similes to abstractions and waiting/meaning idioms. H86b/c: `SCENE_TAKES=2` (default) drafts a second, different
+  scene and `_pick_scene` keeps the higher `_scene_score` (deterministic: action verbs + colours − static verbs −
+  abstractions − buried subject; the 8B scored every draft 9/10 and an A/B ask picked 'A' regardless of order).
+  H87: `vision_analyzer.style_staging_seen` reads COMPOSITION only (camera, frame fill, horizon, density, weather,
+  tone), forbids naming props, and merges up to 4 reference reads to what they share — a single read pasted one
+  picture's props (a garden, a raven on a book) into every card's scene. H88: `_figure_idiom_items` keeps only
+  idiom items about faces/anatomy/poses on the Figure idiom line ('flat shaded forms' had become a 'flat head').
+  V24 (2026-09-08): `_body_line` for a Human first subtype says 'a human being with a human face and body … no
+  claws, fangs, tail, fur, scales or pointed ears' (a Human Soldier got claws, a Human Cleric a tail); the artifact
+  guidance carries NO example nouns (Shadowspear and Crawlspace rendered as the guidance's 'signet ring').
+  H89: the artifact Setting line places the object where such a thing is found or used and forbids presentation
+  for display (the writer's default was a stone on a cushion); 9/9 artifacts rendered in a place.
+  Cohesion work (2026-09-08, Drew: '1.49.0 compositions were more cohesive'): measured — the LAYOUT follows
+  the prompt text, not the reference strength (Off/Medium/Strong identical) and not the prompt order. The
+  writer's default is now the FILM-STILL grammar (`SCENE_MODE=filmstill`; `moment` restores the old one):
+  a COMPOSITION OVERRIDE in the system prompt — creatures/planeswalkers open at a decisive moment, LARGE in
+  the frame; artifacts shown whole and large where they belong; lands/enchantments/spells get a deliberate
+  camera with one vast or towering feature; then composition (what stands behind/beside at what distance,
+  colours, how lit) and one setting detail; event-named cards keep the event at full force. Second-draft pick
+  (`_pick_scene`) is a deterministic `_scene_score`; on place/object cards `_names_the_thing` (head noun or
+  literal object in the first sentence) gates the pick and triggers one literal-thing retry. Inspector: a
+  creature is 'subject missing' only when nothing living is named (`_PERSON_NOUNS`/`_CREATURE_NOUNS`;
+  Human subtypes still require a person word). Render guard adds 'pages/labels are blank' when the scene
+  names a document (`_DOCUMENT_RE`). Batch `takes>1`: each later take is preceded by a PROMPT job (a fresh
+  scene — two seeds of one prompt render the same picture); tied takes fall back to the scene score of the
+  two prompts (`_pick_cleaner_take`). Card backs: `card_back_scene`, no-people guard, never a written scene.
+  Painterly references (2026-09-08, cosmos-serpent deck): the 'painted illustration' bucket picks PAINTERLY
+  anchors ('painterly digital painting, soft blended brushwork, luminous highlights and deep shadows,
+  atmospheric depth') when the evidence says gradients/glow, flat ones otherwise (a flat anchor made the writer
+  strip all light); `pixel_palette` measures luminance and the coverage clause carries a tonal key ('dark
+  low-key palette…' / 'bright high-key palette'); unnamed sources get `style_idiom_seen` read off the
+  references; `_SUBJECT_ITEM_RE` drops subject/pose/prop items (winged creature, dynamic pose, flowing wings,
+  intricate chains) from motifs and idiom; `style_surface_device_seen` (majority across refs) names the
+  surface treatment inside the figures' silhouettes (e.g. 'starfield') → `deck.json.style_surface_device`,
+  appended to the block and passed to the writer as a Surface line for creatures; a stored
+  `style_reference.max_images` of 1 on a multi-reference deck averages the default unless
+  `max_images_user_set`; the writer retries once after a failure and then uses `minimal_scene` (never the
+  rule-based mana-colour filler).
+  Distillation is evidence-first against read variance (2026-09-09 regression sweeps): the medium is a
+  MAJORITY of the per-image Art Style/Medium/Source lines (`_majority_medium`; a pooled token count let one
+  '3D modeling' phrase flip a painting deck); `pixel_edge_hardness` (comic ≈0.19, ink ≈0.15, fine-line ≈0.17,
+  soft painting ≈0.08) overrides a 'painted' vote with the flat bucket the reads mention (comic > cel > ink)
+  when edges are hard, and decides painterly vs flat anchors when soft; the palette leads with hue names the
+  reads and the pixels agree on, then measured hues (`pixel_style_stats`; pastel reds/oranges are named pink/
+  coral); the coverage clause carries a measured tonal key and a sky-vs-subject key. After distillation
+  changes, RE-ANALYZE a deck before judging its renders — blocks are stored.
+  Anatomy under a steer (2026-09-11): `_anatomy_negatives(card)` = the 'no X' facts of the kind from the body
+  gloss (+ 'no wings' unless flying); with a steer the Body line becomes an Anatomy line carrying only those
+  (a steer about pose dropped 'no limbs' and the serpent grew legs); `_limbless(card)` appends 'It has no legs
+  and no arms…' to the scene; the inspector counts `legs=` and flags 'limbs on a limbless creature'
+  (INSPECT_LIMBS=0 mutes). Validate steers by REGENERATING the prompt — a render with the same recorded
+  steer reuses the stored prompt.
+  Declared medium (2026-09-12): a declared source whose words hit the medium keyword map (film, movie, footage,
+  stills, cinema → photograph; watercolor; comic…) decides the bucket at the NAME stage, is the block's medium
+  phrase (not de-named by `_clean_descriptors`), and `_reconcile_read_with_declaration` rewrites a per-image
+  read's Art Style/Medium lines when they contradict it (the VLM writes 'digital painting' for 1970s film
+  stills regardless of the prompt). `_UNDRAWABLE_ITEM_RE` drops camera-movement/choreography/editing idioms.
+  Per-image reads run at temperature 0.3.
+  Non-drawn media (2026-09-12, animated-army / director-named film stills): a `photograph` or `3d render`
+  bucket (`vision_analyzer.is_non_drawn_medium`) gets its coverage clause in photographic words ('full colour,
+  soft muted tones', never 'fills' / 'no bare white paper'), descriptors naming lines/ink/brush/paper are dropped
+  from the block and the stored idiom (`drawing_vocabulary`), and the render-side figure idiom verb follows the
+  medium (`_idiom_verb`: staged / rendered / painted / drawn with) — the old wording drew every card of a film
+  deck as line art. Palette: an unsaturated light red is 'dusty pink' (pink walls measured 'dusty red') and hues
+  named by at least half of the per-image reads join the palette (`_read_majority_hues`, max 2). POSED REGISTER:
+  when the style's own staging or idiom says symmetrical / frontal / tableau / deadpan (`_posed_register`), the
+  creature grammar opens 'posed still and facing the camera in a composed, deadpan tableau', the static-opening
+  moment rewrite is skipped, `_scene_score` is verb-neutral, and the idiom's composition items go to the writer as
+  a `Composition (REQUIRED)` line (`_composition_line`; `_figure_idiom_items` no longer carries them).
+  STYLE WORLD: `vision_analyzer.style_world_seen` reads the KIND of place each reference shows (built/natural,
+  indoors/out, surface materials and colours, era — a comma list of CATEGORY words; asked for a sentence it
+  named one picture's lighthouse and every card got one) over up to 6 references and merges them by per-category
+  MAJORITY (`merge_world_reads`; an LLM merge hedged 'built or natural, outdoors or indoors' every time and the
+  writer took the wilderness half; a single representative read carried one picture's colours only)
+  → `deck.json.style_world`, carried on the writer's Setting line for EVERY
+  card type ('the place is one of this style's own — …'); the staging read is composition-only (H87), so before
+  this a pastel built-set film style put every creature on cracked earth. LIGHTING KEY: `lighting_key` votes
+  the per-image Shading/Lighting lines ('even' vs 'dramatic'); an even majority on a non-flat medium adds
+  'flat even diffused lighting, no strong shadows' to the block and switches the writer's light line to
+  even, shadowless light (no golden hour, beams or rim light). Slogans/graffiti/signage count as lettering.
+  Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
+  only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
+  unpaintable-abstraction strip → (flat media: rewrite without light words naming the offending
+  words, up to two passes, unpaintable strip again, then sentence-level light strip as last resort;
+  when every sentence carries light the phrases are cut from the first sentence instead) → moment rewrite when a creature's first sentence is a static posture (`_is_static_opening`,
+  MOMENT_REWRITE=0 mutes) → colour rewrite when a coloured flat style's SUBJECT sentence names no
+  colour word (`_names_a_colour`, `_is_coloured_style`; bare line art otherwise), followed by one
+  more light-word naming pass before any sentence strip → invented-cyclops fix → sentence/word cap (3 sentences / 64 words) → dangling-tail
+  fix → tidy → scene checklist re-roll (deterministic `_person_problems` word check for artifact/land
+  first, then the LLM checklist) → final cleanup (unpaintable / invented proper names (`_strip_invented_names`: a
+  capitalised non-dictionary word not in the card's name, type or flavor drops its clause) / cyclops /
+  light strip / dangling / tidy run once more, because every
+  rewrite path can reintroduce what an earlier strip removed; `_tidy_prompt` also drops markdown
+  markers, quoted slogans (they render as lettering), camera directions, writer notes, sentence-initial
+  labels ("Color contrast:"), parroted instruction phrases
+  (`_INSTRUCTION_ECHO_RE`: "centered and large, with nothing cropped") and lettering clauses — a quoted
+  'A' on a ring becomes letters in the art)
+  → empty guard. Writer instructions never carry concrete example
+  nouns — the writer parrots them into scenes (`test_flat_media_line_has_no_example_nouns`). Flat media = ink/cel/comic/papyrus/fresco/
+  hieroglyph/woodblock/pixel/flat opaque paint (`is_flat` in `generate_subject_with_ai`).
+  Idiom phrases about writing (glyph/symbol/lettering/text/script) are filtered
+  (`_IDIOM_WRITING_WORDS`).
+  USER STEER PRECEDENCE: a steer is the FIRST user-message line ("USER DIRECTION (HIGHEST PRIORITY)"),
+  every labelled line yields to it, the Body line and figure idiom are dropped, the moment rewrite is
+  skipped, `_ensure_steer_in_prompt` re-injects the steer's own words if any rewrite lost them, the
+  steer is persisted on the card (`_record_steer`) and the render side then omits the figure idiom and
+  the block's idiom phrases (`_block_without_idiom`). Any new writer line must be checked against a
+  steer before shipping — one REQUIRED Body line silently overrode "a beautiful zombie elf".
+  STANDING RULE: deck-agnostic and style-agnostic — a new style must work with zero code
+  changes; derive facts from the declaration, model knowledge and vision reads, never tables.
 - **18 GB memory rule**: FLUX and the LLM/VLM cannot be co-resident. `mlx_llm.unload()` is
   called before loading FLUX; the in-process guard (`_ollama_work_*`/`_wait_for_ollama_idle`,
   historical names) waits for in-flight LLM work to finish before generating.

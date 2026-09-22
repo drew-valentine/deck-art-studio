@@ -26,7 +26,8 @@ ART = 'art'
 PROMPT = 'prompt'
 FLAVOR = 'flavor'
 ANALYZE = 'analyze'                # inspiration/style analysis + distillation
-_VALID_TYPES = {ART, PROMPT, FLAVOR, ANALYZE}
+INSPECT = 'inspect'                # end-of-batch render inspection (vision model)
+_VALID_TYPES = {ART, PROMPT, FLAVOR, ANALYZE, INSPECT}
 
 # Status constants
 QUEUED = 'queued'
