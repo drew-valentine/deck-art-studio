@@ -49,7 +49,7 @@ In the app: click **Import** and paste your decklist, add three to five referenc
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/samples-comic-dark.jpg">
   <img alt="Comic-book ink style — five generated cards" src="docs/images/samples-comic.jpg">
 </picture></p>
-<p align="center"><em>Comic-book ink — teal-and-coral smoke: a goblin in her workshop, a pyromancer's ignition, a goblin wizard with a coin to flip, a crater blowing its top, a lighthouse under a green moon</em></p>
+<p align="center"><em>Comic-book ink — teal-and-coral smoke: a goblin in her workshop, a pyromancer's ignition, a hooded gambler between two lanterns and a pillar of fire, a crater blowing its top, a lighthouse under a green moon</em></p>
 
 <p align="center"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/samples-filmstill-dark.jpg">
