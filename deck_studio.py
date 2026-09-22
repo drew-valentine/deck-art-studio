@@ -15,6 +15,7 @@ Requires: pip install flask openai Pillow cairosvg
 
 import io
 import json
+import shutil
 import math
 import os
 import re
@@ -48,7 +49,7 @@ from card_frame_renderer import (
     FRAME_LAYER_ORDER,
 )
 import generation_queue
-from generation_queue import Job, ART, PROMPT, FLAVOR, ANALYZE
+from generation_queue import Job, ART, PROMPT, FLAVOR, ANALYZE, INSPECT
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -746,6 +747,28 @@ def back_face_card(card):
     return merged
 
 
+def front_face_card(card):
+    """Merged card dict for the FRONT face of a two-faced card — face fields
+    over card-level fields, name without the ' // Back Face' half. The scene
+    writer otherwise sees the back face's name (a place: "Temple of the
+    Dead") and stages the front face's creature inside it."""
+    faces = card.get('card_faces') or []
+    if len(faces) < 2 or ' // ' not in (card.get('name') or ''):
+        return card
+    face = faces[0]
+    merged = dict(card)
+    for k in ('name', 'mana_cost', 'type_line', 'oracle_text',
+              'power', 'toughness', 'loyalty', 'defense', 'flavor_text',
+              'card_type'):
+        if face.get(k) is not None:
+            merged[k] = face.get(k)
+    merged['name'] = (face.get('name') or card['name'].split(' // ')[0]).strip()
+    if not merged.get('card_type'):
+        from scryfall_client import normalize_card_type
+        merged['card_type'] = normalize_card_type(merged.get('type_line') or '')
+    return merged
+
+
 def is_rotated_split(card) -> bool:
     """Split-layout cards print as two rotated halves, EACH with its own
     art — classic splits (Fire // Ice) AND Rooms (Smoky Lounge // Misty
@@ -931,15 +954,70 @@ def deck_id_from_name(name: str) -> str:
 
 
 def _load_deck_registry() -> dict:
-    """Load the deck registry from disk."""
+    """Load the deck registry from disk, reconciled with what is actually on
+    disk: any deck directory holding a valid deck.json that the registry does
+    not list is added back (name from deck.json, created from the directory
+    mtime). The registry is a cache of the filesystem, not the source of truth
+    — fourteen decks (temur-roar, riders-of-rohan-2, ...) once vanished from
+    the dropdown while every file sat intact under decks/."""
+    registry = {'decks': [], 'active': None}
     if DECK_REGISTRY_PATH.exists():
-        with open(DECK_REGISTRY_PATH) as f:
-            return json.load(f)
-    return {'decks': [], 'active': None}
+        try:
+            with open(DECK_REGISTRY_PATH) as f:
+                registry = json.load(f)
+        except (OSError, ValueError):
+            registry = {'decks': [], 'active': None}
+    registry.setdefault('decks', [])
+    registry.setdefault('active', None)
+    added, pruned = _reconcile_registry_with_disk(registry)
+    if added or pruned:
+        print(f"[decks] registry reconciled: re-added {added or 'none'}; pruned {pruned or 'none'}")
+        _save_deck_registry(registry)
+    return registry
+
+
+def _reconcile_registry_with_disk(registry: dict) -> tuple:
+    """Add on-disk decks missing from ``registry`` and drop entries whose
+    directory no longer holds a deck.json (in place). Returns (added, pruned)."""
+    if not DECKS_DIR.exists():
+        return [], []
+    pruned = [d.get('id') for d in registry.get('decks', [])
+              if not (DECKS_DIR / str(d.get('id') or '') / 'deck.json').exists()]
+    if pruned:
+        registry['decks'] = [d for d in registry['decks'] if d.get('id') not in pruned]
+        if registry.get('active') in pruned:
+            registry['active'] = registry['decks'][0]['id'] if registry['decks'] else None
+    known = {d.get('id') for d in registry.get('decks', [])}
+    added = []
+    for entry in sorted(DECKS_DIR.iterdir()):
+        deck_json = entry / 'deck.json'
+        if not entry.is_dir() or entry.name in known or not deck_json.exists():
+            continue
+        if not _is_safe_deck_id(entry.name):
+            continue
+        try:
+            with open(deck_json) as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(meta, dict):
+            continue
+        created = meta.get('created') or datetime.fromtimestamp(entry.stat().st_mtime).isoformat()
+        registry['decks'].append({'id': entry.name, 'name': meta.get('name') or entry.name,
+                                  'created': created})
+        added.append(entry.name)
+    return added, pruned
 
 
 def _save_deck_registry(registry: dict):
-    """Save the deck registry to disk."""
+    """Save the deck registry to disk. Entries are de-duplicated by id (last
+    wins): create_deck writes deck.json before loading the registry, whose
+    disk reconcile already re-adds the new deck, so a plain append doubled it."""
+    seen = {}
+    for d in registry.get('decks', []) or []:
+        if isinstance(d, dict) and d.get('id'):
+            seen[d['id']] = d
+    registry['decks'] = list(seen.values())
     DECK_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(DECK_REGISTRY_PATH, 'w') as f:
         json.dump(registry, f, indent=2)
@@ -1694,8 +1772,379 @@ def _build_negative_fallback(style_tokens: dict, deck_meta: dict) -> str:
     return ', '.join(neg_parts)
 
 
+# Style reference (FLUX Redux) — the deck's inspiration IMAGES steer every
+# render, restoring the IP-Adapter role the SDXL pipeline had before the MLX
+# migration (a papyrus deck's March render screamed Egypt with a feeble text
+# prompt; every text-only FLUX render since was generic fantasy).
+#
+# The worker injects the reference tokens into FLUX's EARLY DOUBLE BLOCKS only
+# (flux_worker.STYLE_BLOCKS_DOUBLE). That block split is what makes this work:
+# injected everywhere, a full-strength reference is cloned (its figures and
+# layout replace the card's subject); restricted to the style blocks, the same
+# reference carries its medium, palette and stroke while the card keeps its own
+# subject — measured on the Moebius, Seuss and Egyptian decks at the full
+# 729-token grid. `tokens` is therefore a pure strength dial (9 palette-only …
+# 729 full), and references are AVERAGED (element-wise mean over up to
+# STYLE_REFERENCE_MAX_IMAGES images) so what they share dominates.
+STYLE_REFERENCE_DEFAULT = {'enabled': True, 'tokens': 729, 'strength': 1.0, 'max_images': 4, 'average': True}
+STYLE_REFERENCE_MAX_IMAGES = 4   # hard cap; the per-deck default is ONE reference
+STYLE_REFERENCE_MAX_TOKENS = 729
+STYLE_REFERENCE_MEDIUM_TOKENS = 256   # the auto default for character-heavy references  # full Redux grid; safe at any budget now that references are injected into style blocks only
+
+
+def _style_reference_settings(meta) -> dict:
+    """The deck's style-reference settings with defaults filled in."""
+    cfg = dict(STYLE_REFERENCE_DEFAULT)
+    cfg.update({k: v for k, v in ((meta or {}).get('style_reference') or {}).items()
+                if k in cfg})
+    try:
+        cfg['tokens'] = max(0, min(STYLE_REFERENCE_MAX_TOKENS, int(cfg['tokens'])))
+        cfg['strength'] = float(cfg['strength'])
+        cfg['max_images'] = max(1, min(STYLE_REFERENCE_MAX_IMAGES, int(cfg['max_images'])))
+        cfg['average'] = bool(cfg['average'])
+    except (TypeError, ValueError):
+        cfg['tokens'], cfg['strength'] = STYLE_REFERENCE_DEFAULT['tokens'], 1.0
+        cfg['max_images'] = STYLE_REFERENCE_DEFAULT['max_images']
+        cfg['average'] = True
+    cfg['enabled'] = bool(cfg['enabled']) and cfg['tokens'] > 0
+    # Default strength is decided by the references themselves: a deck whose
+    # references are character-heavy (a cast screenshot, a portrait) leaks
+    # the cast and its iconic props above Medium, so it defaults to Medium
+    # (256 tokens); scenery / pattern references keep Strong. A setting the
+    # user has touched (user_set) is never overridden.
+    stored = (meta or {}).get('style_reference') or {}
+    imgs_all = (meta or {}).get('inspiration_images') or []
+    if stored.get('max_images') == 1 and not stored.get('max_images_user_set') and len(imgs_all) > 1:
+        # legacy default of ONE reference: a single reference at Strong leaks
+        # its figures (two aliens on a card back, wings on a serpent);
+        # averaging needs at least two, so use the current default
+        cfg['max_images'] = min(STYLE_REFERENCE_MAX_IMAGES, STYLE_REFERENCE_DEFAULT['max_images'])
+    if not stored.get('user_set') and cfg['enabled'] and cfg['tokens'] > STYLE_REFERENCE_MEDIUM_TOKENS:
+        imgs = (meta or {}).get('inspiration_images') or []
+        if any(isinstance(im, dict) and im.get('prominent_character') is True for im in imgs):
+            cfg['tokens'] = STYLE_REFERENCE_MEDIUM_TOKENS
+            cfg['auto_medium'] = True
+    return cfg
+
+
+def _style_reference_images(meta, deck_dir) -> list:
+    """Absolute paths of the inspiration images to send as references
+    ([] when disabled or the deck has none)."""
+    cfg = _style_reference_settings(meta)
+    if not cfg['enabled'] or not deck_dir:
+        return []
+    paths = []
+    for img in (meta or {}).get('inspiration_images', []) or []:
+        fn = img.get('filename') if isinstance(img, dict) else None
+        if fn and (Path(deck_dir) / fn).exists():
+            paths.append(str(Path(deck_dir) / fn))
+        if len(paths) >= cfg['max_images']:
+            break
+    return paths
+
+
+def _effective_style_source(meta) -> str:
+    """The user's declared style source, else the source the analyst
+    recognized in the references (see vision_analyzer.recognized_style_source).
+    The declaration always wins; recognition only fills silence — a deck whose
+    references were recognized as a show still gets that show's render lead
+    (de-named downstream like any declaration) instead of none at all."""
+    declared = ((meta or {}).get('style_source') or '').strip()
+    if declared:
+        return declared
+    from vision_analyzer import recognized_style_source
+    return recognized_style_source(
+        [im.get('style_description', '') for im in (meta or {}).get('inspiration_images', []) or []
+         if isinstance(im, dict)])
+
+
+def _effective_source_kind(meta) -> str:
+    """The source kind for de-naming. A DECLARED source keeps its recalled
+    kind (an artist's name passes through by design). A source that was only
+    RECOGNIZED by the analyst with no recalled kind is treated as a franchise:
+    the name never reaches the image model or the writer verbatim, and the
+    franchise firewall stays armed. (Review finding: an unknown-kind
+    recognized source went out as "in the style of X".)"""
+    m = meta or {}
+    kind = (m.get('style_source_kind') or '').strip()
+    declared = bool((m.get('style_source') or '').strip())
+    if not declared and not kind:
+        return 'franchise'
+    return kind
+
+
+# Which FLUX double blocks the references are shown to, by card type. Blocks
+# 0-9 carry medium / palette / stroke and never leak a reference's cast; the
+# middle double blocks (~10-14) carry FIGURE DESIGN — with them open a dragon
+# becomes the show's noodle-necked deadpan creature and an elf a spindly Seuss
+# creature (fixed-seed A/B, 2026-09-03). Creatures get the wider window;
+# other card types keep the tight one. STYLE_BLOCKS_DOUBLE="a-b" overrides
+# both (experiment hook).
+STYLE_BLOCKS_DEFAULT = (0, 9)
+STYLE_BLOCKS_CREATURE = (0, 14)     # creatures: figure design lives in the middle double blocks
+
+
+def _style_block_window(card_type):
+    rng = os.environ.get('STYLE_BLOCKS_DOUBLE', '').strip()
+    if rng and '-' in rng:
+        try:
+            a, b = (int(x) for x in rng.split('-', 1))
+            return {'double': list(range(a, b + 1)), 'single': []}
+        except ValueError:
+            pass
+    a, b = STYLE_BLOCKS_CREATURE if card_type in ('creature', 'planeswalker') else STYLE_BLOCKS_DEFAULT
+    obj = os.environ.get('STYLE_BLOCKS_OBJECT', '').strip()      # experiment hook: non-creature window
+    if obj and '-' in obj and card_type not in ('creature', 'planeswalker'):
+        try:
+            a, b = (int(x) for x in obj.split('-', 1))
+        except ValueError:
+            pass
+    if (a, b) == (0, 9):
+        return None                  # the worker's own default; nothing to send
+    return {'double': list(range(a, b + 1)), 'single': []}
+
+
+def _idiom_verb(block: str) -> str:
+    """How the medium makes a figure: a drawing is drawn, a painting painted,
+    a photograph staged, a 3D scene rendered. Read off the block's medium
+    anchor (its first item). 'drawn with' on a film-still deck drew line art."""
+    head = (block or '').split(',')[0].lower()
+    if any(w in head for w in ('photograph', 'photo', 'film', 'cinematic')):
+        return 'staged with'
+    if '3d' in head or 'render' in head:
+        return 'rendered with'
+    if any(w in head for w in ('paint', 'watercolor', 'watercolour', 'oil', 'gouache', 'fresco', 'acrylic')):
+        return 'painted with'
+    return 'drawn with'
+
+
+def _with_figure_idiom(subject: str, idiom, max_phrases: int = 3, verb: str = 'drawn with') -> str:
+    """Append the style's drawing idiom to the subject's FIRST sentence
+    ("Keiga, a Dragon Spirit, rises from the sea, drawn with wobbly eyes,
+    lumpy anatomy"). No-op without idiom or when the sentence already
+    carries any of it. `verb` follows the medium (see _idiom_verb)."""
+    import re as _re
+    phrases = [p.strip() for p in (idiom or []) if p and p.strip()][:max_phrases]
+    if not subject or not phrases:
+        return subject
+    sents = _re.split(r'(?<=[.!?])\s+', subject.strip())
+    first = sents[0]
+    low = first.lower()
+    if any(p.lower() in low for p in phrases):
+        return subject
+    first = first.rstrip(' .!?') + f', {verb} ' + ', '.join(phrases) + '.'
+    return ' '.join([first] + sents[1:])
+
+
+_WORLD_GENERIC = {'colors', 'colours', 'elements', 'tones', 'mood', 'details', 'detail', 'atmosphere',
+                  'space', 'perspective', 'background', 'lighting', 'light', 'tone', 'register', 'figures',
+                  'composition', 'style', 'scene', 'scenes', 'shapes', 'symbols'}
+
+
+def _world_features(staging: str) -> list:
+    """Concrete world features named in the staging recall ("... featuring
+    glowing plants and floating crystals" -> ['glowing plants', 'floating
+    crystals']). Short noun phrases only; generic art-talk words dropped."""
+    import re as _re
+    text = (staging or '').split('The tone')[0]
+    out = []
+    for m in _re.finditer(r'(?:with|featuring|of|among|amid|under|full of)\s+([^.;:]+)', text, _re.IGNORECASE):
+        for part in _re.split(r',|\band\b|\b(?:with|featuring|among|amid|under|full of)\b', m.group(1)):
+            words = [w for w in _re.findall(r"[A-Za-z-]+", part.lower()) if w not in ('a', 'an', 'the', 'its', 'their')]
+            if not (1 <= len(words) <= 3) or words[-1] in _WORLD_GENERIC or len(words[-1]) <= 3:
+                continue
+            # a bare adjective ("colorful", "intricate") is not a feature
+            if len(words) == 1 and (words[0].endswith(('ful', 'ate', 'ing', 'ous', 'ical', 'ive', 'less', 'ish'))
+                                    or words[0] in ('abstract', 'surreal', 'vibrant', 'whimsical', 'strange')):
+                continue
+            try:
+                from prompt_generator import _PERSON_WORD_RE
+                if _PERSON_WORD_RE.search(' '.join(words)):
+                    continue        # never put people into a land's lead
+            except Exception:
+                pass
+            if True:
+                phrase = ' '.join(words)
+                if phrase not in out:
+                    out.append(phrase)
+    return out
+
+
+def _block_without_idiom(block: str, idiom) -> str:
+    """The style block minus its figure-idiom phrases (medium, coverage,
+    palette and motifs stay)."""
+    drop = {p.strip().lower() for p in (idiom or []) if p and p.strip()}
+    if not block or not drop:
+        return block
+    kept = [p for p in (x.strip() for x in block.split(',')) if p and p.lower() not in drop]
+    return ', '.join(kept)
+
+
+_DOCUMENT_RE = re.compile(r"\b(?:books?|tomes?|scrolls?|pages?|letters?|contracts?|documents?|maps?|signs?|"
+                          r"labels?|banners?|plaques?|tablets?|journals?|ledgers?|parchments?|notes?|posters?|"
+                          r"newspapers?|manuscripts?|inscriptions?|slogans?|graffiti|signage|logos?)\b", re.IGNORECASE)
+FLUX_TOKEN_BUDGET = 250        # schnell's T5 window is 256 tokens; mflux truncates silently
+_T5_TOKENIZER = [None]
+
+
+def _t5_token_count(text: str) -> int:
+    """Tokens the FLUX T5 encoder will see. The real tokenizer when its files are
+    cached (offline only — never a download on the render path); otherwise a fit
+    from 31 logged prompts (1.27 x words + 1.12 x punctuation + 19, max error 10)
+    with a margin."""
+    if not text:
+        return 0
+    if _T5_TOKENIZER[0] is None:
+        try:
+            from transformers import AutoTokenizer
+            _T5_TOKENIZER[0] = AutoTokenizer.from_pretrained('google/t5-v1_1-xxl', local_files_only=True)
+        except Exception:
+            _T5_TOKENIZER[0] = False
+    tok = _T5_TOKENIZER[0]
+    if tok:
+        try:
+            return len(tok(text).input_ids)
+        except Exception:
+            pass
+    import re as _re
+    return int(1.3 * len(text.split()) + 1.15 * len(_re.findall(r'[,.;:]', text)) + 22)
+
+
+def _fit_flux_prompt(head: str, first: str, block_items: list, rest: str, feedback: str, tail: str,
+                     budget: int = None) -> str:
+    """H82: 14 of 31 recent prompts overflowed the 256-token window and in 6
+    the guard ('no text, no signature, no people') fell entirely outside it.
+    Assemble head + subject sentence + block + rest of scene + feedback + guard,
+    then drop the block's TAIL items (the reference read's generic filler) down
+    to a floor, then the scene's last sentences, until it fits. The lead, the
+    subject sentence and the guard are never cut."""
+    import re as _re
+    budget = budget or int(os.environ.get('FLUX_TOKEN_BUDGET', FLUX_TOKEN_BUDGET) or FLUX_TOKEN_BUDGET)
+    items = list(block_items)
+    sents = [s for s in _re.split(r'(?<=[.!?])\s+', (rest or '').strip()) if s.strip()]
+    floor = max(8, len(items) * 2 // 3)
+    dropped_items = dropped_sents = 0
+
+    def compose():
+        pieces = [head, first, ', '.join(items), ' '.join(sents).rstrip(' .'), (feedback or '').rstrip(' .')]
+        return '. '.join(p for p in pieces if p) + '.' + tail
+    out = compose()
+    while _t5_token_count(out) > budget:
+        if len(items) > floor:
+            items.pop(); dropped_items += 1
+        elif sents:
+            sents.pop(); dropped_sents += 1
+        elif len(items) > 4:
+            items.pop(); dropped_items += 1
+        else:
+            break
+        out = compose()
+    if dropped_items or dropped_sents:
+        print(f"  [flux] prompt trimmed to the T5 window: -{dropped_items} block item(s), "
+              f"-{dropped_sents} scene sentence(s), ~{_t5_token_count(out)} tokens")
+    return out
+
+
+def _assemble_flux_prompt(style_bits, subject: str, feedback_text: str = '', card_type: str = '') -> str:
+    """Order: style lead, the scene's FIRST sentence (the subject), the rest of
+    the style block, the rest of the scene, feedback. FLUX weights early
+    tokens most: style-first alone gave the block ~70 words of head start
+    and a bat god rendered as a temple gate; subject-first alone gave zero
+    style transfer. The lead keeps the style in front, the subject sits
+    right behind it, the idiom follows."""
+    import re as _re
+    subject = (subject or '').strip().rstrip(' .')
+    sents = _re.split(r'(?<=[.!?])\s+', subject) if subject else []
+    first = sents[0].rstrip(' .') if sents else ''
+    rest = ' '.join(sents[1:]).rstrip(' .') if len(sents) > 1 else ''
+    bits = [b for b in (style_bits or []) if b]
+    lead, block = (bits[0], bits[1:]) if bits else ('', [])
+    order = os.environ.get('FLUX_PROMPT_ORDER', 'coverage-subject-block')
+    if order == 'style-first':
+        pieces = [', '.join(bits), subject]
+    elif order == 'subject-early':
+        pieces = [lead, first, ', '.join(block), rest]
+    elif order == 'coverage-subject-block':
+        # lead + the short colour-coverage clause, then the subject sentence
+        # (within the first ~25 tokens), then the whole block, then the rest
+        # of the scene. Medium-first kept colour but lost a Seuss elf to her
+        # tree; subject-early kept the elf but lost the colour.
+        items = [x.strip() for x in ', '.join(block).split(',') if x.strip()]
+        cov = [x for x in items if x.lower().startswith(('fully coloured', 'full colour', 'no bare',
+                                                          'monochrome', 'uncoloured', 'black and white',
+                                                          'soft muted tones', 'rich saturated tones'))]
+        others = [x for x in items if x not in cov]
+        pieces = [', '.join(x for x in [lead] + cov if x), first, ', '.join(others), rest]
+    else:
+        # medium anchors (through the palette clause) stay in front with the
+        # lead; the subject follows; the idiom, motifs and reference read
+        # come after it, then the rest of the scene
+        items = [x.strip() for x in ', '.join(block).split(',') if x.strip()]
+        front, back, in_palette = [], [], False
+        try:
+            from vision_analyzer import _COLOR_WORDS
+        except Exception:
+            _COLOR_WORDS = frozenset()
+        for it in items:
+            low = it.lower()
+            if back:
+                back.append(it); continue
+            if low.startswith('palette of'):
+                front.append(it); in_palette = True; continue
+            is_hue = any(w.rstrip('s') in _COLOR_WORDS for w in _re.findall(r'[a-z]+', low))
+            if in_palette and is_hue and len(low.split()) <= 3:
+                front.append(it); continue
+            if in_palette:
+                back.append(it)           # first non-hue item after the palette
+            else:
+                front.append(it)          # medium anchors / colour coverage
+        pieces = [', '.join(x for x in [lead] + front if x), first, ', '.join(back), rest]
+    extra = os.environ.get('FLUX_GUARD_EXTRA', '').strip()      # experiment hook
+    tail = ' No text, no words, no signature, no watermark, no card frame, no borders.'
+    if card_type in ('artifact', 'land', 'card_back'):
+        # H69: an object or a place has no cast; the image model adds onlookers
+        # to a relic on a pedestal unless told not to. A card back is a design.
+        tail += ' No people, no characters, no hands.'
+    if _DOCUMENT_RE.search(subject or ''):
+        # a contract, book or scroll in the scene is drawn WITH writing on it
+        # ('text in art' on a judge's contract and a soldier's helmet label)
+        tail += ' Any pages, scrolls, signs or labels are blank, with no lettering.'
+    tail = (f' {extra}.' if extra else '') + tail
+    if order in ('coverage-subject-block', 'default') or order not in ('style-first', 'subject-early'):
+        # pieces = [head, first, block, rest] — fit the whole thing to the
+        # T5 window with the guard kept (H82)
+        head, first_s, block_s, rest_s = pieces[0], pieces[1], pieces[2], pieces[3]
+        if card_type in ('artifact', 'land', 'card_back'):
+            # H94: the tail guard alone still let onlookers into a tavern
+            # around a relic and a figure onto a peak; FLUX weights early
+            # tokens most, so the no-people clause also rides in the head
+            head = (head + ', ' if head else '') + 'no people, no characters, no figures'
+        block_items = [x.strip() for x in block_s.split(',') if x.strip()]
+        return _fit_flux_prompt(head, first_s, block_items, rest_s, feedback_text, tail)
+    pieces.append((feedback_text or '').rstrip(' .'))
+    out = '. '.join(p for p in pieces if p) + '.'
+    return out + tail
+
+
+def _signature_bleed() -> float:
+    try:
+        return max(0.0, min(0.25, float(os.environ.get('SIGNATURE_BLEED', '0.08') or 0)))
+    except ValueError:
+        return 0.0
+
+
+def _bleed_size(size_str: str, bleed: float):
+    """(size to render, (w, h) to crop back to) for a bottom bleed fraction;
+    the rendered height rounds up to a multiple of 16. No bleed -> (size, None)."""
+    if not bleed:
+        return size_str, None
+    w, h = [int(x) for x in size_str.split('x')]
+    extra = int(-(-h * bleed // 16) * 16)          # ceil to a multiple of 16
+    return f"{w}x{h + extra}", (w, h)
+
+
 def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_override=None,
-                    deck_meta=None):
+                    deck_meta=None, deck_dir=None, seed=None, card_type=None):
     """Generate an image with the local FLUX model (mflux). Returns a PIL Image.
 
     Style always rides in the text prompt (the style source name + distilled
@@ -1706,6 +2155,8 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     deck_meta: the deck's metadata to draw style from. Defaults to the active
     deck's meta, but the queue worker passes the JOB's deck meta so a job runs
     with its own deck's style regardless of which deck the UI shows.
+    deck_dir: the deck directory, to resolve its inspiration images as Redux
+    style references (see STYLE_REFERENCE_DEFAULT).
     """
     _status = status_dict if status_dict is not None else generation_status
     _meta = deck_meta if deck_meta is not None else active_deck_meta
@@ -1733,10 +2184,44 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     secs = body.split('.\n\n', 1)
     subject = (secs[1] if len(secs) == 2 else body).strip()
 
+    # --- H22: the style's figure idiom on the creature itself, deterministically.
+    # The writer applies it only on a good roll; the render prompt adds it to
+    # the creature's own sentence regardless ("..., drawn with wobbly eyes,
+    # lumpy anatomy").
+    _idiom_types = ('creature', 'planeswalker')
+    if os.environ.get('FIGURE_IDIOM_ALL', '0') == '1':      # H51 experiment hook
+        _idiom_types = ('creature', 'planeswalker', 'artifact', 'land', 'enchantment', 'instant', 'sorcery')
+    _base_name = card_name.replace(BACK_FACE_SUFFIX, '')
+    _steered = ''
+    try:
+        # the JOB's deck decides (a queued render for deck B must not inherit a
+        # steer set on the same card name in the active deck A)
+        _dd = json.load(open(Path(deck_dir) / 'deck.json')) if deck_dir else {}
+        _steered = next((c.get('steer') for c in _dd.get('cards', []) if c.get('name') == _base_name), '') or ''
+    except Exception:
+        _steered = ''
+    if not _steered and deck_dir and Path(deck_dir).name == active_deck_id:
+        _steered = next((c.get('steer') for c in (cards_db or []) if c.get('name') == _base_name), '') or ''
+    if card_type in _idiom_types and os.environ.get('FIGURE_IDIOM', '1') != '0' and not (_steered or '').strip():
+        # a user direction owns the figure's appearance (see _record_steer)
+        subject = _with_figure_idiom(subject, (_meta.get('style_idiom') or []),
+                                     verb=_idiom_verb(_meta.get('flux_style_prompt') or ''))
+    # --- H60: the style's WORLD features lead a land's scene in the render
+    # prompt itself (early tokens), not only in the writer's hint. Seed A/B on a
+    # cartoon deck: crystal shards appeared in both seeds; WORLD_LEAD=0 mutes.
+    # Off by default since the user saw a whole deck's lands share one backdrop
+    # (the same "abstract buildings" opened every prompt); the writer's World
+    # line varies per card, this lead did not. WORLD_LEAD=1 re-enables.
+    if card_type in ('land', 'enchantment', 'instant', 'sorcery') and os.environ.get('WORLD_LEAD', '0') == '1':
+        feats = _world_features(_meta.get('style_staging') or '')
+        if feats:
+            subject = f"{', '.join(feats[:3])}. {subject}"
+
     # --- Card Back override (avoid FLUX rendering a literal physical card back) ---
     if card_name.lower().startswith('card back'):
         subject = ('ornate symmetrical decorative pattern, central medallion, '
                    'intricate border filigree, repeating geometric motifs')
+        card_type = 'card_back'          # a design: the render guard adds "no people, no characters"
 
     # --- Rendering style for FLUX (rich, uncapped) ---
     # FLUX's T5 encoder accepts 256 tokens (~190 words) — far more than SDXL's
@@ -1750,7 +2235,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     # model often mislabels the medium (e.g. tagging live-action film as "digital
     # painting"), which fights the named style. We keep the accurate descriptive
     # fields — palette, lighting/coloring, mood — for concrete detail.
-    style_source = (_meta.get('style_source') or '').strip()
+    style_source = _effective_style_source(_meta)
     flux_style_prompt = (_meta.get('flux_style_prompt') or '').strip()
     st = style_tokens or {}
 
@@ -1760,12 +2245,22 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
         # rendered as card art); render_style_lead swaps them for a de-named
         # genre phrase + original-characters guard. Artist names pass through.
         from prompt_generator import render_style_lead
-        style_bits.append(render_style_lead(style_source))
+        lead = render_style_lead(style_source, lineage=(_meta.get('style_lineage') or ''), card_type=card_type,
+                                 kind=_effective_source_kind(_meta))
+        # experiment hook only (H24 A/B): replace the lead's phrase wholesale
+        if os.environ.get('FLUX_LEAD_OVERRIDE'):
+            lead = f"in the style of {os.environ['FLUX_LEAD_OVERRIDE']}"
+        style_bits.append(lead)
     if flux_style_prompt:
         # Image-first descriptors (the vision model read the actual inspiration,
         # reconciled with the named style if one was given). Works for ANY style,
         # named or not. We use ONLY these — NOT the SDXL-era vision tokens, whose
         # mislabeled medium and warm palette pull back toward generic fantasy.
+        if (_steered or '').strip():
+            # the user's direction owns the figure; the block's figure idiom
+            # ("exaggerated facial expressions, chunky rounded anatomy") would
+            # pull a steered "beautiful" face back toward the deck's caricature
+            flux_style_prompt = _block_without_idiom(flux_style_prompt, _meta.get('style_idiom') or [])
         style_bits.append(flux_style_prompt)
     else:
         # No recognized source (or no canonical descriptors yet) — use the full
@@ -1786,14 +2281,7 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     # burying it after a long scene) stops a rich scene from drowning it. Validated
     # empirically — the same style words buried at the tail gave ZERO style transfer;
     # front-loaded they come through. (Kept well under the 256-token T5 budget.)
-    pieces = []
-    if style_bits:
-        pieces.append(", ".join(style_bits))
-    pieces.append(subject.rstrip(' .'))
-    if feedback_text:
-        pieces.append(feedback_text.rstrip(' .'))
-    flux_prompt = '. '.join(p for p in pieces if p) + '.'
-    flux_prompt += ' No text, no words, no watermark, no card frame, no borders.'
+    flux_prompt = _assemble_flux_prompt(style_bits, subject, feedback_text, card_type=card_type)
 
     # --- Progress callback — updates status per inference step ---
     def on_step(step, total):
@@ -1805,12 +2293,27 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
                 s['message'] = f'Step {step}/{total}...'
 
     print(f"[local_img] FLUX prompt ({len(flux_prompt.split())} words): {flux_prompt}")
+    ref_cfg = _style_reference_settings(_meta)
+    ref_images = _style_reference_images(_meta, deck_dir)
+    if ref_images:
+        print(f"[local_img] style references: {len(ref_images)} image(s)"
+              f"{' averaged' if ref_cfg['average'] and len(ref_images) > 1 else ''}, "
+              f"{ref_cfg['tokens']} tokens, strength {ref_cfg['strength']}")
     with generation_lock:
-        _status[card_name]['message'] = 'Generating from text prompt...'
+        _status[card_name]['message'] = ('Generating with style references...'
+                                         if ref_images else 'Generating from text prompt...')
+    ref_blocks = _style_block_window(card_type)
     return gen.generate(
         prompt=flux_prompt,
         width=w, height=h,
+        seed=seed,
         progress_callback=on_step,
+        reference_images=ref_images,
+        reference_tokens=ref_cfg['tokens'],
+        reference_strength=ref_cfg['strength'],
+        reference_average=ref_cfg['average'],
+        reference_blocks=ref_blocks,
+        reference_edge_crop=int(os.environ.get('REDUX_EDGE_CROP', '0') or 0),   # experiment hook (H28)
     )
 
 
@@ -1923,7 +2426,7 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                           status_dict=None, raw_art_dir=None, composite_dir=None,
                           versions_dir=None, cards_db_snapshot=None, face='front',
                           deck_meta=None, model_key=None, prompt_map=None,
-                          deck_id=None):
+                          deck_id=None, seed=None):
     """Generate art for ONE face of a card using the active model config.
 
     Optional params let the queue worker pass the JOB's captured deck context
@@ -2054,10 +2557,22 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
 
         # ── Generate the image ──
         if backend == 'local':
+            # H73: render 8% taller and drop the bottom band, where the image
+            # model signs picture-book art, so the RAW art is clean. Measured on
+            # eight lands of an artist-named deck: 0/8 signed vs ~40% before;
+            # text / lead / token-crop mitigations had all failed.
+            # SIGNATURE_BLEED=0 disables, up to 0.25.
+            bleed = _signature_bleed()
+            gen_size, crop_to = _bleed_size(actual_size or model_cfg['size'], bleed)
             result_image = _generate_local(card_name, model_cfg, full_prompt,
                                            status_dict=_status,
-                                           size_override=actual_size,
-                                           deck_meta=_meta)
+                                           size_override=gen_size,
+                                           deck_meta=_meta, seed=seed,
+                                           card_type=(card or {}).get('card_type'),
+                                           deck_dir=_raw_art_dir.parent)
+            if crop_to and result_image is not None:
+                cw, ch = crop_to
+                result_image = result_image.crop((0, 0, cw, ch))
         else:
             result_image = _generate_openai(card_name, model_cfg, full_prompt,
                                             status_dict=_status,
@@ -2093,6 +2608,11 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                 'card_prompt': base_prompt,
                 'distilled_subject': _meta.get('card_subjects', {}).get(card_name, ''),
                 'feedback': feedback,
+                'seed': seed,
+                'style_reference': ({**_style_reference_settings(_meta),
+                                     'images': [Path(p).name for p in
+                                                _style_reference_images(_meta, _raw_art_dir.parent)]}
+                                    if backend == 'local' else None),
                 'timestamp': datetime.now().isoformat(),
             }, f, indent=2)
 
@@ -2924,7 +3444,7 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
             active_deck_meta['card_subjects'] = {}
         return
 
-    style_source = data.get('style_source', '')
+    style_source = _effective_style_source(data)   # declared, else recognized by the analyst
 
     bcfg = backend_config.load_config()
     llm_backend = 'local'  # MLX-native pipeline is always local
@@ -2979,11 +3499,13 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         all_descs = '\n'.join(img.get('style_description', '')
                               for img in insp_imgs
                               if img.get('style_description'))
+        ref_paths = [deck_dir / img['filename'] for img in insp_imgs
+                     if img.get('filename') and (deck_dir / img['filename']).exists()]
         flux_style_prompt = build_flux_style_block(
             first_img, style_source=style_source,
             vision_model=bcfg.get('ollama_vision_model', 'llava:7b'),
             text_model=bcfg.get('ollama_model', 'llama3.2:3b'),
-            stored_descriptions=all_descs)
+            stored_descriptions=all_descs, reference_paths=ref_paths)
         if len(flux_style_prompt.split()) < 10:
             flux_style_prompt = build_flux_style_descriptors(
                 first_img, style_source=style_source, backend=llm_backend,
@@ -2992,6 +3514,79 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         if flux_style_prompt:
             print(f"  [distill] FLUX style descriptors ({'named: '+style_source if style_source else 'image-only'}): {flux_style_prompt}")
     data['flux_style_prompt'] = flux_style_prompt
+    # How the named style stages scenes + its register: the scene writer's
+    # share of the idiom (the block above is the image model's share).
+    from vision_analyzer import style_staging_recall, style_idiom_recall
+    data['style_staging'] = style_staging_recall(          # name recall, else a reference read
+        style_source, bcfg.get('ollama_model', 'llama3.2:3b'),
+        image_path=first_img, vision_model=bcfg.get('ollama_vision_model', 'llava:7b'),
+        reference_paths=ref_paths)
+    # the drawing idiom as a list, for the scene writer's creature clause
+    # (memoized — the block builder above already asked)
+    if style_source:
+        from vision_analyzer import _UNDRAWABLE_ITEM_RE
+        data['style_idiom'] = [p for p in style_idiom_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
+                               if not _UNDRAWABLE_ITEM_RE.search(p)]   # 'sweeping camera movements' cannot be painted
+    from vision_analyzer import is_non_drawn_medium as _non_drawn, drawing_vocabulary as _drawing
+    if _non_drawn(flux_style_prompt):
+        # a photographed or rendered style has no lines or ink: the writer's
+        # figure idiom must not say 'ruler-straight lines' on a film deck
+        data['style_idiom'] = [p for p in (data.get('style_idiom') or []) if not _drawing(p)]
+    else:
+        # no name to recall from: read the idiom off the references themselves
+        # (an unnamed cosmic-painting deck had an empty idiom and its figures
+        # lost the starfield-in-the-body device that defines it)
+        from vision_analyzer import style_idiom_seen, _SUBJECT_ITEM_RE
+        data['style_idiom'] = [p for p in style_idiom_seen(first_img, '', bcfg.get('ollama_vision_model', 'llava:7b'))
+                               if not _SUBJECT_ITEM_RE.search(p)]
+    # the signature surface treatment on the figures (a starfield inside the
+    # silhouette), read across the references — reaches the writer's Body line
+    from vision_analyzer import style_surface_device_seen, style_world_seen
+    data['style_surface_device'] = style_surface_device_seen(ref_paths or [first_img],
+                                                             bcfg.get('ollama_vision_model', 'llava:7b'))
+    # the KIND of place this style shows (built/natural, surfaces, colours,
+    # era) — the writer's Setting line for every card type; the staging read
+    # is composition only and a built-set film style got wilderness scenes
+    data['style_world'] = style_world_seen(ref_paths or [first_img],
+                                           bcfg.get('ollama_vision_model', 'llava:7b'),
+                                           bcfg.get('ollama_model', 'llama3.2:3b'),
+                                           medium=flux_style_prompt)
+    if data['style_surface_device']:
+        # the device explains the stars: a 'starry background' item would put
+        # them back in the sky, so items that pair the device word with a
+        # background/sky word are dropped
+        import re as _re
+        _dev = _re.findall(r'[a-z]{4,}', data['style_surface_device'].lower())
+        if _dev:
+            _items = [x.strip() for x in flux_style_prompt.split(',')]
+            _items = [x for x in _items if not (any(w[:5] in x.lower() for w in _dev)
+                                                and _re.search(r'background|backdrop|sky|skies', x.lower()))]
+            flux_style_prompt = ', '.join(_items)
+            data['style_idiom'] = [x for x in (data.get('style_idiom') or [])
+                                   if not (any(w[:5] in x.lower() for w in _dev)
+                                           and _re.search(r'background|backdrop|sky|skies', x.lower()))]
+        flux_style_prompt = data['flux_style_prompt'] = (
+            flux_style_prompt + f", figures filled with {data['style_surface_device']}")
+    # the references' composition (camera, frame fill, horizon, sky) is a
+    # render-side fact too: the scene text kept putting a sky-staged figure in
+    # a swamp, so the block carries a short composition clause
+    _stg = (data.get('style_staging') or '').strip()
+    if _stg:
+        import re as _re
+        _first = _re.split(r'(?<=[.!?])\s+', _stg)[0]
+        _first = _re.sub(r'^\s*scenes are staged\s*', '', _first, flags=_re.IGNORECASE).strip(' .')
+        _words = _first.split()
+        if 4 <= len(_words) <= 40:
+            flux_style_prompt = data['flux_style_prompt'] = (
+                flux_style_prompt + ', composition ' + ' '.join(_words[:18]).rstrip(','))
+    from vision_analyzer import style_lineage_recall, style_source_kind
+    from prompt_generator import franchise_style_phrase
+    # franchise / artist / movement — recalled, so a new source needs no table entry
+    data['style_source_kind'] = (style_source_kind(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
+                                 if style_source else '')
+    # only franchises need a de-named lead; artists/movements pass verbatim
+    data['style_lineage'] = (style_lineage_recall(style_source, bcfg.get('ollama_model', 'llama3.2:3b'))
+                             if style_source and franchise_style_phrase(style_source, data['style_source_kind']) else '')
 
     with open(deck_json_path, 'w') as f:
         json.dump(data, f, indent=2)
@@ -3000,6 +3595,11 @@ def _run_style_distillation(deck_id: str, progress_callback=None, subject_progre
         active_deck_meta['style_tokens'] = tokens
         active_deck_meta['clip_directives'] = clip_dirs
         active_deck_meta['flux_style_prompt'] = flux_style_prompt
+        active_deck_meta['style_staging'] = data['style_staging']
+        active_deck_meta['style_idiom'] = data['style_idiom']
+        active_deck_meta['style_world'] = data.get('style_world', '')
+        active_deck_meta['style_lineage'] = data['style_lineage']
+        active_deck_meta['style_source_kind'] = data['style_source_kind']
 
     if tokens:
         print(f"  [distill] Style tokens saved for {deck_id}: {list(tokens.keys())}")
@@ -3530,6 +4130,7 @@ def get_deck_info(deck_id):
         'inspiration_style_description': data.get('inspiration_style_description', ''),
         'style_preamble': data.get('style_preamble'),
         'style_source': data.get('style_source', ''),
+        'style_reference': _style_reference_settings(data),
         'card_count': len(data.get('cards', [])),
         'oversized_generation': data.get('oversized_generation', False),
     })
@@ -3546,6 +4147,54 @@ def set_style_source(deck_id):
     # Re-distill style tokens with new source context
     _enqueue_analysis(deck_id, 'distill', label='Re-distill style')
     return jsonify({'success': True, 'style_source': style_source})
+
+
+@app.route('/api/decks/<deck_id>/style-reference', methods=['GET', 'POST'])
+def api_style_reference(deck_id):
+    """Get/set how strongly the deck's inspiration images steer renders (Redux).
+    POST {enabled?, tokens?, strength?, max_images?} — tokens is the per-image
+    budget (0 = off, 81 light, 256 medium, 729 strong — the full grid);
+    max_images how many inspiration images are sent (default 1, cap 4)."""
+    deck_dir = DECKS_DIR / deck_id
+    deck_json = deck_dir / "deck.json"
+    if not deck_json.exists():
+        return jsonify({'error': 'Deck not found'}), 404
+    with open(deck_json) as f:
+        data = json.load(f)
+    if request.method == 'GET':
+        return jsonify({'success': True, 'style_reference': _style_reference_settings(data),
+                        'reference_count': len(_style_reference_images(data, deck_dir))})
+    body = request.json or {}
+    cfg = _style_reference_settings(data)
+    if 'tokens' in body:
+        try:
+            cfg['tokens'] = max(0, min(STYLE_REFERENCE_MAX_TOKENS, int(body['tokens'])))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'tokens must be an integer'}), 400
+        # A positive budget IS the intent to use references: setting the dial
+        # above Off re-enables without a separate flag (Off = tokens 0).
+        if 'enabled' not in body:
+            cfg['enabled'] = cfg['tokens'] > 0
+    if 'strength' in body:
+        try:
+            cfg['strength'] = max(0.0, min(2.0, float(body['strength'])))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'strength must be a number'}), 400
+    if 'enabled' in body:
+        cfg['enabled'] = bool(body['enabled'])
+    if 'max_images' in body:
+        try:
+            cfg['max_images'] = max(1, min(STYLE_REFERENCE_MAX_IMAGES, int(body['max_images'])))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'max_images must be an integer'}), 400
+        cfg['max_images_user_set'] = True       # a deliberate single reference stays single
+    if 'average' in body:
+        cfg['average'] = bool(body['average'])
+    cfg['user_set'] = True          # the user's choice outranks the auto default
+    _save_deck_meta_field(deck_id, style_reference=cfg)
+    if deck_id == active_deck_id:
+        active_deck_meta['style_reference'] = cfg
+    return jsonify({'success': True, 'style_reference': _style_reference_settings({'style_reference': cfg})})
 
 
 @app.route('/api/decks/<deck_id>/distill-style', methods=['POST'])
@@ -3750,7 +4399,7 @@ def _face_unit_for(card, fkey):
     if fkey.endswith(BACK_FACE_SUFFIX):
         return (split_half_card(card, 1) if is_rotated_split(card)
                 else back_face_card(card))
-    return split_half_card(card, 0) if is_rotated_split(card) else card
+    return split_half_card(card, 0) if is_rotated_split(card) else front_face_card(card)
 
 
 def _execute_art_job(job, ctx):
@@ -3763,12 +4412,48 @@ def _execute_art_job(job, ctx):
         face=job.face, status_dict=sink, raw_art_dir=ctx['raw_art_dir'],
         composite_dir=ctx['composite_dir'], versions_dir=ctx['versions_dir'],
         cards_db_snapshot=ctx['cards'], deck_meta=ctx['meta'],
-        model_key=job.model_key, prompt_map=ctx['prompts'], deck_id=job.deck_id)
+        model_key=job.model_key, prompt_map=ctx['prompts'], deck_id=job.deck_id,
+        seed=(job.params or {}).get('seed'))
     if not ok and msg != 'Cancelled':
         raise RuntimeError(msg)
     if job.deck_id == active_deck_id:
         global cards_revision
         cards_revision = int(time.time() * 1000)
+
+
+def _record_steer(ctx, name, steer):
+    """Persist the user's direction on the card (deck.json + the live card)
+    so the render side knows the appearance is user-owned and skips the
+    style's figure idiom; an empty steer clears it."""
+    base = name.replace(BACK_FACE_SUFFIX, '')
+    steer = (steer or '').strip()
+    with persist_lock:
+        deck_json = ctx['deck_dir'] / 'deck.json'
+        try:
+            data = json.load(open(deck_json))
+        except (OSError, ValueError):
+            return
+        for c in data.get('cards', []):
+            if c.get('name') == base:
+                if steer:
+                    c['steer'] = steer
+                else:
+                    c.pop('steer', None)
+        with open(deck_json, 'w') as f:
+            json.dump(data, f, indent=2)
+    for c in ctx.get('cards') or []:
+        if c.get('name') == base:
+            if steer:
+                c['steer'] = steer
+            else:
+                c.pop('steer', None)
+    if ctx.get('deck_id') == active_deck_id:
+        for c in cards_db:
+            if c['name'] == base:
+                if steer:
+                    c['steer'] = steer
+                else:
+                    c.pop('steer', None)
 
 
 def _write_deck_prompt(ctx, key, prompt):
@@ -3801,15 +4486,21 @@ def _execute_prompt_job(job, ctx):
         unit = _face_unit_for(card, job.card_name)
         bcfg = backend_config.load_config()
         data = ctx['meta']
-        style_name = (data.get('style_source') or '').strip()
+        style_name = _effective_style_source(data)
         # The scene writer must not be TOLD the franchise name either — it
         # biases scenes toward the show's trademark settings (labs, portals,
         # garages), which are character attractors at render time.
         from prompt_generator import franchise_style_phrase
-        style_hint = franchise_style_phrase(style_name) or style_name
-        flux_style = (data.get('flux_style_prompt') or '').strip()
+        style_hint = (franchise_style_phrase(style_name, _effective_source_kind(data))
+                      or style_name)
+        # The block's palette clause is for the image model; in the writer's
+        # hint it turns into scene content ("coral-colored stone").
+        from prompt_generator import hint_without_palette
+        flux_style = hint_without_palette(data.get('flux_style_prompt') or '')
         if flux_style:
             style_hint = f"{style_hint} — {flux_style}" if style_hint else flux_style
+        staging = (data.get('style_staging') or '').strip()
+        figure_idiom = ', '.join(data.get('style_idiom') or [])
         can_ai = (bcfg['llm_backend'] == 'local') or openai_client
         if job.use_ai and can_ai:
             # Retry on transient rate limits (429) with backoff before falling
@@ -3823,7 +4514,11 @@ def _execute_prompt_job(job, ctx):
                         unit, openai_client, backend=bcfg['llm_backend'],
                         local_model=bcfg['ollama_model'], style_hint=style_hint,
                         steer=(job.feedback or ''),
-                        style_source_name=style_name)
+                        style_source_name=style_name, staging=staging,
+                        figure_idiom=figure_idiom,
+                        style_source_kind=_effective_source_kind(data),
+                        surface_device=(data.get('style_surface_device') or ''),
+                        world=(data.get('style_world') or ''))
                     break
                 except Exception as e:
                     err_str = str(e)
@@ -3838,6 +4533,7 @@ def _execute_prompt_job(job, ctx):
         else:
             prompt = generate_prompt(unit, None)
         _write_deck_prompt(ctx, job.card_name, prompt)
+        _record_steer(ctx, job.card_name, job.feedback)
         job.progress = {'message': 'Prompt ready', 'pct': 100, 'result': prompt}
     finally:
         _ollama_work_done()
@@ -3890,6 +4586,268 @@ def _execute_flavor_job(job, ctx):
         _ollama_work_done()
 
 
+def _enqueue_inspection(deck_id, card_names, final=False, label=None, takes=1):
+    """Enqueue an end-of-batch render inspection for these cards. It runs
+    after the batch's art jobs (FIFO), evicts FLUX once for the vision model,
+    and re-queues each defective card at most once; the re-rolls are followed
+    by a FINAL inspection that only records."""
+    names = [n for n in (card_names or []) if n]
+    if not names:
+        return None
+    job = Job(type=INSPECT, deck_id=deck_id, deck_name=_deck_display_name(deck_id),
+              card_name='', label=label or ('Final inspection' if final else f'Inspect {len(names)} render(s)'),
+              params={'card_names': names, 'final': bool(final), 'takes': int(takes or 1)})
+    return gen_queue.enqueue(job)
+
+
+EDGE_MARK_ZOOM = 1.10     # crops ~5% off every edge, where signatures and marks sit
+
+
+def _hide_edge_marks(name, card, ctx):
+    """Zoom the card's art window so the border strip carrying a signature or
+    stray mark falls outside the frame, persist the override on the deck's
+    card record, and recomposite. The user can undo it in the Frame Designer."""
+    try:
+        ov = dict(card.get('frame_overrides') or {})
+        if float(ov.get('art_zoom') or 1.0) >= EDGE_MARK_ZOOM:
+            return False
+        ov['art_zoom'] = EDGE_MARK_ZOOM
+        card['frame_overrides'] = ov
+        cards = ctx['cards']
+        with persist_lock:
+            deck_json = ctx['deck_dir'] / 'deck.json'
+            data = json.load(open(deck_json))
+            for c in data.get('cards', []):
+                if c.get('name') == name:
+                    c['frame_overrides'] = ov
+            with open(deck_json, 'w') as f:
+                json.dump(data, f, indent=2)
+        slug = name_to_slug(name)
+        raw_path = ctx['raw_art_dir'] / f'{slug}.png'
+        comp_path = ctx['composite_dir'] / f'{slug}.png'
+        render_composite_for_card(card, raw_path, comp_path,
+                                  deck_fs=(ctx['meta'] or {}).get('frame_settings'),
+                                  raw_art_dir=ctx['raw_art_dir'])
+        if ctx.get('deck_id') == active_deck_id or ctx['deck_dir'].name == active_deck_id:
+            for c in cards_db:
+                if c.get('name') == name:
+                    c['frame_overrides'] = ov
+        print(f"  [inspect] {name}: edge mark hidden with art zoom {EDGE_MARK_ZOOM}")
+        return True
+    except Exception as e:
+        print(f"  [inspect] could not hide edge mark on {name}: {e}")
+        return False
+
+
+def _pick_cleaner_take(name, card, raw_path, defects, ctx, vmodel, inspect_render):
+    """Compare the current render with the latest archived take (the previous
+    take of a multi-take batch). If the archived one has fewer defects,
+    archive the current one and put the archived take back as current.
+    Returns the defects of whichever render is current afterwards."""
+    slug = name_to_slug(name)
+    vdir = ctx['versions_dir'] / slug
+    manifest = vdir / 'manifest.json'
+    try:
+        versions = json.load(open(manifest)).get('versions', []) if manifest.exists() else []
+    except Exception:
+        versions = []
+    if not versions:
+        return defects
+    latest = max(v.get('version', 0) for v in versions)
+    prev_raw = vdir / f'v{latest}_raw.png'
+    if not prev_raw.exists():
+        return defects
+    prev_defects = inspect_render(prev_raw, name, card.get('card_type', ''), vmodel,
+                                  subject_hint=_inspect_subject_hint(card), flies=_card_flies_for_inspect(card),
+                                  limbless=_card_limbless_for_inspect(card))
+    if prev_defects is None:
+        return defects
+    if len(prev_defects) > len(defects or []):
+        return defects
+    if len(prev_defects) == len(defects or []):
+        # H41: a tie on defects is decided on STYLE — which take looks more
+        # like the reference's artist and is the more striking picture
+        refs = _inspiration_paths(ctx)
+        if not refs:
+            return defects
+        import vision_analyzer as _va
+        choice = _va.pick_take(refs, raw_path, prev_raw, name, vmodel)
+        if choice is None:
+            # the style pick is undecided on almost every pair (6/6 in the
+            # two-scene batch test); the two takes are two SCENES now, so the
+            # deterministic scene score of their prompts breaks the tie
+            try:
+                from prompt_generator import _scene_score
+                cur_p = (json.load(open(raw_path.with_suffix('.meta.json'))).get('card_prompt') or '')
+                prev_p = (json.load(open(vdir / f'v{latest}_meta.json')).get('card_prompt') or '') \
+                    if (vdir / f'v{latest}_meta.json').exists() else ''
+                sc, sp = _scene_score(cur_p, card), _scene_score(prev_p, card)
+                print(f"  [inspect] {name}: takes tied on defects, scene scores current {sc} vs earlier {sp}")
+                choice = 'b' if (prev_p and sp > sc) else 'a'
+            except Exception as e:
+                print(f"  [inspect] {name}: scene-score tie-break failed: {e}")
+        if choice != 'b':
+            print(f"  [inspect] {name}: takes tied on defects, kept the current take"
+                  f" ({'style pick' if choice == 'a' else 'no clear style pick'})")
+            return defects
+        print(f"  [inspect] {name}: takes tied on defects, the earlier take won the tie-break")
+    # the archived take is cleaner: archive the current, restore the archived
+    _archive_art(name, ctx['raw_art_dir'], ctx['composite_dir'], ctx['versions_dir'])
+    shutil.copy2(prev_raw, raw_path)
+    prev_meta = vdir / f'v{latest}_meta.json'
+    if prev_meta.exists():
+        shutil.copy2(prev_meta, raw_path.with_suffix('.meta.json'))
+    prev_comp = vdir / f'v{latest}_composite.png'
+    comp_path = ctx['composite_dir'] / f'{slug}.png'
+    if prev_comp.exists():
+        shutil.copy2(prev_comp, comp_path)
+    print(f"  [inspect] {name}: kept the earlier take ({len(prev_defects)} defects vs {len(defects or [])})")
+    return prev_defects
+
+
+def _card_limbless_for_inspect(card):
+    """True for a creature whose kind has no limbs (from the memoised body
+    gloss); None otherwise or when unknown."""
+    if card.get('card_type') not in ('creature', 'planeswalker'):
+        return None
+    try:
+        from prompt_generator import _limbless
+        return True if _limbless(card, '') else None
+    except Exception:
+        return None
+
+
+def _card_flies_for_inspect(card):
+    """True/False for a creature from its rules text; None for other types."""
+    if card.get('card_type') not in ('creature', 'planeswalker'):
+        return None
+    try:
+        from prompt_generator import _card_flies
+        return bool(_card_flies(card))
+    except Exception:
+        return None
+
+
+def _inspect_subject_hint(card) -> str:
+    """What the inspector should look for: the literal object for an artifact
+    ("a signet ring"), the creature's first subtype for a figure ("a dragon
+    spirit"), else ''. Same pure helpers the writer uses — no card tables."""
+    ctype = card.get('card_type', '')
+    name = (card.get('name') or '').split(' // ')[0]
+    if ctype == 'artifact':
+        try:
+            from prompt_generator import _literal_object_from_name
+            return _literal_object_from_name(name) or ''
+        except Exception:
+            return ''
+    if ctype == 'creature':
+        tl = (card.get('type_line') or '').split(' // ')[0]        # the front face only
+        sub = tl.split('—', 1)[1].strip() if '—' in tl else ''
+        return f"a {sub.lower()}" if sub else ''
+    return ''
+
+
+def _inspiration_paths(ctx):
+    """Existing inspiration image paths for a job context, oldest first."""
+    deck_dir = ctx.get('deck_dir')
+    if not deck_dir:
+        return []
+    entries = ((ctx.get('meta') or {}).get('inspiration_images') or [])
+    names = [e.get('filename') if isinstance(e, dict) else e for e in entries]
+    out = [Path(deck_dir) / n for n in names if isinstance(n, str) and n]
+    return [p for p in out if p.exists()]
+
+
+def _inspect_faces_for(card, raw_art_dir):
+    """(face_label, raw_path) pairs that exist for a card's front/back."""
+    out = []
+    front = raw_art_dir / f"{name_to_slug(card['name'])}.png"
+    if front.exists():
+        out.append(('front', front))
+    if has_second_art_face(card):
+        back = raw_art_dir / f"{name_to_slug(face_key(card['name'], 'back'))}.png"
+        if back.exists():
+            out.append(('back', back))
+    return out
+
+
+def _execute_inspect_job(job, ctx):
+    """Vision-model defect pass over a batch's renders (see inspect_render).
+    Writes the verdict into each render's .meta.json ('inspection') and, unless
+    this is the final pass, re-queues defective cards once."""
+    names = list((job.params or {}).get('card_names') or [])
+    final = bool((job.params or {}).get('final'))
+    takes = int((job.params or {}).get('takes') or 1)
+    bcfg = backend_config.load_config()
+    vmodel = bcfg.get('ollama_vision_model', 'llava:7b')
+    from vision_analyzer import inspect_render
+    cards_by_name = {c['name']: c for c in ctx['cards']}
+    raw_dir = ctx['raw_art_dir']
+    rerolls = []
+    reroll_prompts = {}
+    _ollama_work_start()
+    try:
+        for i, name in enumerate(names):
+            job.progress = {'message': f'Inspecting {name} ({i + 1}/{len(names)})...',
+                            'pct': int(100 * i / max(1, len(names)))}
+            card = cards_by_name.get(name)
+            if not card:
+                continue
+            faces = _inspect_faces_for(card, raw_dir)
+            bad = []
+            for face_label, path in faces:
+                advisory = {}
+                defects = inspect_render(path, name, card.get('card_type', ''), vmodel, advisory=advisory,
+                                         subject_hint=_inspect_subject_hint(card), flies=_card_flies_for_inspect(card),
+                                  limbless=_card_limbless_for_inspect(card))
+                if advisory.get('composition'):
+                    print(f"  [inspect] {name} ({face_label}) composition advisory: "
+                          f"{', '.join(advisory['composition'])}")
+                if takes > 1 and face_label == 'front':
+                    # H33: the earlier take was archived as the latest version;
+                    # if it is cleaner than the current one, swap them.
+                    defects = _pick_cleaner_take(name, card, path, defects, ctx, vmodel, inspect_render)
+                meta_path = path.with_suffix('.meta.json')
+                try:
+                    meta = json.load(open(meta_path)) if meta_path.exists() else {}
+                    meta['inspection'] = {'defects': defects, 'final': final,
+                                          'advisory': advisory.get('composition', []),
+                                          'at': datetime.now().isoformat()}
+                    with open(meta_path, 'w') as f:
+                        json.dump(meta, f, indent=2)
+                except Exception as e:
+                    print(f"  [inspect] could not stamp {meta_path.name}: {e}")
+                if defects:
+                    bad.append((face_label, defects))
+                    print(f"  [inspect] {name} ({face_label}): {', '.join(defects)}")
+            if bad and not final:
+                rerolls.append(name)
+                if any('subject missing' in d for _, d in bad):
+                    # H58: the wrong object was drawn — re-roll with the literal
+                    # object LEADING the scene sentence, not just a new seed
+                    lit = _inspect_subject_hint(card)
+                    base = (ctx.get('prompts') or {}).get(name, '')
+                    if lit and base:
+                        reroll_prompts[name] = f"{lit[:1].upper()}{lit[1:]}, plain and unmistakable. {base}"
+            elif bad and final:
+                # H38: an edge signature / stray mark on an otherwise sound
+                # render is hidden by cropping the art window, not by another roll
+                if all(set(d) <= {'signature', 'text'} for _, d in bad) \
+                        and any(face == 'front' for face, _ in bad):
+                    # the art zoom is a FRONT-face override; a mark only on the
+                    # back face is recorded, not zoomed away on the wrong face
+                    _hide_edge_marks(name, card, ctx)
+    finally:
+        _ollama_work_done()
+    if rerolls:
+        for name in rerolls:
+            _enqueue_art(job.deck_id, name, face='all', deck_name=job.deck_name,
+                         custom_prompt=reroll_prompts.get(name), label=f'{name} (re-roll)')
+        _enqueue_inspection(job.deck_id, rerolls, final=True)
+        print(f"  [inspect] re-queued {len(rerolls)} card(s): {', '.join(rerolls)}")
+    job.progress = {'message': f'Inspected {len(names)}; {len(rerolls)} re-queued', 'pct': 100}
+
+
 def _enqueue_analysis(deck_id, mode, label='Style analysis', **params):
     """Enqueue an inspiration/style analysis job. Analysis is a first-class
     queue citizen: it survives deck switches (the job carries its deck_id and
@@ -3937,6 +4895,9 @@ def _analyze_new_image(deck_id, filename, new_index):
             imgs = d.get('inspiration_images', [])
             if new_index < len(imgs):
                 imgs[new_index]['style_description'] = desc
+                from vision_analyzer import reference_has_prominent_character
+                imgs[new_index]['prominent_character'] = reference_has_prominent_character(
+                    dest, bcfg['ollama_vision_model'])
                 d['inspiration_images'] = imgs
                 with open(deck_json_path, 'w') as f:
                     json.dump(d, f, indent=2)
@@ -4010,6 +4971,9 @@ def _reanalyze_all_images(deck_id):
                                    f'Image {step_num}/{n_images} analyzed')
             if desc and idx < len(imgs):
                 imgs[idx]['style_description'] = desc
+                from vision_analyzer import reference_has_prominent_character
+                imgs[idx]['prominent_character'] = reference_has_prominent_character(
+                    insp_path, bcfg['ollama_vision_model'])
 
         d['inspiration_images'] = imgs
         with open(deck_json, 'w') as f:
@@ -4079,6 +5043,8 @@ def _execute_job(job):
             _execute_flavor_job(job, ctx)
         elif job.type == ANALYZE:
             _execute_analyze_job(job, ctx)
+        elif job.type == INSPECT:
+            _execute_inspect_job(job, ctx)
         else:
             raise RuntimeError(f'Unknown job type: {job.type}')
     finally:
@@ -4743,14 +5709,15 @@ def _deck_display_name(deck_id):
 
 
 def _enqueue_art(deck_id, card_name, face='all', custom_prompt=None, feedback=None,
-                 label=None, deck_name=None):
+                 label=None, deck_name=None, seed=None):
     """Build + enqueue an ART job, snapshotting the current model. Pass
     ``deck_name`` to skip the per-call registry read when enqueuing in a loop."""
     job = Job(type=ART, deck_id=deck_id,
               deck_name=deck_name if deck_name is not None else _deck_display_name(deck_id),
               card_name=card_name, face=face, custom_prompt=custom_prompt,
               feedback=feedback, model_key=active_model_key,
-              label=label or card_name.replace(BACK_FACE_SUFFIX, ''))
+              label=label or card_name.replace(BACK_FACE_SUFFIX, ''),
+              params=({'seed': int(seed)} if seed is not None else {}))
     _cancel_single.discard((deck_id, card_name))  # clear stale cancel so job isn't discarded
     return gen_queue.enqueue(job)
 
@@ -4766,6 +5733,11 @@ def generate_single():
     card_name = data.get('card_name')
     feedback = data.get('feedback')
     custom_prompt = data.get('custom_prompt')
+    seed = data.get('seed')
+    try:
+        seed = int(seed) if seed is not None and str(seed).strip() != '' else None
+    except (TypeError, ValueError):
+        seed = None
     face = data.get('face', 'all')
     if face not in ('front', 'back', 'all'):
         return jsonify({'error': 'face must be front, back, or all'}), 400
@@ -4777,7 +5749,7 @@ def generate_single():
         return jsonify({'error': f'Card not in deck: {card_name}'}), 404
 
     job = _enqueue_art(active_deck_id, card_name, face=face,
-                       custom_prompt=custom_prompt, feedback=feedback)
+                       custom_prompt=custom_prompt, feedback=feedback, seed=seed)
     return jsonify({'success': True, 'queued': 1, 'job_ids': [job.id],
                     'message': f'Queued art for {card_name}'})
 
@@ -4792,6 +5764,13 @@ def generate_batch():
     data = request.json or {}
     card_names = data.get('card_names', [])
     skip_existing = data.get('skip_existing', True)
+    # "Takes": render each card N times (fresh seeds); every take archives the
+    # previous one as a version, so the user picks the best in the versions
+    # UI. Roll-to-roll variance is the biggest remaining quality factor.
+    try:
+        takes = max(1, min(3, int(data.get('takes', 1) or 1)))
+    except (TypeError, ValueError):
+        takes = 1
     feedback = data.get('feedback', '')
 
     if not card_names:
@@ -4846,13 +5825,46 @@ def generate_batch():
 
     dname = _deck_display_name(active_deck_id)   # hoisted: one registry read for the whole batch
     job_ids = []
-    for n in card_names:
-        job = _enqueue_art(active_deck_id, n, face=face_map.get(n, 'all'),
-                           feedback=(feedback or None), deck_name=dname)
-        job_ids.append(job.id)
+    for take in range(takes):
+        for n in card_names:
+            if take > 0:
+                # Two seeds of the same prompt render near-identical pictures
+                # under the averaged references (12/12 measured), so a second
+                # take is a FRESH SCENE: a prompt job first, then the render.
+                # Every take is archived with its prompt and the end-of-batch
+                # inspection keeps the cleaner one.
+                pj = Job(type=PROMPT, deck_id=active_deck_id, deck_name=dname, card_name=n,
+                         use_ai=True, feedback=(feedback or None),
+                         label=f'{n} (fresh scene {take + 1}/{takes})')
+                gen_queue.enqueue(pj)
+                job_ids.append(pj.id)
+            job = _enqueue_art(active_deck_id, n, face=face_map.get(n, 'all'),
+                               feedback=(feedback or None), deck_name=dname,
+                               label=(f'{n} (take {take + 1}/{takes})' if takes > 1 else None))
+            job_ids.append(job.id)
+    # End-of-batch inspection: the vision model checks every render for
+    # anatomy / duplication / text defects and re-queues failures once.
+    if os.environ.get('RENDER_INSPECT', '1') != '0':
+        _enqueue_inspection(active_deck_id, card_names, takes=takes)
     return jsonify({'success': True, 'queued': len(job_ids), 'job_ids': job_ids,
                     'count': len(job_ids),
                     'message': f'Queued {len(job_ids)} cards for generation'})
+
+
+@app.route('/api/decks/<deck_id>/inspect', methods=['POST'])
+def inspect_deck_renders(deck_id):
+    """Queue a render inspection for the given cards (default: every card with
+    art). Defective renders are re-rolled once, then inspected again."""
+    if not (DECKS_DIR / deck_id).exists():
+        return jsonify({'error': 'Deck not found'}), 404
+    data = request.json or {}
+    names = data.get('card_names')
+    ctx = _load_deck_ctx(deck_id)
+    if not names:
+        names = [c['name'] for c in ctx['cards']
+                 if (ctx['raw_art_dir'] / f"{name_to_slug(c['name'])}.png").exists()]
+    job = _enqueue_inspection(deck_id, names, final=bool(data.get('final')))
+    return jsonify({'success': True, 'queued': len(names), 'job_id': job.id if job else None})
 
 
 @app.route('/api/stop-batch', methods=['POST'])
@@ -4861,7 +5873,7 @@ def stop_batch():
     snap = gen_queue.snapshot()
     n = 0
     for job in snap['queued'] + snap['running']:
-        if job['deck_id'] == active_deck_id and job['type'] == ART:
+        if job['deck_id'] == active_deck_id and job['type'] in (ART, INSPECT):
             if gen_queue.cancel(job['id'], running_cancel_hook=_running_cancel_hook):
                 n += 1
     return jsonify({'success': True, 'message': f'Stopped {n} art jobs'})
@@ -7427,6 +8439,8 @@ header .separator {
   font-style: italic;
 }
 .style-source-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.style-ref-slider { flex: 1; min-width: 80px; accent-color: var(--accent, #e8b73a); }
+.style-ref-label { min-width: 64px; font-size: 12px; color: var(--text-secondary, #9aa4b2); text-align: right; }
 .style-source-label { font-size: 0.75em; color: var(--text-muted); white-space: nowrap; }
 .style-source-input {
   flex: 1; min-width: 0;
@@ -7816,6 +8830,7 @@ header .separator {
 .queue-type.art { background: rgba(240,192,64,0.18); color: var(--gold); }
 .queue-type.prompt { background: rgba(33,150,243,0.18); color: var(--queued); }
 .queue-type.flavor { background: rgba(76,175,80,0.18); color: var(--success); }
+.queue-type.inspect { background: rgba(171,71,188,0.18); color: #ce93d8; }
 .queue-type.analyze { background: rgba(156,39,176,0.20); color: #ce93d8; }
 .queue-row-main { flex: 1; min-width: 0; }
 .queue-row-card {
@@ -8067,6 +9082,13 @@ header .separator {
           <input type="text" id="styleSourceInput" class="style-source-input"
                  placeholder='e.g. "Studio Ghibli", "Borderlands"'
                  onchange="saveStyleSource(this.value)">
+        </div>
+        <div class="style-source-row style-ref-row">
+          <label for="styleRefSlider" class="style-source-label"
+                 title="How strongly the inspiration images themselves steer each render (FLUX Redux, injected into the model's style blocks only — the card keeps its own subject at every setting). Off = text only · Light · Medium · Strong (default) = the references' full medium, palette and stroke.">Reference strength</label>
+          <input type="range" id="styleRefSlider" class="style-ref-slider" min="0" max="3" step="1" value="3"
+                 oninput="previewStyleReference(this.value)" onchange="saveStyleReference(this.value)">
+          <span id="styleRefLabel" class="style-ref-label">Strong</span>
         </div>
         <div class="overview-btn-row">
           <button class="btn btn-secondary btn-sm" id="btnReanalyzeStyle" onclick="reanalyzeStyle()"
@@ -8722,8 +9744,21 @@ async function openQueueJob(deckId, cardName) {
     }
   }
   if (!base) { switchPanelTab('inspiration'); return; }   // style-analysis job
-  const card = allCards.find(c => c.name === base);
-  if (!card) { showToast('Card not found in this deck', 'warning'); return; }
+  let card = allCards.find(c => c.name === base);
+  if (!card) {
+    // The grid can be stale relative to the job (a deck edited or imported
+    // since the last load): refresh the card list once before giving up.
+    try {
+      const resp = await fetch('/api/cards');
+      if (resp.ok) { allCards = await resp.json(); renderGrid(); }
+    } catch (e) { /* fall through to the message below */ }
+    card = allCards.find(c => c.name === base);
+  }
+  if (!card) {
+    const deckLabel = document.getElementById('deckSelect')?.selectedOptions?.[0]?.textContent || deckId || 'this deck';
+    showToast(`"${base}" is no longer in ${deckLabel.replace(/ \(\d+\/\d+\)$/, '')}`, 'warning');
+    return;
+  }
   selectCard(base);
   if (isBack && (card.is_dfc || card.is_split_halves)) setFace('back');
   switchPanelTab('card');
@@ -9169,7 +10204,9 @@ function toggleQueueDrawer(force) {
   document.getElementById('queueScrim').classList.toggle('open', _queueOpen);
 }
 
-function _queueTypeLabel(t) { return t === 'art' ? 'Art' : t === 'prompt' ? 'Prompt' : t === 'analyze' ? 'Style' : 'Flavor'; }
+function _queueTypeLabel(t) {
+  return ({art: 'Art', prompt: 'Prompt', analyze: 'Style', flavor: 'Flavor', inspect: 'Inspect'})[t] || (t || 'Job');
+}
 
 function _queueRowHtml(job, kind) {
   // kind: 'running' | 'queued' | 'recent'
@@ -10591,18 +11628,22 @@ async function generateArt() {
     fields: [
       { type: 'textarea', name: 'feedback', label: 'Art Direction (optional)',
         placeholder: 'e.g. darker tones, more dramatic lighting', rows: 3 },
+      { type: 'checkbox', name: 'twoTakes',
+        label: 'Two takes per card — the second take is a fresh scene; both are kept as versions and the inspection keeps the cleaner one (doubles render time)',
+        checked: false },
     ],
     cost: costStr,
     confirmText: 'Generate',
   });
   if (!result) return;
   const feedback = result.feedback || '';
+  const takes = result.twoTakes ? 2 : 1;
 
   try {
     const resp = await fetch('/api/generate-batch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ card_names: names, skip_existing: false, feedback: feedback || '' }),
+      body: JSON.stringify({ card_names: names, skip_existing: false, feedback: feedback || '', takes }),
     });
     const batchResult = await resp.json();
     if (batchResult.success) {
@@ -12162,6 +13203,8 @@ async function loadDeckSettings() {
     // Populate style source input
     const sourceInput = document.getElementById('styleSourceInput');
     if (sourceInput) sourceInput.value = deckInfo.style_source || '';
+    // Style reference strength (Redux token budget) slider
+    loadStyleReference(deckInfo.style_reference);
 
     // Load art orientation toggle state
     loadArtOrientation();
@@ -12288,6 +13331,54 @@ async function saveStyleSource(value) {
     if (deckInfo) deckInfo.style_source = value;
   } catch (e) {
     console.error('Failed to save style source:', e);
+  }
+}
+
+// Style reference strength: slider levels -> per-image Redux token budget.
+// 729 = Redux's native 27x27 grid (a variation of the reference); pooled
+// budgets keep the style statistics and drop the reference's layout.
+// References are injected into FLUX's style blocks only (see flux_worker),
+// so the dial is pure strength: the full 729-token grid ('Strong', default)
+// carries the reference's medium, palette and stroke without its figures.
+const STYLE_REF_LEVELS = [
+  { label: 'Off',    tokens: 0 },
+  { label: 'Light',  tokens: 81 },
+  { label: 'Medium', tokens: 256 },
+  { label: 'Strong', tokens: 729 },
+];
+function _styleRefLevelFor(tokens) {
+  let best = 0;
+  STYLE_REF_LEVELS.forEach((l, i) => {
+    if (Math.abs(l.tokens - tokens) < Math.abs(STYLE_REF_LEVELS[best].tokens - tokens)) best = i;
+  });
+  return best;
+}
+function previewStyleReference(level) {
+  const lbl = document.getElementById('styleRefLabel');
+  if (lbl) lbl.textContent = STYLE_REF_LEVELS[parseInt(level, 10)]?.label || '';
+}
+function loadStyleReference(cfg) {
+  const slider = document.getElementById('styleRefSlider');
+  if (!slider) return;
+  const tokens = (cfg && cfg.enabled !== false) ? (cfg.tokens ?? 729) : 0;
+  slider.value = _styleRefLevelFor(tokens);
+  previewStyleReference(slider.value);
+}
+async function saveStyleReference(level) {
+  const deckId = document.getElementById('deckSelect').value;
+  if (!deckId) return;
+  const lv = STYLE_REF_LEVELS[parseInt(level, 10)] || STYLE_REF_LEVELS[3];
+  previewStyleReference(level);
+  try {
+    const r = await fetch(`/api/decks/${deckId}/style-reference`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tokens: lv.tokens, enabled: lv.tokens > 0 }),
+    });
+    const d = await r.json();
+    if (!d.success) { showToast(d.error || 'Failed to save reference strength', 'error'); return; }
+    showToast(`Reference strength: ${lv.label} — applies to new renders`, 'info');
+  } catch (e) {
+    showToast('Network error: ' + e.message, 'error');
   }
 }
 
