@@ -175,3 +175,10 @@ def test_world_sentence_and_cartoon_words():
     assert va.drawing_vocabulary('wobbly edges')
     assert va.drawing_vocabulary('cartoonish proportions')
     assert not va.drawing_vocabulary('exaggerated facial expressions')
+
+
+def test_compound_literal_object_without_a_system_dictionary(monkeypatch):
+    monkeypatch.setattr(pg, '_DICT_WORDS', set())        # the CI runner has no /usr/share/dict/words
+    assert pg._literal_object_from_name('Shadowspear') == 'a spear'
+    assert pg._literal_object_from_name('Sol Ring') == pg._LITERAL_OBJECT_NOUNS['ring']
+    assert pg._literal_object_from_name('Beast Within') is None

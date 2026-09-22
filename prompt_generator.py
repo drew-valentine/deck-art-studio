@@ -313,6 +313,13 @@ def _literal_object_from_name(name: str):
         parts = _split_compound(w)
         if len(parts) == 2 and parts[1] in _LITERAL_OBJECT_NOUNS:
             return _LITERAL_OBJECT_NOUNS[parts[1]]
+    # without a system word list (the CI runner has none) the split above is a
+    # no-op; a coined compound whose TAIL is an object noun still names the
+    # object — longest tail first, four-letter tails at least, a real prefix
+    for w in reversed(words):
+        for noun in sorted(_LITERAL_OBJECT_NOUNS, key=len, reverse=True):
+            if len(noun) >= 4 and w.endswith(noun) and len(w) - len(noun) >= 4:
+                return _LITERAL_OBJECT_NOUNS[noun]
     return None
 
 
