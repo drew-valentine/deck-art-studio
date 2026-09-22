@@ -6,7 +6,7 @@
 
 <p align="center"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-gallery-dark.jpg">
-  <img alt="Eight generated cards across four decks and four art styles — fine-line ink, pastel film stills, comic-book ink, and picture-book pen and ink" src="docs/images/hero-gallery.jpg">
+  <img alt="Eight generated cards across four decks and four art styles — comic-book ink, fine-line ink, pastel film stills, and picture-book pen and ink" src="docs/images/hero-gallery.jpg">
 </picture></p>
 
 **Every card above was generated on a laptop.** Four real Commander decks, four styles, each learned from a handful of reference images. The same pipeline handled ink drawings, comic pages, paintings and live-action film stills without a line of per-style code.
@@ -37,25 +37,25 @@ In the app: click **Import** and paste your decklist, add three to five referenc
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/samples-fineline-dark.jpg">
   <img alt="Fine-line ink illustration style — five generated cards" src="docs/images/samples-fineline.jpg">
 </picture></p>
-<p align="center"><em>Fine-line ink — teal, coral and gold on parchment: a canyon waterfall, a blue sinkhole, a demon in red, a mage over the rooftops, a city on a cliff</em></p>
+<p align="center"><em>Fine-line ink — teal, coral and gold on parchment: a pillar of fire in a dead wood, a blood-veined sinkhole, a demon in red, a sunburst through a ruined nave, a canyon at sundown</em></p>
 
 <p align="center"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/samples-picturebook-dark.jpg">
   <img alt="Picture-book pen and ink style — five generated cards" src="docs/images/samples-picturebook.jpg">
 </picture></p>
-<p align="center"><em>Picture-book pen and ink — a treehouse library, a wizard in the purple woods, a spotted wurm, a tutor buried in books, a candy-spired city</em></p>
+<p align="center"><em>Picture-book pen and ink — a treehouse library, a tutor buried in books, a pact signed at a door under falling paper, a roaring purple wurm, a winged zombie snake</em></p>
 
 <p align="center"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/samples-comic-dark.jpg">
   <img alt="Comic-book ink style — five generated cards" src="docs/images/samples-comic.jpg">
 </picture></p>
-<p align="center"><em>Comic-book ink — teal-and-coral smoke: a burning hourglass, a crater blowing its top, a dragon wizard, a goblin in her workshop, a rogue wave</em></p>
+<p align="center"><em>Comic-book ink — teal-and-coral smoke: a goblin in her workshop, a pyromancer's ignition, a phoenix over the waves, a crater blowing its top, a dragon wizard on the wing</em></p>
 
 <p align="center"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/samples-filmstill-dark.jpg">
   <img alt="Pastel film-still style — five generated cards" src="docs/images/samples-filmstill.jpg">
 </picture></p>
-<p align="center"><em>Pastel film stills — symmetrical sets and deadpan animals under flat, even light: a ring under a pink dome, a raccoon bard, a temple on the water, a toy train, a cobra on a lotus</em></p>
+<p align="center"><em>Pastel film stills — symmetrical sets and deadpan animals under flat, even light: a cobra on a lotus, a goblin offering a gem, a gilded chariot, a lotus in a white hall, a ring under a pink dome</em></p>
 
 The style carries across the entire deck: creatures, lands, artifacts, sagas, battles and double-faced cards alike.
 
