@@ -46,7 +46,7 @@ The style carries across the entire deck: creatures, lands, artifacts, sagas, ba
 
 ## Why it works
 
-- **Your references set the style.** A vision model reads your images and the app measures them too: medium, line character, palette, lighting and how scenes are staged. The result is a deterministic style description, so re-analysing a deck gives the same look every time. The references also feed the image model directly, so palette and finish come through even where words fall short.
+- **Your references set the style.** A vision model reads your images and the app measures them too: medium, line character, palette, lighting and how scenes are staged. The result is a deterministic style description, so re-analysing a deck gives the same look every time. The references also feed the image model directly, so palette and finish come through even where words fall short; a per-deck **Reference strength** dial (Off, Light, Medium, Strong) sets how much.
 - **Every card stays itself.** Prompts open with the card's real subject and creature type, keep literal objects literal (a card named for a thumb shows a thumb), give a cyclops one eye, and draw the scene from the card's own rules and flavor text. An inspector checks each render for extra limbs, missing faces, stray lettering and signatures, and re-rolls the misses.
 - **Name a style without importing its cast.** Type a show or a film as your style and you get its look, never its characters: names are translated into style language before they reach the image model.
 - **Nothing you try is lost.** Every render is archived with the prompt that made it. Re-roll, steer in plain language ("at night", "more menacing"), and step back through every take of a card, prompt included.
