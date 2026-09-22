@@ -43,13 +43,13 @@ In the app: click **Import** and paste your decklist, add three to five referenc
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/samples-picturebook-dark.jpg">
   <img alt="Picture-book pen and ink style — five generated cards" src="docs/images/samples-picturebook.jpg">
 </picture></p>
-<p align="center"><em>Picture-book pen and ink — a treehouse library, a tutor buried in books, a pact signed at a door under falling paper, a roaring purple wurm, a winged zombie snake</em></p>
+<p align="center"><em>Picture-book pen and ink — a treehouse library, a tutor buried in books, a pact signed at a door under falling paper, a clockwork fox, a scrap-diving bird in rainbow feathers</em></p>
 
 <p align="center"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/samples-comic-dark.jpg">
   <img alt="Comic-book ink style — five generated cards" src="docs/images/samples-comic.jpg">
 </picture></p>
-<p align="center"><em>Comic-book ink — teal-and-coral smoke: a goblin in her workshop, a pyromancer's ignition, a phoenix over the waves, a crater blowing its top, a dragon wizard on the wing</em></p>
+<p align="center"><em>Comic-book ink — teal-and-coral smoke: a goblin in her workshop, a pyromancer's ignition, a goblin wizard with a coin to flip, a crater blowing its top, a lighthouse under a green moon</em></p>
 
 <p align="center"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/samples-filmstill-dark.jpg">
