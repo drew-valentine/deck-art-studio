@@ -119,6 +119,12 @@
 
 ## Done
 
+- [x] README showcase gallery | Priority: P2 | Completed: 2026-09-21 | Owner: drew-valentine
+  - Branch docs/readme-showcase, commit 8169f9d; PR to follow.
+  - README opener rebuilt from the four strongest decks on the current pipeline: a two-row hero of eight cards (fine-line ink, pastel film stills, comic-book ink, picture-book pen and ink), plus one five-card strip per style.
+  - Selection: ~360 composites reviewed with a defect pass — no anatomy faults, no signatures, no lettering. One candidate dropped for a signature-like scrawl.
+  - Removed the old single-deck app hero and the five four-card strips.
+
 - [x] Style authority: the user's declared style source outranks the model's interpretation | Priority: P1 | Completed: 2026-09-02 | Owner: drew-valentine
   - Shipped as v1.49.0 (minor, released 2026-09-02) — four squash-merged PRs: #41 (commit 321ca79), #42 (ca9dcbc), #43 + #45 (merged as #45, commit 146953c), and #44 (f888827).
   - Principle: when a user declares a style source, that declaration wins over whatever the vision model inferred, in every model-facing prompt.
