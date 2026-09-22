@@ -6,26 +6,25 @@ A self-hosted web app for generating custom AI art for Magic: The Gathering prox
 
 > **Apple Silicon only.** Image generation, prompt writing, and style analysis all run locally via Apple's **MLX** framework. Deck Art Studio used to support an OpenAI cloud backend and a PyTorch/Ollama local backend; both have been replaced by a single MLX-native pipeline (FLUX.1-schnell + Llama + Qwen2.5-VL). It needs an M-series Mac with **18 GB+ unified memory** (16 GB may work; see [Requirements](#requirements)).
 
-<img alt="Deck Art Studio — full deck rendered in a fine-line illustration style" src="docs/images/app-hero.jpg" />
+<p align="center"><img alt="Eight generated cards across four decks and four art styles — fine-line ink, pastel film stills, comic-book ink, and picture-book pen and ink" src="docs/images/hero-gallery.jpg" /></p>
 
-**One decklist in, a fully illustrated deck out.** Five real decks, five styles — every card below was generated locally by the same app, from nothing but a decklist and a handful of inspiration images:
+**Every card above was generated on a laptop.** One decklist in, a fully illustrated deck out: four real Commander decks, four styles, each learned from a handful of inspiration images, without an API key or a cloud bill.
 
-<p align="center"><img alt="Fine-line ink illustration style — four generated cards" src="docs/images/samples-fineline.jpg" /></p>
-<p align="center"><em>Fine-line ink illustration — parchment, blood red, and gold</em></p>
+<p align="center"><img alt="Fine-line ink illustration style — five generated cards" src="docs/images/samples-fineline.jpg" /></p>
+<p align="center"><em>Fine-line ink — teal, coral and gold on parchment: a canyon waterfall, a blue sinkhole, a demon in red, a mage over the rooftops, a city on a cliff</em></p>
 
-<p align="center"><img alt="Adult-cartoon style — four generated cards" src="docs/images/samples-cartoon.jpg" /></p>
-<p align="center"><em>Adult-cartoon ink — bold outlines, teal atmospheres, fire-orange accents</em></p>
+<p align="center"><img alt="Picture-book pen and ink style — five generated cards" src="docs/images/samples-picturebook.jpg" /></p>
+<p align="center"><em>Picture-book pen and ink — a treehouse library, a wizard in the purple woods, a spotted wurm, a tutor buried in books, a candy-spired city</em></p>
 
-<p align="center"><img alt="Psychedelic cartoon dragon style — four generated cards" src="docs/images/samples-dragons.jpg" /></p>
-<p align="center"><em>Psychedelic Saturday-morning dragons — candy palettes and groovy skies</em></p>
+<p align="center"><img alt="Comic-book ink style — five generated cards" src="docs/images/samples-comic.jpg" /></p>
+<p align="center"><em>Comic-book ink — teal-and-coral smoke: a burning hourglass, a crater blowing its top, a dragon wizard, a goblin in her workshop, a rogue wave</em></p>
 
-<p align="center"><img alt="Neon synthwave poster style — four generated cards" src="docs/images/samples-synthwave.jpg" /></p>
-<p align="center"><em>Neon synthwave poster art — sun halos and radiant rim light</em></p>
+<p align="center"><img alt="Pastel film-still style — five generated cards" src="docs/images/samples-filmstill.jpg" /></p>
+<p align="center"><em>Pastel film stills — symmetrical sets and deadpan animals under flat, even light: a ring under a pink dome, a raccoon bard, a temple on the water, a toy train, a cobra on a lotus</em></p>
 
-<p align="center"><img alt="Ink and watercolor style — four generated cards" src="docs/images/samples-inkwash.jpg" /></p>
-<p align="center"><em>Hand-inked watercolor — storybook linework and luminous washes</em></p>
+Upload a few reference images and the style carries across your entire deck — creatures, lands, artifacts, sagas, battles, and double-faced cards alike. The same pipeline handled ink, comic and painterly references, and live-action film stills, with no per-style code.
 
-Upload a few reference images and the style carries across your entire deck — creatures, lands, artifacts, sagas, battles, and double-faced cards alike.
+**Want this for your deck?** Import a decklist, drop in your reference images, press Generate — see the [Quick Start](#quick-start).
 
 ## Features
 
