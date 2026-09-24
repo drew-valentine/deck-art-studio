@@ -233,6 +233,15 @@ decks/<deck-slug>/
   the per-image Shading/Lighting lines ('even' vs 'dramatic'); an even majority on a non-flat medium adds
   'flat even diffused lighting, no strong shadows' to the block and switches the writer's light line to
   even, shadowless light (no golden hour, beams or rim light). Slogans/graffiti/signage count as lettering.
+  WRITING FROM REFERENCES (2026-09-23, woodblock deck: pseudo-kanji columns + seals on 40/61 cards): references
+  whose genre carries inscriptions make Redux draw them. Measured on 4 cards, fixed seed: refs on 4/4 written;
+  writing tiles BLURRED out of the references 4/4; FLAT-FILLED 3/3; Medium strength 2/3; refs OFF 1/4 (and the
+  woodblock look held from the text). The reference encoder reads the genre, not the glyphs — cleaning pixels
+  does not help. A 'no calligraphy, no seal stamps' guard made it WORSE (3/4 vs 1/4 with refs off): schnell has
+  no negation, naming a thing summons it — never add such guards. Fix: `_side_writing_present` (left/right
+  thirds, yes/no per crop; the strip and centre probes miss side columns) → defect `writing`, which is never
+  zoomed away and re-rolls WITHOUT references (`no_references` job param → `_generate_local`, recorded as
+  `style_reference.skipped` in the meta). INSPECT_SIDE_WRITING=0 mutes.
   Writer backstops in order: preamble strip → opening-rule retry → franchise strip (franchise NAME
   only — `_strip_franchise_sentences(out, franchise_name)`, never the style hint) → example-leak →
   unpaintable-abstraction strip → (flat media: rewrite without light words naming the offending

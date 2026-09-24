@@ -182,3 +182,39 @@ def test_compound_literal_object_without_a_system_dictionary(monkeypatch):
     assert pg._literal_object_from_name('Shadowspear') == 'a spear'
     assert pg._literal_object_from_name('Sol Ring') == pg._LITERAL_OBJECT_NOUNS['ring']
     assert pg._literal_object_from_name('Beast Within') is None
+
+
+def test_render_prompt_never_names_calligraphy(tmp_path):
+    out = ds._assemble_flux_prompt(['in the style of X', 'ink'], 'A ring. On a table.', card_type='artifact')
+    assert 'calligraphy' not in out and 'seal' not in out      # naming them summons them (3/4 vs 1/4)
+
+
+def test_writing_rerolls_without_references(monkeypatch, tmp_path):
+    import deck_studio as ds2
+    import vision_analyzer as va
+    raw = tmp_path / 'raw_art'; raw.mkdir()
+    for slug in ('ponder', 'sol_ring'):
+        (raw / f'{slug}.png').write_bytes(b'x')
+    cards = [{'name': 'Ponder', 'card_type': 'sorcery'}, {'name': 'Sol Ring', 'card_type': 'artifact'}]
+    ctx = {'cards': cards, 'raw_art_dir': raw, 'deck_name': 'D'}
+    verdicts = {'Ponder': ['writing'], 'Sol Ring': ['text']}
+    monkeypatch.setattr(va, 'inspect_render', lambda path, name, ctype, vm, advisory=None, subject_hint='', flies=None, limbless=None: verdicts[name])
+    monkeypatch.setattr(ds2, 'has_second_art_face', lambda c: False)
+    monkeypatch.setattr(ds2, '_ollama_work_start', lambda: None)
+    monkeypatch.setattr(ds2, '_ollama_work_done', lambda: None)
+    monkeypatch.setattr(ds2.backend_config, 'load_config', lambda: {'ollama_vision_model': 'v'})
+    queued = []
+    monkeypatch.setattr(ds2, '_enqueue_art', lambda deck_id, name, **kw: queued.append((name, kw.get('no_references'))))
+    monkeypatch.setattr(ds2, '_enqueue_inspection', lambda deck_id, names, final=False, label=None: None)
+    job = ds2.Job(type=ds2.INSPECT, deck_id='d', card_name='', params={'card_names': ['Ponder', 'Sol Ring'], 'final': False})
+    ds2._execute_inspect_job(job, ctx)
+    assert ('Ponder', True) in queued and ('Sol Ring', False) in queued
+
+
+def test_enqueue_art_carries_the_no_references_flag(monkeypatch):
+    seen = []
+    monkeypatch.setattr(ds.gen_queue, 'enqueue', lambda job: seen.append(job) or job)
+    ds._enqueue_art('d', 'Ponder', deck_name='D', no_references=True)
+    ds._enqueue_art('d', 'Ponder', deck_name='D', seed=7)
+    assert seen[0].params == {'no_references': True}
+    assert seen[1].params == {'seed': 7}

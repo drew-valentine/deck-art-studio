@@ -2,6 +2,12 @@
 
 ## Backlog
 
+- [ ] Medium map has no printmaking bucket — woodblock decks distill as ink illustration | Priority: P2 | Created: 2026-09-23 | Owner: unassigned
+  - Found on the Kykar B3 deck (declared source: Japanese woodblock print) during the calligraphy/seal fix.
+  - The medium keyword map files woodblock and ukiyo-e under 'ink illustration', so the deck's block reads 'fine-line ink illustration' instead of a printmaking medium (flat colour areas, carved key lines, paper grain).
+  - Acceptance: Given a deck whose declaration or reads name woodblock or ukiyo-e, when it is distilled, then the block's medium is a printmaking phrase, not ink illustration; and given existing ink decks, then their bucket is unchanged.
+  - Keep it deck-agnostic: a printmaking bucket keyed on medium words (woodblock, linocut, screen print, etching), no per-deck table.
+
 - [ ] Creature drawn as the wrong kind — inspector has no kind check for creatures | Priority: P1 | Created: 2026-09-12 | Owner: unassigned
   - Found during the Animated Army deck (director-named live-action film stills) rounds: a Snake Shaman rendered twice as a human woman and passed every check.
   - The inspector's open naming question (`_names_object`) runs for ARTIFACTS only. Creatures get the subject-present check (is anything living named), the body check and the wing/limb counts, none of which notice that the living thing is the wrong animal.
@@ -97,9 +103,22 @@
 
 ## In Progress
 
-- [ ] (empty — the five-deck regression sweep closed 2026-09-13; the branch now waits on the owner's merge call)
+- [ ] (empty)
 
 ## In Review
+
+- [ ] Fake calligraphy and seal stamps in woodblock-style art | Priority: P1 | Started: 2026-09-23 | Review Started: 2026-09-23 | Owner: drew-valentine
+  - Branch: `fix/no-calligraphy-or-seals`, committed as 470d1cf. PR to follow.
+  - On the Kykar B3 deck (declared source: Japanese woodblock print) the inspector flagged text on 40 of 61 renders. At full resolution the columns are pseudo-kanji (invented radical combinations) with stray real hiragana and the odd real fragment; none of it reads as words. The red seals are illegible blobs.
+  - Cause: all six references carry calligraphy columns, title cartouches and seals. Redux averaging keeps what the references share, so the writing survives as "style". The 1.10 edge zoom cannot hide columns that span up to 30% of the width.
+  - Decision (Drew, option 2): remove calligraphy and seals entirely rather than leave blank cartouches.
+  - Tried: VLM bounding-box grounding of the writing on the references. Recall was about half, with false boxes on top; not reliable enough to mask with.
+  - Source test at a fixed seed, 4 cards: references on, 4/4 written; writing blurred out of the references, 4/4; flat-filled, 3/3; Medium strength, 2/3; references off, 1/4 (the woodblock look held from the text alone). The reference encoder reads the genre, not the glyphs.
+  - Tried: a 'no calligraphy, no seal stamps' render guard. It made things worse (3/4 written vs 1/4, references off): FLUX schnell has no negation. Not shipped.
+  - Shipped: an inspector side-column check (`_side_writing_present`) reports the defect 'writing', which is never zoomed away; its re-roll renders without the style references (`no_references` job param, recorded in the render metadata).
+  - Batch-path validation: 3/4 flagged; all three no-reference re-rolls came back clean with the woodblock look intact. The queue drawer labels those jobs "(re-roll, no references)" (checked in the browser).
+  - Follow-up: the other ~37 flagged Kykar B3 cards keep their written art until they are re-rendered.
+  - Follow-up: woodblock decks distill as 'fine-line ink illustration' (Backlog card, P2).
 
 - [ ] Non-drawn media get drawing vocabulary | Priority: P0 | Started: 2026-09-12 | Review Started: 2026-09-12 | Owner: drew-valentine
   - Branch: `feat/night-composition`, committed as d67a9c1 and pushed.
