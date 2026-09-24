@@ -2234,7 +2234,13 @@ def inspect_render(image_path, card_name: str, card_type: str, vision_model: str
     # Confirm on the edge strips where marks actually sit — a crop with real
     # letters in it is an easy yes, a crop without is an easy no.
     if c.get('text') is True or c.get('signature') is True:
-        if _edge_marks_present(image_path, vision_model):
+        if os.environ.get('INSPECT_SIDE_WRITING', '1') != '0' and _side_writing_present(image_path, vision_model):
+            # a column of calligraphy, a title cartouche or a seal down a side
+            # of the picture: the style's own lettering copied from references
+            # that carry it (a woodblock deck, 40/61 renders). Too large for the
+            # edge zoom, so it is its own defect and re-rolls
+            defects.append('writing')
+        elif _edge_marks_present(image_path, vision_model):
             defects.append('text' if c.get('text') is True else 'signature')
         elif c.get('text') is True and os.environ.get('INSPECT_CENTRE_TEXT', '1') != '0':
             # lettering INSIDE the art (shop signs, a word on a ring) never
@@ -2451,6 +2457,45 @@ def _centre_text_present(image_path, vision_model: str) -> bool:
         return bool(_re.search(r'[a-z0-9]{2,}', ans))
     except Exception as e:
         print(f"  [inspect] centre text read failed: {e}")
+        return False
+
+
+_WRITING_CROP_PROMPT = (
+    "Look only at this crop. Is there any writing in it: characters or calligraphy, letters, "
+    "a title box with writing, or a seal stamp? Answer exactly writing=yes or writing=no.")
+
+
+def _side_writing_present(image_path, vision_model: str) -> bool:
+    """Crop the left and right thirds of the render (clear of the bottom band
+    where a signature sits) and ask, per crop, whether it holds writing: a
+    column of characters or calligraphy, a title box or a seal stamp. The
+    top/bottom strip probe and the centre probe both miss a column running
+    down a side."""
+    try:
+        from PIL import Image
+        import tempfile, os as _os
+        import mlx_llm
+        im = Image.open(image_path).convert('RGB')
+        w, h = im.size
+        crops = [im.crop((0, int(h * 0.04), int(w * 0.32), int(h * 0.80))),
+                 im.crop((int(w * 0.68), int(h * 0.04), w, int(h * 0.80)))]
+        for crop in crops:
+            fd, path = tempfile.mkstemp(suffix='.png', prefix='inspect_side_')
+            _os.close(fd)
+            try:
+                crop.save(path)
+                reply = mlx_llm.vision(path, _WRITING_CROP_PROMPT, model=vision_model,
+                                       max_tokens=8, temperature=0.0)
+            finally:
+                try:
+                    _os.remove(path)
+                except OSError:
+                    pass
+            if 'writing=yes' in (reply or '').lower().replace(' ', ''):
+                return True
+        return False
+    except Exception as e:
+        print(f"  [inspect] side writing check failed: {e}")
         return False
 
 

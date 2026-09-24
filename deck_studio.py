@@ -2144,7 +2144,7 @@ def _bleed_size(size_str: str, bleed: float):
 
 
 def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_override=None,
-                    deck_meta=None, deck_dir=None, seed=None, card_type=None):
+                    deck_meta=None, deck_dir=None, seed=None, card_type=None, no_references=False):
     """Generate an image with the local FLUX model (mflux). Returns a PIL Image.
 
     Style always rides in the text prompt (the style source name + distilled
@@ -2281,6 +2281,8 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
     # burying it after a long scene) stops a rich scene from drowning it. Validated
     # empirically — the same style words buried at the tail gave ZERO style transfer;
     # front-loaded they come through. (Kept well under the 256-token T5 budget.)
+    # (no 'no calligraphy' guard: FLUX schnell has no negation — naming the
+    # calligraphy summoned it, 3/4 cards with the guard vs 1/4 without)
     flux_prompt = _assemble_flux_prompt(style_bits, subject, feedback_text, card_type=card_type)
 
     # --- Progress callback — updates status per inference step ---
@@ -2294,7 +2296,9 @@ def _generate_local(card_name, model_cfg, full_prompt, status_dict=None, size_ov
 
     print(f"[local_img] FLUX prompt ({len(flux_prompt.split())} words): {flux_prompt}")
     ref_cfg = _style_reference_settings(_meta)
-    ref_images = _style_reference_images(_meta, deck_dir)
+    ref_images = [] if no_references else _style_reference_images(_meta, deck_dir)
+    if no_references:
+        print(f"[local_img] {card_name}: rendered WITHOUT style references (writing re-roll)")
     if ref_images:
         print(f"[local_img] style references: {len(ref_images)} image(s)"
               f"{' averaged' if ref_cfg['average'] and len(ref_images) > 1 else ''}, "
@@ -2426,7 +2430,7 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                           status_dict=None, raw_art_dir=None, composite_dir=None,
                           versions_dir=None, cards_db_snapshot=None, face='front',
                           deck_meta=None, model_key=None, prompt_map=None,
-                          deck_id=None, seed=None):
+                          deck_id=None, seed=None, no_references=False):
     """Generate art for ONE face of a card using the active model config.
 
     Optional params let the queue worker pass the JOB's captured deck context
@@ -2569,7 +2573,8 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                                            size_override=gen_size,
                                            deck_meta=_meta, seed=seed,
                                            card_type=(card or {}).get('card_type'),
-                                           deck_dir=_raw_art_dir.parent)
+                                           deck_dir=_raw_art_dir.parent,
+                                           no_references=no_references)
             if crop_to and result_image is not None:
                 cw, ch = crop_to
                 result_image = result_image.crop((0, 0, cw, ch))
@@ -2610,8 +2615,10 @@ def generate_art_for_card(card_name, custom_prompt=None, feedback=None,
                 'feedback': feedback,
                 'seed': seed,
                 'style_reference': ({**_style_reference_settings(_meta),
-                                     'images': [Path(p).name for p in
-                                                _style_reference_images(_meta, _raw_art_dir.parent)]}
+                                     'images': ([] if no_references else
+                                                [Path(p).name for p in
+                                                 _style_reference_images(_meta, _raw_art_dir.parent)]),
+                                     **({'skipped': 'writing re-roll'} if no_references else {})}
                                     if backend == 'local' else None),
                 'timestamp': datetime.now().isoformat(),
             }, f, indent=2)
@@ -4413,7 +4420,8 @@ def _execute_art_job(job, ctx):
         composite_dir=ctx['composite_dir'], versions_dir=ctx['versions_dir'],
         cards_db_snapshot=ctx['cards'], deck_meta=ctx['meta'],
         model_key=job.model_key, prompt_map=ctx['prompts'], deck_id=job.deck_id,
-        seed=(job.params or {}).get('seed'))
+        seed=(job.params or {}).get('seed'),
+        no_references=bool((job.params or {}).get('no_references')))
     if not ok and msg != 'Cancelled':
         raise RuntimeError(msg)
     if job.deck_id == active_deck_id:
@@ -4784,6 +4792,7 @@ def _execute_inspect_job(job, ctx):
     cards_by_name = {c['name']: c for c in ctx['cards']}
     raw_dir = ctx['raw_art_dir']
     rerolls = []
+    no_ref_rerolls = set()
     reroll_prompts = {}
     _ollama_work_start()
     try:
@@ -4822,6 +4831,13 @@ def _execute_inspect_job(job, ctx):
                     print(f"  [inspect] {name} ({face_label}): {', '.join(defects)}")
             if bad and not final:
                 rerolls.append(name)
+                if any('writing' in d for _, d in bad):
+                    # calligraphy / cartouche / seal copied from references that
+                    # carry them: measured on a woodblock deck, references on drew
+                    # it on 4/4 cards (also with the writing blurred or flat-filled
+                    # out of the references), references off on 1/4 — the reference
+                    # encoder reads the genre, not the glyphs. Re-roll without them.
+                    no_ref_rerolls.add(name)
                 if any('subject missing' in d for _, d in bad):
                     # H58: the wrong object was drawn — re-roll with the literal
                     # object LEADING the scene sentence, not just a new seed
@@ -4842,7 +4858,9 @@ def _execute_inspect_job(job, ctx):
     if rerolls:
         for name in rerolls:
             _enqueue_art(job.deck_id, name, face='all', deck_name=job.deck_name,
-                         custom_prompt=reroll_prompts.get(name), label=f'{name} (re-roll)')
+                         custom_prompt=reroll_prompts.get(name),
+                         label=f'{name} (re-roll{", no references" if name in no_ref_rerolls else ""})',
+                         no_references=name in no_ref_rerolls)
         _enqueue_inspection(job.deck_id, rerolls, final=True)
         print(f"  [inspect] re-queued {len(rerolls)} card(s): {', '.join(rerolls)}")
     job.progress = {'message': f'Inspected {len(names)}; {len(rerolls)} re-queued', 'pct': 100}
@@ -5709,7 +5727,7 @@ def _deck_display_name(deck_id):
 
 
 def _enqueue_art(deck_id, card_name, face='all', custom_prompt=None, feedback=None,
-                 label=None, deck_name=None, seed=None):
+                 label=None, deck_name=None, seed=None, no_references=False):
     """Build + enqueue an ART job, snapshotting the current model. Pass
     ``deck_name`` to skip the per-call registry read when enqueuing in a loop."""
     job = Job(type=ART, deck_id=deck_id,
@@ -5717,7 +5735,8 @@ def _enqueue_art(deck_id, card_name, face='all', custom_prompt=None, feedback=No
               card_name=card_name, face=face, custom_prompt=custom_prompt,
               feedback=feedback, model_key=active_model_key,
               label=label or card_name.replace(BACK_FACE_SUFFIX, ''),
-              params=({'seed': int(seed)} if seed is not None else {}))
+              params={**({'seed': int(seed)} if seed is not None else {}),
+                      **({'no_references': True} if no_references else {})})
     _cancel_single.discard((deck_id, card_name))  # clear stale cancel so job isn't discarded
     return gen_queue.enqueue(job)
 

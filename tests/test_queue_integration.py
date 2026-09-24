@@ -299,6 +299,7 @@ def test_inspect_render_derives_defects_from_counts(monkeypatch):
     ])
     monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: next(answers)))
     monkeypatch.setattr(va, '_edge_marks_present', lambda path, vm: True)   # confirm every text/signature flag
+    monkeypatch.setattr(va, '_side_writing_present', lambda path, vm: False)
     assert va.inspect_render('x.png', 'Krark', 'creature', 'v') == []
     assert va.inspect_render('x.png', 'Krark', 'creature', 'v') == ['extra limbs', 'malformed hands', 'signature']
     assert va.inspect_render('x.png', 'Keiga', 'creature', 'v') == ['doubled head', 'duplicated subject', 'text']
@@ -711,3 +712,25 @@ def test_tied_takes_fall_back_to_the_scene_score(monkeypatch, tmp_path):
     job = Job(id='j', type=INSPECT, deck_id='d', card_name='', params={'final': True, 'takes': 2, 'card_names': ['Keiga, the Tide Star']})
     ds._execute_inspect_job(job, ctx)
     assert (raw / 'keiga_the_tide_star.png').read_bytes() == b'take1'      # the livelier scene won
+
+
+def test_side_writing_is_its_own_defect(monkeypatch, tmp_path):
+    """A calligraphy column or seal down a side is 'writing' (re-rolls), not
+    'text' (which the final pass hides with the edge zoom)."""
+    import sys, types
+    from PIL import Image
+    import vision_analyzer as va
+    img = tmp_path / 'r.png'; Image.new('RGB', (60, 80), (240, 230, 210)).save(img)
+    flagged = 'heads=1; arms=2; hands=2; copies=1; text=yes; signature=no; subject=yes; hands_ok=yes'
+    replies = iter([flagged, 'writing=no', 'writing=yes'])
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: next(replies)))
+    monkeypatch.setattr(va, '_edge_marks_present', lambda path, vm: True)
+    assert va.inspect_render(str(img), 'Ponder', 'sorcery', 'v') == ['writing']
+    # both side crops clean: falls through to the edge-strip verdict
+    replies2 = iter([flagged, 'writing=no', 'writing=no'])
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: next(replies2)))
+    assert va.inspect_render(str(img), 'Ponder', 'sorcery', 'v') == ['text']
+    monkeypatch.setenv('INSPECT_SIDE_WRITING', '0')
+    replies3 = iter([flagged])
+    monkeypatch.setitem(sys.modules, 'mlx_llm', types.SimpleNamespace(vision=lambda *a, **k: next(replies3)))
+    assert va.inspect_render(str(img), 'Ponder', 'sorcery', 'v') == ['text']
